@@ -15,6 +15,8 @@ import type { Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 const backendUrl = process.env.HORUS_E2E_BACKEND_URL ?? '';
 const token = process.env.HORUS_E2E_TOKEN ?? '';
@@ -291,6 +293,7 @@ test.describe('Jornada de produção — backend real', () => {
   });
 
   test('roteiro escrito pelo usuário → produção (HOR-133)', async ({ page }) => {
+    let approvedScript!: { id: string; document: { title: string; sections: { narration: string }[] } };
     await timed('manual: conectar ao backend', () => connect(page));
 
     await timed('manual: iniciar e aprovar proposta', async () => {
@@ -329,7 +332,12 @@ test.describe('Jornada de produção — backend real', () => {
 
       await expect(page.getByText('DOCUMENTO DO ROTEIRO · VERSÃO 1')).toBeVisible();
       await expect(page.getByText('ESCRITO POR VOCÊ').first()).toBeVisible();
+      const approvalResponse = page.waitForResponse(response =>
+        /\/v1\/scripts\/[a-f0-9]{32}\/review$/.test(response.url()) && response.request().method() === 'POST');
       await page.getByRole('button', { name: 'Aprovar roteiro' }).click();
+      const approval = await approvalResponse;
+      expect(approval.ok()).toBe(true);
+      approvedScript = await approval.json();
       await expect(page.getByLabel('Modo de execução da produção')).toBeVisible();
     });
 
@@ -337,6 +345,77 @@ test.describe('Jornada de produção — backend real', () => {
       const previous = await startPilotProduction(page);
       timings['produção local_pilot (roteiro humano): duração observada pela tela'] = await waitProduction(page, previous);
       await shot(page, '14-producao-roteiro-humano');
+    });
+
+    await timed('manual: aprovação, thumbnail, metadados e pacote baixado/auditado', async () => {
+      const productionId = (await productionHeading(page).textContent())!.match(/[a-f0-9]{32}/)![0];
+      const headers = { Authorization: `Bearer ${token}` };
+      const inspected = await page.request.get(`${backendUrl}/v1/productions/${productionId}`, { headers });
+      expect(inspected.ok()).toBe(true);
+      const production = await inspected.json();
+      expect(production.script_id).toBe(approvedScript.id);
+
+      const decision = page.getByRole('region', { name: 'Revisão humana final da produção' });
+      await decision.scrollIntoViewIfNeeded();
+      await page.getByLabel(/Confirmo ciência das pendências/).check();
+      await page.getByRole('button', { name: 'Aprovar produção (hash verificado)' }).click();
+      await expect(page.getByText('REVISÃO HUMANA FINAL REGISTRADA')).toBeVisible();
+
+      const thumbnail = await page.request.post(`${backendUrl}/v1/productions/${productionId}/thumbnail`, {
+        headers: { ...headers, 'Idempotency-Key': `journey-thumbnail-${productionId}` },
+        data: { timecode_seconds: 1 },
+      });
+      expect(thumbnail.status(), await thumbnail.text()).toBe(201);
+      expect((await thumbnail.json()).artifacts).toHaveLength(2);
+      const draft = await page.request.get(`${backendUrl}/v1/productions/${productionId}/metadata`, { headers });
+      expect(draft.ok()).toBe(true);
+      const metadata = await draft.json();
+      expect(metadata.publishable).toBe(false);
+      // GET não persiste o rascunho: salva o texto determinístico para entrar no pacote.
+      const saved = await page.request.put(`${backendUrl}/v1/productions/${productionId}/metadata`, {
+        headers, data: { title: metadata.title, description: metadata.description },
+      });
+      expect(saved.ok()).toBe(true);
+
+      const panel = page.getByRole('region', { name: 'Pacote para publicação manual', exact: true });
+      await panel.scrollIntoViewIfNeeded();
+      const exportResponse = page.waitForResponse(response =>
+        response.url() === `${backendUrl}/v1/productions/${productionId}/export` && response.request().method() === 'POST');
+      await panel.getByRole('button', { name: 'Exportar pacote', exact: true }).click();
+      const exported = await exportResponse;
+      expect(exported.status(), await exported.text()).toBe(201);
+      const item = await exported.json();
+      await expect(panel.getByTestId('export-ready-status')).toBeVisible();
+      const downloadEvent = page.waitForEvent('download');
+      await panel.getByTestId(`export-item-${item.id}`).getByRole('button', { name: 'Baixar ZIP' }).click();
+      const download = await downloadEvent;
+      const archive = test.info().outputPath('manual-approved-package.zip');
+      await download.saveAs(archive);
+      expect(await download.failure()).toBeNull();
+      expect(createHash('sha256').update(fs.readFileSync(archive)).digest('hex')).toBe(item.sha256);
+
+      const root = path.resolve(here, '../..');
+      const python = path.join(root, 'backend/.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+      const ffmpeg = process.env.HORUS_FFMPEG;
+      expect(ffmpeg, 'HORUS_FFMPEG é necessário para conferir o MP4 exportado').toBeTruthy();
+      const ffprobe = path.join(path.dirname(ffmpeg!), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+      const report = JSON.parse(execFileSync(python, [path.join(here, 'helpers/inspect-production-export.py'), archive, ffprobe],
+        { encoding: 'utf-8', timeout: 20_000 }));
+      expect(report.script).toEqual(approvedScript.document);
+      expect(report.script_text).toContain(approvedScript.document.title);
+      for (const section of approvedScript.document.sections) expect(report.script_text).toContain(section.narration);
+      expect(report.manifest.production_id).toBe(productionId);
+      expect(report.manifest.publishable).toBe(false);
+      expect(report.metadata).toEqual(await saved.json());
+      expect(report.video.duration_seconds).toBeGreaterThan(1); // timecode da thumbnail dentro do vídeo real
+      // Mantém o preset que esta variante já usava: rascunho 540×960, sem encarecer o render.
+      // Se a seleção vigente for Final, o pacote deve conter o MP4 real 1080×1920.
+      expect(['draft', 'final']).toContain(production.render_quality);
+      const expectedSize = production.render_quality === 'final' ? [1080, 1920] : [540, 960];
+      expect([report.video.width, report.video.height]).toEqual(expectedSize);
+      test.info().annotations.push({ type: 'exportação', description: `MP4 ${production.render_quality}: ${expectedSize.join('×')}` });
+      await test.info().attach('export-verification.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
+      await shot(page, '15-pacote-manual-exportado');
     });
   });
 });
