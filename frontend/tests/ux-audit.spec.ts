@@ -97,6 +97,11 @@ test.describe('Auditoria de UX — layout, foco e acessibilidade', () => {
           () => document.documentElement.scrollWidth > window.innerWidth + 1
         );
         expect(hasHorizontalOverflow).toBe(false);
+
+        // 5. Produção não repete bloco genérico de prévia abaixo da operação
+        await page.locator('.sidebar').getByRole('button', { name: 'Produção', exact: true }).click();
+        await expect(page.getByText('Análises editoriais e aprovações')).toBeVisible();
+        await expect(page.getByText('PRÉVIA DE LAYOUT · EM PREPARAÇÃO')).toHaveCount(0);
       });
     }
   }
