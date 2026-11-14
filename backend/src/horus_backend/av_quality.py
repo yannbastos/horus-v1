@@ -602,9 +602,13 @@ def provenance_check(provenance: dict, artifacts: dict) -> dict:
         return _check("asset_provenance", "provenance", "fail", "measured",
                       "; ".join(f"{e['code']}@{e['path']}" for e in verdict["errors"][:4]),
                       {"source": "media_contracts.validate_asset_provenance", "errors": len(verdict["errors"])})
-    unverified = "unverified_assets_block_publication" in verdict["warnings"]
+    # `verified` só conta com humano e `commercial_use=allowed`; `restricted`/`unknown` seguem pendentes (warn, como
+    # os não verificados: a aprovação técnica não é bloqueada, a publicação sim).
+    unverified = "unverified_assets_block_publication" in verdict["warnings"] or not all(
+        mc.commercial_use_permitted(mc.ProvenanceAsset.model_validate(a)) for a in verdict["value"]["assets"])
     return _check("asset_provenance", "provenance", "warn" if unverified else "pass", "measured",
-                  "Proveniência cruza com os hashes dos assets de entrada; há assets não verificados por humano."
+                  "Proveniência cruza com os hashes dos assets de entrada; há assets sem verificação humana "
+                  "ou sem uso comercial permitido."
                   if unverified else "Proveniência verificada e cruzada com os hashes de entrada.",
                   {"source": "media_contracts.validate_asset_provenance", "assets": len(verdict["value"]["assets"])})
 

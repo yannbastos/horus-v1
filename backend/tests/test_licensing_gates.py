@@ -126,9 +126,7 @@ def test_review_cannot_reuse_a_decision_for_a_replaced_voice_file():
     assert effective['assets'][0]['status'] == 'unverified' and licenses_pending(effective) is True
 
 
-@pytest.mark.xfail(strict=True, reason="Lacuna conhecida: av_quality.provenance_check (fora do escopo desta entrega) trata "
-                                       "verified+restricted como 'pass'; a divulgação de publishing já fica pendente.")
-def test_qc_should_warn_for_verified_but_restricted_license():
+def test_qc_warns_for_verified_but_restricted_license():
     data = document()
     data['assets'] = [verified(a) for a in data['assets']]
     data['assets'][0]['license']['commercial_use'] = 'restricted'
