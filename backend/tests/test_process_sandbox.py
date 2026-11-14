@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from horus_backend.processes import OUTPUT_LIMIT, SAFE_ENV_KEYS, OwnedProcess, minimal_env, run_sync
+from horus_backend.processes import OUTPUT_LIMIT, SAFE_ENV_KEYS, TELEMETRY_OFF, OwnedProcess, minimal_env, run_sync
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "horus_backend"
 PY = sys.executable
@@ -117,7 +117,7 @@ def test_owned_process_defaults_to_a_minimal_environment(planted):
         return out.decode()
     names = {n.upper() for n in __import__("json").loads(asyncio.run(go()))}
     assert not {"HORUS_API_TOKEN", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"} & names
-    assert names <= SAFE_ENV_KEYS | {"PATHEXT", "COMSPEC", "SYSTEMDRIVE", "LC_CTYPE", "PYTHONIOENCODING", "__PYVENV_LAUNCHER__"}
+    assert names <= SAFE_ENV_KEYS | set(TELEMETRY_OFF) | {"PATHEXT", "COMSPEC", "SYSTEMDRIVE", "LC_CTYPE", "PYTHONIOENCODING", "__PYVENV_LAUNCHER__"}
 
 
 def test_minimal_env_is_an_allowlist(planted):
