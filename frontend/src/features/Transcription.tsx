@@ -4,6 +4,7 @@ import type { Connection, Job, JobEvent } from '../services/api';
 import { nativeDesktop, onFileDrop, selectDirectory, selectMediaFiles, selectSavePath, transcriptionExtensions } from '../platform/desktop';
 import { inspectAttachment, InvalidReceiptError, ReceiptStorageError, saveAttachment } from '../services/transcriptionRecovery';
 import type { Attachment, MediaPayload } from '../services/transcriptionRecovery';
+import { StatusMessage } from '../components/StatusMessage';
 
 export const maxQueue = 20;
 const models = [
@@ -259,7 +260,9 @@ export default function Transcription({ connection, hidden }: { connection: Conn
         if (job.status === 'succeeded' && result?.path) {
           const added = enqueue([result.path]); setUrl(''); setProgress(100);
           setStatus(`Vídeo salvo em ${result.path}. ${added ? 'Adicionado ao final da fila.' : 'A fila está cheia; o arquivo foi preservado no destino.'}`);
-        } else setStatus(`Download ${job.status}: ${job.error ?? 'Consulte o histórico.'}`);
+        } else if (job.status === 'cancelled') {
+          setStatus('Download cancelado. Arquivos parciais podem ser retomados na mesma pasta.');
+        } else setStatus(`Download ${(statusLabels[job.status] ?? job.status).toLowerCase()}: ${job.error ?? 'Consulte o histórico.'}`);
       } else if (job.status === 'succeeded') {
         setTranscript(attachment.previous + (result?.text ?? partial)); setCompleted(true); setProgress(100);
         setStatus(attachment.id && !observed ? 'Transcrição recuperada do histórico. Salve o .txt antes de Próximo vídeo.'
@@ -416,7 +419,7 @@ export default function Transcription({ connection, hidden }: { connection: Conn
       <div className="stack"><label>Modelo<select value={model} onChange={e => setModel(e.target.value)} disabled={busy}>{models.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>Idioma<select value={language} onChange={e => setLanguage(e.target.value)} disabled={busy}>{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
       <div className="stack"><div className="row spread"><p className="eyebrow">FILA</p><span className="tag" aria-label="Arquivos na fila">{queue.length}/{maxQueue}</span></div>
-        {queue.length === 0 ? <p className="muted small-text">A fila está vazia. O primeiro arquivo da fila é sempre o atual.</p>
+        {queue.length === 0 ? <StatusMessage state="empty" style={{ fontSize: 12 }}>A fila está vazia. O primeiro arquivo da fila é sempre o atual.</StatusMessage>
           : <ol className="queue" aria-label="Fila de transcrição">
               {queue.map((file, index) => (
                 <li key={`${index}-${file}`} title={file}>
@@ -441,7 +444,7 @@ export default function Transcription({ connection, hidden }: { connection: Conn
       <section className="stack" aria-label="Histórico de transcrições e downloads">
         <p className="eyebrow">TAREFAS RECUPERÁVEIS</p>
         <button className="button" disabled={!connection || following} onClick={() => setHistoryRevision(value => value + 1)}>ATUALIZAR HISTÓRICO</button>
-        {historyError && <p className="error" role="alert">{historyError}</p>}
+        {historyError && <StatusMessage state="error">{historyError}</StatusMessage>}
         {history.map(job => <button key={job.id} className="job-item" disabled={busy} onClick={() => void recover(job)}>
           <span>{job.payload.operation === 'transcription.run' ? fileName(job.payload.path) : 'Download YouTube'}</span>
           <small>{statusLabels[job.status] ?? job.status} · {new Date(job.created_at).toLocaleString('pt-BR')}</small>
@@ -452,7 +455,7 @@ export default function Transcription({ connection, hidden }: { connection: Conn
     </aside>
     <section className="transcription-result" aria-label="Arquivo atual">
       <div className="row spread"><div className="current-file"><p className="eyebrow">ARQUIVO ATUAL</p><h2>{current ? fileName(current) : 'Nenhum arquivo'}</h2><p className="muted small-text">{current ? folder(current) : ''}</p></div>
-        <ol className="steps"><li className={completed ? 'done' : ''}>01 TRANSCREVER</li><li className={saved ? 'done' : ''}>02 SALVAR .TXT</li><li className={saved ? 'ready' : ''}>03 PRÓXIMO</li></ol></div>
+        <ol className="steps" aria-label="Etapas da transcrição"><li className={completed ? 'done' : ''}>01 TRANSCREVER</li><li className={saved ? 'done' : ''}>02 SALVAR .TXT</li><li className={saved ? 'ready' : ''}>03 PRÓXIMO</li></ol></div>
       <div className="transcription-actions">
         <button className="button primary" disabled={busy || completed || !current || !connection} onClick={() => void transcribe()}>TRANSCREVER</button>
         <button className="button" disabled={!active?.id || !!invalidReceipt} onClick={() => void cancel()}>CANCELAR</button>
@@ -462,13 +465,13 @@ export default function Transcription({ connection, hidden }: { connection: Conn
           <span className="eyebrow progress-value">{progress}%</span>
         </div>
       </div>
-      {warning && <p className="error" role="alert">{warning}</p>}
-      {storageError && <p className="error" role="alert">{storageError}</p>}
-      {invalidReceipt && <p className="error" role="alert">{invalidReceipt}</p>}
+      {warning && <StatusMessage state="error">{warning}</StatusMessage>}
+      {storageError && <StatusMessage state="error">{storageError}</StatusMessage>}
+      {invalidReceipt && <StatusMessage state="error">{invalidReceipt}</StatusMessage>}
       {(invalidReceipt || unreadableReceipt) && <button className="button" disabled={following} onClick={discardReceipt}>DESCARTAR RECIBO INVÁLIDO</button>}
-      {active && !following && <div className="stack"><p role="status">{active.id
+      {active && !following && <div className="stack"><StatusMessage state="success" tone="plain">{active.id
         ? 'Há uma tarefa pendente de acompanhamento. Retomar consulta o job original.'
-        : 'Resposta do pedido desconhecida. Retomar reutiliza o pedido original; se ele não chegou ao backend, poderá iniciar a primeira execução.'}</p>
+        : 'Resposta do pedido desconhecida. Retomar reutiliza o pedido original; se ele não chegou ao backend, poderá iniciar a primeira execução.'}</StatusMessage>
         <button className="button" disabled={!connection} onClick={() => void follow(active)}>RETOMAR ACOMPANHAMENTO</button></div>}
       <textarea className="transcript" aria-label="Transcrição" value={transcript} readOnly={busy} onChange={e => edit(e.target.value)}
         placeholder="A transcrição aparecerá aqui. Adicione um arquivo e clique em Transcrever." />
