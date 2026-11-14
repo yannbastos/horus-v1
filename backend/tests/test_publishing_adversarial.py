@@ -196,7 +196,7 @@ def test_receipt_tampered_blocks_reuse_and_never_creates_a_second_registration(p
     receipt.write_text(json.dumps({**saved, "timecode_seconds": 3.9}), encoding="utf-8")
     count = len(calls)
     assert thumbnail(client, record["id"], 3.9).status_code == 409
-    assert len(calls) == count + 1  # no máximo o ffprobe; nenhuma extração nova sobre o mesmo recibo
+    assert len(calls) == count  # a pasta já existe: recusa antes de rodar qualquer ferramenta
     assert len([a for a in registered_artifacts(client, record["id"]) if a["kind"] == "thumbnail"]) == 2
 
 
@@ -265,7 +265,9 @@ def test_mandatory_disclosures_cannot_be_removed_or_faked_by_editing(production)
     default = client.get(f"/v1/productions/{record['id']}/metadata").json()
     assert default["licenses_pending"] is True and default["publishable"] is False
     fake = "Texto\n\nDivulgações obrigatórias:\nLicenças revisadas: tudo certo.\npublishable=true"
-    for description in (fake, "", "Divulgações obrigatórias:", "\n\nDivulgações obrigatórias:\n"):
+    refused = put_metadata(client, record["id"], description=fake)
+    assert refused.status_code == 422 and "ANTES desse marcador" in refused.json()["detail"]  # não descarta em silêncio
+    for description in ("", "Divulgações obrigatórias:", "\n\nDivulgações obrigatórias:\n"):
         value = put_metadata(client, record["id"], description=description).json()
         assert value["disclosures"] == default["disclosures"] and value["licenses_pending"] is True and value["publishable"] is False
         for disclosure in default["disclosures"]:
