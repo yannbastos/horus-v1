@@ -26,6 +26,9 @@ def planted(monkeypatch):
     monkeypatch.setenv("HORUS_FFMPEG", "ffmpeg-path")
     monkeypatch.setenv("HORUS_YTDLP", "ytdlp-path")
     monkeypatch.setenv("HORUS_WHISPER_DEVICE", "cpu")
+    monkeypatch.setenv("HORUS_WHISPER_MODELS_DIR", "local-models-root")
+    for name in ("HF_HUB_OFFLINE", "HF_HUB_DISABLE_TELEMETRY", "TRANSFORMERS_OFFLINE"):
+        monkeypatch.setenv(name, "1")
     monkeypatch.setenv("HORUS_NODE", "node-path")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.local:8080")
 
@@ -43,7 +46,8 @@ REQUESTS = {
     "factory.render.preview": FactoryRequest(operation="factory.render.preview", video_id="v1"),
 }
 EXTRA = {
-    "transcription.run": {"HORUS_FFMPEG", "HORUS_WHISPER_DEVICE"},
+    "transcription.run": {"HORUS_FFMPEG", "HORUS_WHISPER_DEVICE", "HORUS_WHISPER_MODELS_DIR",
+                          "HF_HUB_OFFLINE", "HF_HUB_DISABLE_TELEMETRY", "TRANSFORMERS_OFFLINE"},
     "youtube.download": {"HORUS_FFMPEG", "HORUS_YTDLP", "HTTPS_PROXY"},
     "factory.profile": {"HORUS_NODE"},
     "factory.render.preview": {"HORUS_FFMPEG", "HORUS_NODE"},
