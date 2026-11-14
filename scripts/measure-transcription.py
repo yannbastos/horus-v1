@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import statistics
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -150,7 +151,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='horus-transcription-') as temporary:
         folder = Path(temporary)
         media, long = generate(folder, os.environ['HORUS_FFMPEG'], args.duration)
-        settings = Settings(token='synthetic-test-token-0123456789', data_dir=folder / 'data', factory_root=None,
+        settings = Settings(token=secrets.token_urlsafe(24), data_dir=folder / 'data', factory_root=None,
                             hermes_executable=None, hermes_config=folder / 'no-hermes.json')
         with TestClient(create_app(settings), base_url='http://127.0.0.1',
                         headers={'Authorization': f'Bearer {settings.token}'}) as client:
