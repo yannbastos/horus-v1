@@ -34,6 +34,7 @@ backend/dist/
 backend/build/
 backend/.cache/
 .venv/
+.venv-bundle/
 __pycache__/
 *.py[cod]
 *.egg-info/

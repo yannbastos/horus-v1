@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "node scripts/bundle-backend.mjs && npm run build",
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/build-backend.ps1 && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -19,6 +19,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico", "icons/128x128.png", "icons/32x32.png"],
+    "windows": { "nsis": { "installMode": "currentUser" }, "webviewInstallMode": { "type": "skip" } },
     "resources": { "../../backend/dist/horus-backend/": "backend/" }
   }
 }
