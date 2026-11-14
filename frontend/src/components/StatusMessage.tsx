@@ -15,6 +15,8 @@ export interface StatusMessageProps {
   tone?: 'muted' | 'good' | 'plain';
   /** Estilo inline opcional quando necessário para espaçamento local. */
   style?: CSSProperties;
+  /** Rótulo de acessibilidade opcional (aria-label). */
+  ariaLabel?: string;
   /** Identificador de teste opcional. */
   testId?: string;
   /** Conteúdo textual ou elementos filhos da mensagem de estado. */
@@ -32,6 +34,7 @@ export function StatusMessage({
   ariaLive,
   tone = 'muted',
   style,
+  ariaLabel,
   testId,
   children,
 }: StatusMessageProps) {
@@ -56,6 +59,7 @@ export function StatusMessage({
         className="fact-item"
         role={resolvedRole}
         aria-live={resolvedAriaLive}
+        aria-label={ariaLabel}
         style={style}
         data-testid={testId}
       >
@@ -70,6 +74,7 @@ export function StatusMessage({
       className={className}
       role={resolvedRole}
       aria-live={resolvedAriaLive}
+      aria-label={ariaLabel}
       style={style}
       data-testid={testId}
     >

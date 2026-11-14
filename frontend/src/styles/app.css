@@ -11,18 +11,18 @@ button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--AccentInk); outline-offset: 3px; }
-.horus { background: var(--Background); color: var(--Ink); font: 14px/1.2 Inter, sans-serif; height: 100vh; display: grid; grid-template-columns: 216px minmax(0,1fr); }
-h1, h2, h3, .brand-name { font-family: Archivo, Inter, sans-serif; font-weight: 600; color: var(--InkStrong); line-height: 1.1; }
+.horus { background: var(--Background); color: var(--Ink); font: var(--TextBody)/1.2 var(--FontSans); height: 100vh; display: grid; grid-template-columns: 216px minmax(0,1fr); }
+h1, h2, h3, .brand-name { font-family: var(--FontDisplay); font-weight: 600; color: var(--InkStrong); line-height: 1.1; }
 h1, h2, h3, p { margin: 0; }
-h1 { font-size: 26px; }
-h2 { font-size: 21px; }
-h3 { font-size: 17px; }
-.eyebrow { font: 500 10px/1.2 Geist, monospace; letter-spacing: 1.2px; }
+h1 { font-size: var(--TextH1); }
+h2 { font-size: var(--TextH2); }
+h3 { font-size: var(--TextH3); }
+.eyebrow { font: 500 var(--TextSm)/1.2 var(--FontMono); letter-spacing: 1.2px; }
 .accent { color: var(--AccentInk); }
 .muted { color: var(--Muted); }
 .good { color: var(--Good); }
-.small { font-size: 9px; }
-.tag { display: inline-block; width: fit-content; border: 1px solid var(--Line); background: var(--Sunken); color: var(--Muted); padding: 3px 8px; font: 500 9px/1.45 Geist, monospace; letter-spacing: 1.2px; white-space: nowrap; }
+.small { font-size: var(--TextXs); }
+.tag { display: inline-block; width: fit-content; border: 1px solid var(--Line); background: var(--Sunken); color: var(--Muted); padding: 3px var(--Space3); font: 500 var(--TextXs)/1.45 var(--FontMono); letter-spacing: 1.2px; white-space: nowrap; }
 .tag.simulated { border-color: var(--AccentInk); color: var(--AccentInk); }
 .tag.demo { border-color: var(--Warn); color: var(--Warn); }
 .tag.good { border-color: var(--Good); color: var(--Good); }
@@ -32,9 +32,9 @@ h3 { font-size: 17px; }
   border: 1px solid var(--LineStrong);
   background: transparent;
   color: var(--Ink);
-  padding: 9px 20px;
-  min-height: 36px;
-  font: 500 11px/1.45 Geist, monospace;
+  padding: 9px var(--Space8);
+  min-height: var(--Space12);
+  font: 500 var(--TextCode)/1.45 var(--FontMono);
   letter-spacing: 1.2px;
   border-radius: 0;
   white-space: nowrap;
