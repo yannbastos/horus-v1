@@ -33,7 +33,7 @@ Issue de gestão: [HOR-110](https://github.com/yannbastos/horus-management/issue
 | F-18 | `jobs.py:command`/`_run` → CLI da fábrica (`factory.profile`, `factory.render.preview`) | **não verificado** (a fábrica é independente e fica fora deste repositório) | — | ação humana | operações enumeradas, sem shell arbitrário; ambiente mínimo por operação (S-2 corrigido). **Suposição:** a rede da fábrica/Remotion segue a documentação própria | ativo | HOR-110 — ver S-2 |
 | F-19 | `publishing.py` (FFmpeg/ffprobe para thumbnail) | nenhum | — | POST autenticado, produção aprovada | executáveis locais explícitos, vídeo confinado e hash conferido, sem shell; protocolos de entrada limitados a `file,pipe`; ambiente mínimo sem credenciais; timeout de 5 s para probe, 15 s para PNG e 10 s para JPG | ativo, manual | HOR-056 |
 
-Fora do escopo deste levantamento (e sem rede conhecida): desktop Avalonia/.NET (`src/Horus`, preservado) e dependências de build (`npm`, `uv`, `cargo`), que acessam registros apenas quando o desenvolvedor as executa.
+Fora do escopo deste levantamento (e sem rede conhecida): o antigo desktop C#/Avalonia (removido em HOR-010) e dependências de build (`npm`, `uv`, `cargo`), que acessam registros apenas quando o desenvolvedor as executa.
 
 ## Achados sem correção (registrados, não corrigidos aqui)
 

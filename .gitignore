@@ -17,9 +17,6 @@ coverage*/
 *.suo
 *.DotSettings.user
 
-# Avalonia
-.avalonia-build-tasks/
-
 # Local configuration and secrets
 .env
 appsettings.*.local.json

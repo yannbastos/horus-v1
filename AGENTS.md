@@ -21,7 +21,7 @@ Estas regras valem para todos os agentes que trabalham no HORUS.
 
 **Produto vigente:** exclusivamente inteligência e operação audiovisual. Não reintroduzir telas, módulos ou dependência de propostas anteriores. Preserve transcrição, perfis, mídia, licenças e aprovação humana. A visão funcional pertence a [docs/VISION.md](docs/VISION.md); documentação de produto não autoriza implementar funcionalidades.
 
-**Fronteiras permanentes:** preserve fábrica/CLI/Remotion independentes, Hermes externo sem fork inicial e Avalonia até equivalência funcional aceita. Não reescreva componentes funcionais nem introduza linguagens sem necessidade técnica. Funções locais essenciais não devem exigir nuvem. Stack, desempenho e critérios completos de identidade visual pertencem a [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**Fronteiras permanentes:** preserve fábrica/CLI/Remotion independentes, Hermes externo sem fork inicial e o desktop C#/Avalonia já removido (HOR-010). Não reescreva componentes funcionais nem introduza linguagens sem necessidade técnica. Funções locais essenciais não devem exigir nuvem. Stack, desempenho e critérios completos de identidade visual pertencem a [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Interpretação:** verifique o código e a evidência antes de afirmar disponibilidade. Separe implementado, parcialmente validado e planejado. Autorizações registradas em cartas, planos ou conversas antigas não são permissões permanentes. Quando receber somente contexto, não altere arquivos automaticamente. Em conflito entre plano e implementação, apresente a divergência antes de mudanças estruturais.
 
@@ -73,7 +73,7 @@ Quando uma decisão importante exigir aprovação, avance primeiro no trabalho i
 - Não exclua nem sobrescreva arquivos sem justificativa.
 - Não exponha credenciais ou informações sensíveis.
 - Preserve a compatibilidade futura com Linux: evite caminhos fixos e APIs exclusivas do Windows quando houver alternativa portável; mantenha integrações específicas do Windows isoladas e documentadas. O suporte atual é somente Windows.
-- Nas telas React, use os tokens de `frontend/src/styles/tokens.css`; no Avalonia, use `src/Horus/Theme/Tokens.axaml`. Preserve a identidade visual em ambos.
+- Nas telas React, use os tokens de `frontend/src/styles/tokens.css`. Preserve a identidade visual.
 - Não faça redesign sem autorização: preserve cores, tipografia, ícones, layouts, navegação e comportamento. Consulte os critérios visuais canônicos antes de alterar a interface.
 - Não permita que agentes ou memória alterem regras críticas, aprovações ou limites financeiros automaticamente. Referencie configurações oficiais, sem criar cópias concorrentes.
 
@@ -96,8 +96,6 @@ Quando uma decisão importante exigir aprovação, avance primeiro no trabalho i
   npm --prefix frontend run build
   npm --prefix frontend test
   & backend/.venv/Scripts/python.exe -m pytest backend/tests -q
-  dotnet build Horus.slnx
-  dotnet test Horus.slnx --filter 'Category!=Network'
   ```
 
 - Não execute testes de rede, geração paga ou operações reais de produção sem autorização que cubra seus efeitos.

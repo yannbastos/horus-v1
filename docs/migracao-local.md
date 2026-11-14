@@ -1,10 +1,10 @@
 # Migração local — primeira prova de conceito
 
-> **Leitura por incremento — 2026-11-11:** este guia preserva procedimentos e a cronologia da migração. O estado consolidado e as pendências atuais estão em [ROADMAP](ROADMAP.md); stack e critérios em [ARCHITECTURE](ARCHITECTURE.md). Tamanhos, pendências e autorizações de seções anteriores pertencem ao incremento descrito, não são permissões permanentes ou resultados de toda a plataforma. A afirmação inicial de que o build não empacota Whisper foi superada pelo empacotamento de faster-whisper documentado na seção Transcrição; a entrada atual abre Visão geral em App.tsx, não Produção. O texto do antigo botão Avalonia é histórico; seu comando nativo permanece preservado.
+> **Leitura por incremento — 2026-11-11:** este guia preserva procedimentos e a cronologia da migração. O estado consolidado e as pendências atuais estão em [ROADMAP](ROADMAP.md); stack e critérios em [ARCHITECTURE](ARCHITECTURE.md). Tamanhos, pendências e autorizações de seções anteriores pertencem ao incremento descrito, não são permissões permanentes ou resultados de toda a plataforma. A afirmação inicial de que o build não empacota Whisper foi superada pelo empacotamento de faster-whisper documentado na seção Transcrição; a entrada atual abre Visão geral em App.tsx, não Produção. O antigo botão Avalonia e o comando nativo `open_legacy` foram removidos em HOR-010.
 
 **Validação posterior em 2026-11-10:** render real pelo backend, cancelamento da árvore Node/Chrome, preservação dos estados e seleção/reprodução de MP4 no desktop foram exercitados. Consulte [resultados, comandos e limites](validacao-local-2026-11-10.md). As pendências históricas abaixo devem ser lidas com essa atualização; instalação NSIS e equivalência completa da transcrição continuam pendentes.
 
-Implementação iniciada após autorização do usuário em 2026-11-10. O Avalonia não foi removido e continua utilizável até a equivalência ser aceita. A ferramenta de Transcrição foi portada para React + backend (ver seção própria); o atalho para abrir o Avalonia saiu da tela, mas o comando nativo `open_legacy` continua no Tauri.
+Implementação iniciada após autorização do usuário em 2026-11-10. O desktop Avalonia foi removido em HOR-010 (ver [migração do legado](migracao-legado-csharp.md)). A ferramenta de Transcrição foi portada para React + backend (ver seção própria); o atalho para abrir o Avalonia saiu da tela e o comando nativo `open_legacy` foi removido em HOR-010.
 
 O posicionamento vigente é exclusivamente audiovisual. A interface e o catálogo visual usam mídia, roteiros, produção, canais e resultados como domínio; a entrada principal abre Produção. A antiga área Memória aparece como Histórico operacional, voltada a execuções e revisões. Telas e dados de demonstração da proposta anterior foram removidos do Avalonia. Documentos e capturas atuais refletem essa direção. A pré-release `v0.1.0-alpha.1` foi gerada antes desta revisão e não recebe alterações automaticamente.
 
@@ -20,7 +20,6 @@ frontend/tests/               Verificações da interface no Edge
 backend/src/horus_backend/    API, SQLite e executor sequencial
 backend/tests/                Segurança, estados, processos e persistência
 backend/smoke.py              Integração real e medição isolada do backend
-src/Horus/                   Desktop Avalonia preservado
 ```
 
 Fluxo: React → API FastAPI → fila SQLite → CLI `fabrica` existente. O frontend não executa comandos arbitrários nem contém regras da produção. Há uma tarefa técnica por vez. O backend funciona sem Tauri. O Hermes possui [diagnóstico de conexão autenticada](integracao-hermes.md); sua execução de agentes, Radar, análise editorial, aprovações de roteiro e publicação ainda não estão integrados nesta prova.
@@ -167,7 +166,7 @@ Em Ajustes, com o backend conectado, o diagnóstico local consulta `GET /v1/diag
 - Cancelamento encerra os processos pertencentes à tarefa; no Windows são usados Job Objects. O encerramento desktop solicita saída ao backend e possui fallback. EOF no canal de controle também encerra o backend gerenciado.
 - Logs por tarefa são limitados; o frontend mantém os 500 eventos mais recentes. Não há percentual de progresso inventado.
 - Mídias precisam ser registradas; reprodução utiliza URL assinada temporária e suporte HTTP Range. O servidor não disponibiliza uma pasta inteira. Codecs dependem do navegador/WebView2. URLs expiram em uma hora; reabra a Biblioteca para renová-las.
-- `HORUS_PYTHON` permite selecionar o Python de desenvolvimento. `HORUS_LEGACY_APP` permite indicar o executável Avalonia no botão de transcrição; sem ele, tenta o build Debug existente. O instalador novo não inclui o desktop antigo.
+- `HORUS_PYTHON` permite selecionar o Python de desenvolvimento. O instalador novo não inclui o desktop antigo.
 
 ## Design e validação
 
@@ -242,4 +241,4 @@ Limitação conhecida do Whisper: silêncio puro com idioma inglês pode gerar u
 
 Pendências que exigem ambiente ou participação: instalação/atualização/desinstalação pelo NSIS em conta Windows ou VM de teste (a instalação grava atalhos e chaves no perfil do usuário); arrastar e soltar real; GPU NVIDIA; download real do YouTube; comparação de qualidade com gravação real nos dois aplicativos.
 
-Pendências para aceitar a prova completa: testar a instalação NSIS e diálogos nativos; executar render real com os materiais preparados e conferir cancelamento de sua árvore de processos; reproduzir vídeo no WebView2; medir RAM/CPU/inicialização do build desktop de produção e comparar telas nos tamanhos e temas previstos. As metas de 250 MB e três segundos ainda não são resultados comprovados. A transcrição React só poderá substituir definitivamente o Avalonia após validar os itens não verificados da seção Transcrição.
+Pendências para aceitar a prova completa: testar a instalação NSIS e diálogos nativos; executar render real com os materiais preparados e conferir cancelamento de sua árvore de processos; reproduzir vídeo no WebView2; medir RAM/CPU/inicialização do build desktop de produção e comparar telas nos tamanhos e temas previstos. As metas de 250 MB e três segundos ainda não são resultados comprovados. O Avalonia foi removido em HOR-010; os itens não verificados da seção Transcrição seguem pendentes de validação.

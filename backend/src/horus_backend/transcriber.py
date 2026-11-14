@@ -23,7 +23,7 @@ _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.yout
 
 
 def is_youtube_url(value: str) -> bool:
-    """Mesma regra do desktop Avalonia: somente vídeo único, HTTPS e sem credenciais."""
+    """Somente vídeo único, HTTPS e sem credenciais."""
     try:
         url = urlsplit(value)
     except ValueError:

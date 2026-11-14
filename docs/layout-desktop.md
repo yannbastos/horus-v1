@@ -1,6 +1,6 @@
 # Layout desktop audiovisual — primeira versão
 
-> **Leitura histórica — 2026-11-11:** o escopo autorizado abaixo refere-se ao incremento do layout Avalonia e não é permissão vigente. Os critérios visuais canônicos estão em [ARCHITECTURE](ARCHITECTURE.md#identidade-visual-e-equivalência).
+> **Leitura histórica — 2026-11-11:** o escopo autorizado abaixo refere-se ao incremento do layout Avalonia e não é permissão vigente. Os critérios visuais canônicos estão em [ARCHITECTURE](ARCHITECTURE.md#identidade-visual-e-equivalência). O código Avalonia citado aqui foi removido em HOR-010 ([migração do legado](migracao-legado-csharp.md)); comandos `dotnet` e caminhos `src/Horus` são registro histórico, não procedimento vigente.
 
 Escopo autorizado: evolução visual do aplicativo Avalonia existente. Não implementa Hermes, Radar, histórico operacional, produção ou acesso à fábrica. Não adiciona dependências nem modifica os outros repositórios.
 

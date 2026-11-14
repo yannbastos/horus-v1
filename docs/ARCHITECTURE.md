@@ -24,7 +24,6 @@ Incremento posterior autorizado: [núcleo editorial simulado](workflows-editoria
 | Workflow fixo simulado | [workflows.py](../backend/src/horus_backend/workflows.py) | Quatro etapas como jobs no worker existente; revisão humana por artefato/revisão, sem modelos ou pesquisa externa |
 | Transcrição Python | [transcriber.py](../backend/src/horus_backend/transcriber.py), [Transcription.tsx](../frontend/src/features/Transcription.tsx) | faster-whisper em subprocesso e download YouTube; equivalência completa ainda depende de validação |
 | Hermes externo | [hermes.py](../backend/src/horus_backend/hermes.py) | Diagnóstico autenticado de saúde/capacidades e executor cognitivo ([workflow_hermes.py](../backend/src/horus_backend/workflow_hermes.py)); workflows do Radar usam por padrão o simulador em processo ([hermes_simulator.py](../backend/src/horus_backend/hermes_simulator.py)), sem rede. Execução real recusada por um gate *deny by default* ([security.py](../backend/src/horus_backend/security.py)) enquanto o perfil `horus` tiver ferramentas perigosas, memória ativa, extensões não auditáveis ou faltarem tetos de tokens e de execuções diárias; script de endurecimento com backup, quarentena e reversão verificados ([segurança do Hermes](seguranca-hermes.md)) |
-| Desktop preservado | [src/Horus](../src/Horus), [tests/Horus.Tests](../tests/Horus.Tests) | C#/.NET 10, Avalonia, transcrição Whisper.net, conversão FFmpeg e download yt-dlp |
 
 Fluxo técnico existente: React → API FastAPI → tarefas SQLite → subprocesso. Para a fábrica, esse subprocesso invoca o CLI independente. As operações enumeradas são consulta de perfil, render de rascunho short, transcrição e download YouTube. Não há shell arbitrário nem comandos de aprovação/publicação expostos pela integração.
 
@@ -36,7 +35,7 @@ A Fase 1 da migração de transcrição reutiliza `jobs.result` para checkpoints
 
 A revisão dessa fase acrescenta keepalive de transporte sem eventos persistidos, renovação de reconexões após frames válidos, identificação local da base e descarte de recibo inválido somente com confirmação. Texto anterior fica referenciado, sem cópias em cada atualização de metadados. Retry direto de transcrição é recusado para preservar o resultado; timeout mantém o checkpoint. O custo quadrático do texto acumulado está documentado e possui medição em banco temporário, sem otimização ampla.
 
-As etapas 1/2 de paridade acrescentam descoberta centralizada em `dependencies.py`, diagnóstico sem carregar motores e fallback CUDA→CPU limitado ao início da mesma tarefa, antes de qualquer trecho de texto. Falhas posteriores preservam o parcial sem reprocessamento automático. A fila React sincroniza drops consecutivos e mantém regras de salvamento/FIFO; testes de IPC Tauri simulado portam casos úteis do Avalonia. Não foi removido código C# nem homologado o instalador/GPU por esses testes.
+As etapas 1/2 de paridade acrescentam descoberta centralizada em `dependencies.py`, diagnóstico sem carregar motores e fallback CUDA→CPU limitado ao início da mesma tarefa, antes de qualquer trecho de texto. Falhas posteriores preservam o parcial sem reprocessamento automático. A fila React sincroniza drops consecutivos e mantém regras de salvamento/FIFO; testes de IPC Tauri simulado portaram casos úteis do desktop C# (removido em HOR-010; ver [migração do legado](migracao-legado-csharp.md)). Esses testes não homologam o instalador/GPU.
 
 Detalhes operacionais, comandos, variáveis de ambiente, formatos e limitações pertencem ao [guia de migração](migracao-local.md). Evidências de ensaios pertencem ao [relatório local](validacao-local-2026-11-10.md), sem equivaler à validação integral do produto.
 
@@ -55,14 +54,12 @@ frontend/tests/        Testes de interface
 backend/src/horus_backend/
                        API, configuração, persistência, executor e adaptadores
 backend/tests/         Testes do backend
-src/Horus/             Desktop Avalonia preservado
-tests/Horus.Tests/     Testes .NET, comportamento e interface
 docs/                  Documentação canônica, guias e histórico
 ~~~
 
 Fábrica e Storybook ficam em repositórios independentes. Na organização local, consulte o [README da fábrica](../../../fabrica-canais/README.md), o [contrato proposto Hórus–fábrica](../../../fabrica-canais/docs/CONTRATO-HORUS-FABRICA.md) e o [README do Storybook](<../../HORUS Storybook/README.md>). Esses links dependem da disposição local dos repositórios; não implicam que seus arquivos estejam presentes em um clone isolado do Hórus.
 
-Não há consolidação em monorepo ou remoção do C# autorizada pela documentação. O código Python do backend está organizado em módulos de arquivo, não nas subpastas idealizadas no planejamento inicial.
+Não há consolidação em monorepo autorizada. O desktop C#/Avalonia foi removido (HOR-010). O código Python do backend está organizado em módulos de arquivo, não nas subpastas idealizadas no planejamento inicial.
 
 ## Direção arquitetural aprovada
 
@@ -113,10 +110,9 @@ A migração tecnológica deve preservar integralmente design, cores, tipografia
 | Geometria | Barra lateral de 216 px, organização de cabeçalho/conteúdo/rodapé; referência 1320 × 840 e mínimo 1040 × 680, com rolagem |
 | Cores | Temas claro, escuro e sistema; índigo, superfícies rebaixadas, linhas finas, cantos retos e botões de alto contraste |
 | Tokens React | [frontend/src/styles/tokens.css](../frontend/src/styles/tokens.css); não copiar valores para documentos ou componentes |
-| Tokens Avalonia | [src/Horus/Theme/Tokens.axaml](../src/Horus/Theme/Tokens.axaml), com DynamicResource; observar diferença de ordem do alfa AXAML/CSS |
 | Tipografia | Archivo Expanded nos títulos, Inter no corpo e textos longos, Geist Mono nos rótulos curtos; fontes locais, pesos e hierarquia preservados |
-| Marca | Olho geométrico orbital próprio, em AXAML/SVG conforme implementação; mesma geometria, sem reutilizar marcas, ícones ou código das referências |
-| Movimento | Referência Avalonia: entrada finita de 2,4 s, depois estática, com transições curtas de cor; sem animação contínua durante leitura; Storybook respeita movimento reduzido |
+| Marca | Olho geométrico orbital próprio, em SVG conforme implementação; mesma geometria, sem reutilizar marcas, ícones ou código das referências |
+| Movimento | Entrada finita de 2,4 s, depois estática, com transições curtas de cor; sem animação contínua durante leitura; Storybook respeita movimento reduzido |
 | Interação | Foco por teclado, seleção, hover, rolagem, temas, atalhos e continuidade da transcrição ao navegar |
 | Legibilidade | Contraste de texto mínimo de 4,5:1; roteiros e transcrições em Inter |
 | Estados futuros | Preparação explícita, sem métricas fictícias, progresso inventado ou demonstração apresentada como operação real |
@@ -124,15 +120,11 @@ A migração tecnológica deve preservar integralmente design, cores, tipografia
 
 Archivo Expanded e Geist Mono são distribuídas sob SIL OFL, com licenças junto às fontes; Inter vem dos pacotes locais de cada implementação. O histórico registra inspiração no ArtCraft Launcher e na composição Hermes, preservando marca própria, sem reutilizar seu código ou identidade.
 
-O Storybook é laboratório independente com dados fictícios, controles locais e referências de fundamentos, componentes, movimento e telas; sua proposta de site não é publicação. Tokens não se sincronizam automaticamente entre catálogo, React e Avalonia. Comparações devem fixar escala e fontes e verificar os dois temas/tamanhos; diferenças de rasterização não autorizam redesign. A comparação visual completa ainda é uma pendência de validação.
+O Storybook é laboratório independente com dados fictícios, controles locais e referências de fundamentos, componentes, movimento e telas; sua proposta de site não é publicação. Tokens não se sincronizam automaticamente entre catálogo e React. Comparações devem fixar escala e fontes e verificar os dois temas/tamanhos; diferenças de rasterização não autorizam redesign. A comparação visual completa ainda é uma pendência de validação.
 
-## Desktop Avalonia preservado
+## Desktop Avalonia removido
 
-A solução .NET mantém um projeto de aplicativo em src/Horus. O scaffold anterior com camadas vazias foi removido; não recriar camadas sem necessidade. Views e ViewModels usam MVVM/CommunityToolkit, injeção das funções dependentes de janela, bindings compilados e testes headless.
-
-A transcrição mantém FIFO de até 20 arquivos incluindo o atual; pausa ao concluir e só permite avançar após salvar com sucesso a revisão atual. Editar exige novo salvamento; erro/cancelamento preservam arquivo e texto parcial. A fila de interface não persiste entre sessões. Whisper.net, FFmpeg e yt-dlp pertencem ao desktop preservado; a nova implementação usa outro motor/modelos, conforme [migração](migracao-local.md#transcrição).
-
-As prévias de Radar, Biblioteca, Produção, Canais e Histórico no Avalonia não possuem backend operacional. Não confundir o cartão Hermes desse desktop com o diagnóstico real implementado na nova base. Detalhes de componentes, dependências, testes, história visual e compatibilidade foram [preservados integralmente](historico/reorganizacao-2026-11-11/ARCHITECTURE-ANTES.md.txt).
+O desktop C#/Avalonia (`src/Horus`, `tests/Horus.Tests`) foi removido em HOR-010 após o aceite da equivalência registrada em [migração do legado](migracao-legado-csharp.md). A transcrição (fila FIFO de até 20 arquivos, pausa ao concluir, avanço só após salvar, preservação do parcial) vive em React/Python; o motor e os modelos são descritos na [migração](migracao-local.md#transcrição). O código antigo permanece no histórico do Git e em [ARCHITECTURE-ANTES](historico/reorganizacao-2026-11-11/ARCHITECTURE-ANTES.md.txt).
 
 ## Navegação
 
