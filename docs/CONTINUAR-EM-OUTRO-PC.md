@@ -38,7 +38,6 @@ Continue a partir de **`main`**. As entregas integradas estão em `main`; branch
 | Node.js | 24 LTS (compatível com Vite 8) | Frontend, Playwright e Remotion |
 | Rust | stable (1.9x) + **MSVC Build Tools** com C++/Windows SDK + **WebView2** | Somente para o desktop Tauri |
 | Microsoft Edge | atual | Os testes Playwright usam `channel: 'msedge'` |
-| .NET SDK | 10.0.100 (`global.json`) | Somente para o desktop Avalonia legado (`dotnet build Horus.slnx`) |
 | FFmpeg / ffprobe | opcional | Mesclar vídeo+áudio no download e na fábrica; a transcrição usa PyAV sem FFmpeg |
 
 Instalação sem administrador: prefira instaladores por usuário (`winget --scope user`) ou zips portáteis em `%LOCALAPPDATA%\Programs` adicionados ao PATH do usuário.

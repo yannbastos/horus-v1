@@ -4,7 +4,7 @@ export function EyeMark() {
   </svg>;
 }
 
-// Mesma geometria da OverviewView Avalonia; ilustração estática em repouso.
+// Ilustração estática em repouso (geometria herdada do desktop legado).
 export function Orbit() {
   return <svg className="orbit" viewBox="0 0 220 220" fill="none" role="img" aria-label="Olho orbital do Hórus">
     <circle className="orbit-outer" cx="110" cy="110" r="92" />

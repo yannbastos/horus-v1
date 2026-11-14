@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/Horus/Horus.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/Horus.Tests/Horus.Tests.csproj" />
-  </Folder>
-</Solution>

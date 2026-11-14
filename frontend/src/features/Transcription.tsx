@@ -26,7 +26,7 @@ const elapsed = (started: number) => {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-/** Mesma regra do backend e do desktop Avalonia: vídeo único do YouTube, HTTPS e sem credenciais. */
+/** Mesma regra do backend: vídeo único do YouTube, HTTPS e sem credenciais. */
 export function isYouTubeUrl(value: string) {
   let url: URL;
   try { url = new URL(value); } catch { return false; }

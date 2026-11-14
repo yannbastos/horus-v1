@@ -32,8 +32,7 @@ Uma capacidade pode estar implementada e parcialmente validada. Builds e testes 
 
 | Capacidade | Estado e limite |
 |---|---|
-| Desktop C#/Avalonia e temas | Implementados; preservados como ferramenta e referência funcional |
-| Download e transcrição Avalonia | Implementados com ferramentas externas; fila/revisão/salvamento existentes, sem persistência da fila de interface |
+| Desktop C#/Avalonia | Removido em HOR-010; equivalência em [migração do legado](migracao-legado-csharp.md) |
 | React/TypeScript + Tauri 2 | Implementados; build Windows e geração NSIS registrados; instalação NSIS ainda pendente |
 | FastAPI/SQLite | Implementados: tarefas persistentes, eventos/logs, executor sequencial, cancelamento e recuperação de estados |
 | Núcleo editorial simulado | Implementado e validado por testes do backend: quatro etapas no JobManager existente, schema v2, tentativas, artefatos, aprovação por revisão e recuperação; UI editorial integrada no M1; sem serviços externos |
@@ -57,13 +56,13 @@ Evidências e procedimentos: [migração](migracao-local.md), [relatório local]
 
 ## Prioridade 1 — concluir a aceitação da base local
 
-Fase 1 implementada: checkpoints persistentes de transcrição, histórico de transcrições/downloads, reanexação por ID/recibo idempotente e reconexão desktop. Não encerra a migração Avalonia: falta aceite nativo/NSIS, qualidade com mídia real e workspace persistente de arquivos não submetidos/edições não salvas. Não foi migrado o banco operacional nesta fase. Procedimentos e limites no [guia local](migracao-local.md#recuperação-da-transcrição--fase-1).
+Fase 1 implementada: checkpoints persistentes de transcrição, histórico de transcrições/downloads, reanexação por ID/recibo idempotente e reconexão desktop. Falta aceite nativo/NSIS, qualidade com mídia real e workspace persistente de arquivos não submetidos/edições não salvas. Não foi migrado o banco operacional nesta fase. Procedimentos e limites no [guia local](migracao-local.md#recuperação-da-transcrição--fase-1).
 
 Correções finais implementadas para revisão: keepalive sem evento de domínio, contador de falhas consecutivas, validação de recibo/base com descarte confirmado, falhas de armazenamento tratadas separadamente, texto anterior referenciado e checkpoints preservados em timeout/retry recusado. Medição reproduzível do custo SQLite disponível; nenhuma otimização ampla, inferência real ou alteração no Avalonia/Hermes/fábrica.
 
 Etapas 1/2 da paridade implementadas: testes de regras úteis do C# no React/IPC Tauri simulado; sincronização da fila em drops consecutivos; casos de silêncio/salvamento/cancelamento/download; descoberta configurável de ferramentas e módulos Python; fallback GPU→CPU antes do primeiro trecho, com mensagens e preservação do parcial. Permanecem bloqueadores da remoção: transcrição real no Tauri, CUDA/hardware, diálogos/clipboard nativos, corpus de formatos/modelos, instalação/atualização NSIS e preservação de dados no ambiente instalado. Código Avalonia mantido; banco operacional não aberto.
 
-Preservar identidade visual, transcrição Avalonia, perfis, mídias e fábrica independente. Reutilizar evidências anteriores antes de repetir ensaios.
+Preservar identidade visual, transcrição, perfis, mídias e fábrica independente. Reutilizar evidências anteriores antes de repetir ensaios.
 
 Pendências registradas: instalação NSIS; seleção de pasta, salvamento e arrastar arquivos nativos; busca temporal manual no player; recuperação após falha abrupta durante render; YouTube real; transcrição longa, vídeo, GPU e modelos maiores; comparação visual completa entre implementações. Validar render/cancelamento pela interface e backend empacotado antes de estender os resultados obtidos via TestClient.
 
@@ -130,7 +129,6 @@ O primeiro vídeo não depende de dashboard completo ou descoberta automatizada.
 - Modelo/provedor, orçamento, delegação e contratos para execução cognitiva real.
 - Identidade editorial completa do Canal 01 e prontidão atual da fábrica.
 - Proteção de segredos, revisão de aprovações e integridade de artefatos.
-- Substituição definitiva do Avalonia somente após equivalência aceita.
 
 A stack e a direção local já estão definidas; não tratá-las como escolha ainda aberta por causa de planos anteriores.
 

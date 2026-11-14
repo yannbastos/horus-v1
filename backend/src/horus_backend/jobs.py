@@ -349,7 +349,7 @@ class JobManager:
                     await readers
                 raise
             current = self.store.get_job(job_id)
-            # Texto parcial preservado em cancelamento ou falha, como no desktop Avalonia.
+            # Texto parcial preservado em cancelamento ou falha, como no desktop legado.
             partial = {"text": transcript(notes["segments"]), "partial": True} if notes and notes["segments"] else None
             if current["status"] == "cancel_requested":
                 self.store.update(job_id, "cancelled", result=partial)

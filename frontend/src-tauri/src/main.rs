@@ -172,26 +172,11 @@ async fn backend_connection(app: AppHandle, state: tauri::State<'_, BackendState
     }).await.map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-fn open_legacy() -> Result<(), String> {
-    let executable = std::env::var_os("HORUS_LEGACY_APP").map(PathBuf::from).unwrap_or_else(|| {
-        repository_root().join(if cfg!(windows) { "src/Horus/bin/Debug/net10.0/Horus.exe" } else { "src/Horus/bin/Debug/net10.0/Horus" })
-    });
-    if !executable.is_file() { return Err("Desktop Avalonia não encontrado. Configure HORUS_LEGACY_APP ou execute-o pelo projeto C#.".into()); }
-    let mut command = Command::new(executable);
-    if let Some(home) = std::env::var_os("USERPROFILE") {
-        let dotnet = PathBuf::from(home).join(".dotnet");
-        if dotnet.is_dir() { command.env("DOTNET_ROOT", dotnet); }
-    }
-    command.spawn().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 fn main() {
     tauri::Builder::default()
         .manage(BackendState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![backend_connection, open_legacy])
+        .invoke_handler(tauri::generate_handler![backend_connection])
         .build(tauri::generate_context!())
         .expect("Não foi possível iniciar o Hórus desktop")
         .run(|handle, event| {

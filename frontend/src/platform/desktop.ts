@@ -22,10 +22,6 @@ export async function selectDirectory(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null;
 }
 
-export async function openLegacy(): Promise<void> {
-  await invoke('open_legacy');
-}
-
 export const transcriptionExtensions = ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma',
   'mp4', 'mkv', 'mov', 'avi', 'webm', 'wmv', 'flv', 'm4v'];
 
