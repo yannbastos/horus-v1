@@ -33,6 +33,7 @@ from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import HermesScriptRequest, ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .storage import Store
+from .transmissions import TransmissionLog
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
 
 STREAM_KEEPALIVE_SECONDS = 10
@@ -57,7 +58,8 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         raise ValueError("HORUS_RADAR_EXECUTOR inválido. Use hermes_simulated ou hermes.")
     radar_state = RadarState(settings.data_dir / "radar" / "radar-youtube.sqlite3")
     manager = JobManager(store, settings)
-    hermes = HermesConnector(settings)
+    transmissions = TransmissionLog(store)
+    hermes = HermesConnector(settings, transmissions)
     scripts = ScriptService(store, settings)
     license_reviews = LicenseReviewService(store, settings.data_dir)
     narration = NarrationService(settings, store)
@@ -109,6 +111,11 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         return {"status": "ready", "database_id": store.database_id, "factory_available": settings.command() is not None,
                 "hermes_connected": hermes.status()["connected"], "version": "0.1.0"}
 
+    @app.get("/v1/security/transmissions")
+    async def list_transmissions(limit: int = 50, after: int = 0):
+        """Registro append-only de envios ao Hermes: somente metadados (tamanho/SHA-256), nunca conteúdo."""
+        return transmissions.page(limit, after)
+
     @app.get("/v1/security/status")
     async def inspect_security():
         report = security_status(settings, store)
@@ -159,6 +166,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             try:
                 require_secure(settings)
             except SecurityGate as error:
+                scripts.refuse_gate(workflow_id)
                 raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
             raise HTTPException(409, "Autorize explicitamente cada execução com source=hermes e authorize=true.")
         try:
@@ -324,6 +332,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             try:
                 require_secure(settings, store)
             except SecurityGate as error:
+                transmissions.best_effort("gate_refusal", "authorize", "refused_gate", workflow_id=workflow_id, detail="security_gate")
                 raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         try:
             return await manager.workflows.authorize(workflow_id, request, idempotency_key)

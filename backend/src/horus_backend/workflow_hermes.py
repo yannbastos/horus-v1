@@ -23,6 +23,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from .hermes import NoRedirect, read_connection, validate_origin
 from .security import (FINAL_RUN_STATUSES, SecurityGate, cost_reservation, daily_runs, daily_tokens,
                        estimated_cost, require_budget, require_secure)
+from .transmissions import TransmissionLog
 from .hermes_contract.script import ScriptRunEnvelope, SCRIPT_INSTRUCTIONS, validate_script_output
 from .hermes_contract.mapping import Observation, decide, idempotency_key
 from .hermes_contract.models import ChannelProfile, Dataset, HermesRunRequest, RunEnvelope
@@ -123,6 +124,16 @@ class HermesStages:
     def __init__(self, store, settings, client_factory: Callable[[], HermesRunClient] | None = None):
         self.store, self.settings = store, settings
         self.client_factory = client_factory or (lambda: HermesRunClient(*read_connection(settings)))
+        self.audit = TransmissionLog(store)
+        self._audit_context: dict[str, dict] = {}  # run_id -> metadados da transmissão (sem conteúdo)
+
+    @staticmethod
+    def _stage_of(context):
+        return "script" if context.get("script_envelope") else str(context.get("stage") or "unknown")
+
+    def _audit_refusal(self, context, attempt_id, error):
+        self.audit.best_effort("gate_refusal", self._stage_of(context), "refused_gate", workflow_id=context.get("workflow_id"),
+                               job_id=context.get("job_id"), attempt_id=attempt_id, detail="security_gate")
 
     # --- etapas locais ---------------------------------------------------------------------
 
@@ -180,6 +191,14 @@ class HermesStages:
                 fields["usage"] = json.dumps(fields["usage"])
             columns = ",".join(f"{name}=?" for name in fields)
             db.execute(f"UPDATE cognitive_runs SET {columns} WHERE id=?", (*fields.values(), run_id))
+        status = fields.get("status")
+        context = self._audit_context.get(run_id)
+        if context and (status in FINAL_RUN_STATUSES or status in {"unknown", "policy_violation"}):
+            usage = json.loads(fields["usage"]) if isinstance(fields.get("usage"), str) else None
+            self.audit.best_effort("outcome", context["stage"], status, run_id=run_id, workflow_id=context["workflow_id"],
+                                   job_id=context["job_id"], attempt_id=context["attempt_id"], destination=context["destination"],
+                                   detail="remote_" + str(fields["remote_status"]).lower()[:30] if fields.get("remote_status") else None,
+                                   tokens_total=(usage or {}).get("total_tokens"), cost_usd=(usage or {}).get("horus_estimated_cost_usd"))
 
     async def analysis(self, context, attempt_id: str, should_stop: Callable[[], bool]):
         live = context.get("cognitive_client", "live") == "live"
@@ -187,12 +206,16 @@ class HermesStages:
             try:
                 require_secure(self.settings)  # repetir antes do envio, inclusive após mudança de perfil
             except SecurityGate as error:
+                self._audit_refusal(context, attempt_id, error)
                 raise CognitiveFailure(str(error)) from None
         client = await asyncio.to_thread(self.client_factory)
         resume = context.get("resume_run")
         if resume:
             # Conciliação: seguir a MESMA execução remota; nunca enviar um novo pedido.
             run_id, key, external_ref = resume["id"], resume["idempotency_key"], resume["external_ref"]
+            if live:
+                self._audit_context[run_id] = {"stage": self._stage_of(context), "workflow_id": context.get("workflow_id"),
+                    "job_id": context.get("job_id"), "attempt_id": attempt_id, "destination": getattr(client, "base_url", None)}
             body = json.loads(resume["request"])
             envelope = (ScriptRunEnvelope if context.get("script_envelope") else RunEnvelope).model_validate_json(body["input"])
             self._record(run_id, attempt_id=attempt_id, status="admitted" if external_ref else "submitting", error=None)
@@ -205,52 +228,80 @@ class HermesStages:
                                                   "horus_price_input_usd_per_mtok": format(Decimal(self.settings.price_input_usd_per_mtok), 'f'),
                                                   "horus_price_output_usd_per_mtok": format(Decimal(self.settings.price_output_usd_per_mtok), 'f')} if live else {})}
                                     ).model_dump(exclude_none=True)
-            # Limite conservador de admissão do payload (bytes UTF-8 >= tokens de texto).
-            # Não substitui limite do provedor para prompt de sistema/reasoning; ver guia de segurança.
-            if live and len((body["input"] + body["instructions"]).encode("utf-8")) >= self.settings.max_tokens_per_run:
-                raise CognitiveFailure("security_gate: Entrada excede o teto de tokens por execução.")
-            run_id, key, external_ref = uuid.uuid4().hex, idempotency_key(attempt_id), None
-            with self.store.connect() as db:  # reserva e intenção atômicas ANTES de enviar
-                db.execute("BEGIN IMMEDIATE")
-                timestamp = now()
-                day = timestamp[:10]  # mesmo dia UTC em todas as verificações e na intenção
-                if live and daily_runs(self.store, db, day=day) >= self.settings.max_runs_per_day:
-                    raise CognitiveFailure("security_gate: Teto diário de execuções reais atingido.")
-                if live and daily_tokens(self.settings, self.store, db, day=day) + self.settings.max_tokens_per_run > self.settings.max_tokens_per_day:
-                    raise CognitiveFailure("security_gate: Saldo diário de tokens insuficiente.")
-                if live:
-                    try:
-                        require_budget(self.settings, self.store, db, day=day)
-                    except SecurityGate as error:
-                        raise CognitiveFailure(str(error)) from None
-                db.execute("""INSERT INTO cognitive_runs(id,job_id,attempt_id,provider,idempotency_key,request,request_hash,
-                    usage,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'submitting',?,?)""",
-                           (run_id, context["job_id"], attempt_id, "hermes", key, json.dumps(body), _digest(body),
-                            json.dumps(estimated_cost(None, body['metadata'])) if live else None,
-                            timestamp, timestamp))
+            try:
+                # Limite conservador de admissão do payload (bytes UTF-8 >= tokens de texto).
+                # Não substitui limite do provedor para prompt de sistema/reasoning; ver guia de segurança.
+                if live and len((body["input"] + body["instructions"]).encode("utf-8")) >= self.settings.max_tokens_per_run:
+                    raise CognitiveFailure("security_gate: Entrada excede o teto de tokens por execução.")
+                run_id, key, external_ref = uuid.uuid4().hex, idempotency_key(attempt_id), None
+                with self.store.connect() as db:  # reserva e intenção atômicas ANTES de enviar
+                    db.execute("BEGIN IMMEDIATE")
+                    timestamp = now()
+                    day = timestamp[:10]  # mesmo dia UTC em todas as verificações e na intenção
+                    if live and daily_runs(self.store, db, day=day) >= self.settings.max_runs_per_day:
+                        raise CognitiveFailure("security_gate: Teto diário de execuções reais atingido.")
+                    if live and daily_tokens(self.settings, self.store, db, day=day) + self.settings.max_tokens_per_run > self.settings.max_tokens_per_day:
+                        raise CognitiveFailure("security_gate: Saldo diário de tokens insuficiente.")
+                    if live:
+                        try:
+                            require_budget(self.settings, self.store, db, day=day)
+                        except SecurityGate as error:
+                            raise CognitiveFailure(str(error)) from None
+                    db.execute("""INSERT INTO cognitive_runs(id,job_id,attempt_id,provider,idempotency_key,request,request_hash,
+                        usage,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'submitting',?,?)""",
+                               (run_id, context["job_id"], attempt_id, "hermes", key, json.dumps(body), _digest(body),
+                                json.dumps(estimated_cost(None, body['metadata'])) if live else None,
+                                timestamp, timestamp))
+            except CognitiveFailure as refusal:
+                if str(refusal).startswith("security_gate"):
+                    self._audit_refusal(context, attempt_id, refusal)
+                raise
+        if live and run_id not in self._audit_context:
+            self._audit_context[run_id] = {"stage": self._stage_of(context), "workflow_id": context.get("workflow_id"),
+                "job_id": context.get("job_id"), "attempt_id": attempt_id, "destination": getattr(client, "base_url", None)}
         try:
-            if not external_ref:
-                external_ref = await self._admit(client, run_id, body, key)
-            status = await self._follow(client, run_id, external_ref, self.settings.max_tokens_per_run if live else None)
-        except asyncio.CancelledError:
-            await self._on_cancel(client, run_id, external_ref, should_stop())
-            raise
-        return self._accept(run_id, external_ref, status, envelope, context)
+            try:
+                if not external_ref:
+                    external_ref = await self._admit(client, run_id, body, key)
+                status = await self._follow(client, run_id, external_ref, self.settings.max_tokens_per_run if live else None)
+            except asyncio.CancelledError:
+                await self._on_cancel(client, run_id, external_ref, should_stop())
+                raise
+            return self._accept(run_id, external_ref, status, envelope, context)
+        finally:
+            self._audit_context.pop(run_id, None)
+
+    def _audit_submit(self, run_id, result, body=None, detail=None, strict=False):
+        context = self._audit_context.get(run_id)
+        if not context:
+            return  # execução simulada: nada sai do processo
+        call = self.audit.record if strict else self.audit.best_effort
+        call("submit", context["stage"], result, run_id=run_id, workflow_id=context["workflow_id"], job_id=context["job_id"],
+             attempt_id=context["attempt_id"], destination=context["destination"],
+             envelope=body["input"] if body else None, detail=detail)
 
     async def _admit(self, client, run_id, body, key):
         for _ in range(2):  # resposta perdida: repetir uma vez com a MESMA chave e o MESMO corpo
             try:
+                self._audit_submit(run_id, "attempted", body, strict=True)  # sem registro, nada é enviado
+            except Exception:  # noqa: BLE001
+                self._record(run_id, status="failed", error="Auditoria de transmissões indisponível; nada foi enviado.")
+                raise CognitiveFailure("Auditoria de transmissões indisponível; nada foi enviado.") from None
+            try:
                 admission = await asyncio.to_thread(client.submit, body, key)
             except HermesHTTPError as error:
                 status = "failed" if error.status in {400, 401, 403, 409, 422, 429} else "unknown"
+                self._audit_submit(run_id, "error" if status == "failed" else "unknown", body, detail=f"http_{error.status}")
                 self._record(run_id, status=status, error=f"{error.status} {error.code}: {error}"[:2000])
                 raise (CognitiveFailure if status == "failed" else CognitiveUnknown)(
                     f"Hermes recusou o pedido ({error.status} {error.code}).") from None
             except (URLError, OSError, TimeoutError, ValueError):
+                self._audit_submit(run_id, "unknown", body, detail="no_response")
                 if decide(Observation(admitted=False)) == "resubmit_same_key":
                     continue
             else:
                 external_ref = str(admission["run_id"])
+                self._audit_submit(run_id, "sent", body)
                 self._record(run_id, external_ref=external_ref, status="admitted", remote_status=admission.get("status"))
                 return external_ref
         self._record(run_id, status="unknown", error="Admissão sem resposta após repetir com a mesma chave.")
