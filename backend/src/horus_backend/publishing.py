@@ -11,14 +11,17 @@ import subprocess
 from threading import RLock
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .license_reviews import LicenseReviewService
-from .media_contracts import apply_license_reviews
+from .media_contracts import UNSAFE_TEXT, apply_license_reviews
 from .local_pilot import registered_json
 from .production import confined, inspect_artifact
 from .storage import now
 from .workflows import WorkflowConflict, digest
+
+
+MAX_IMAGE_BYTES = 16 * 1024 * 1024  # 1080x1920 PNG tem poucos MiB; acima disso a saída da ferramenta é suspeita
 
 
 class ThumbnailRequest(BaseModel):
@@ -30,6 +33,21 @@ class MetadataRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(max_length=5000)
+
+    @field_validator('title')
+    @classmethod
+    def single_line_title(cls, value):
+        if UNSAFE_TEXT.search(value) or any(char in value for char in ('\r', '\n', '\t')):
+            raise ValueError('Título com quebra de linha, controle ou marca de direção.')
+        return value
+
+    @field_validator('description')
+    @classmethod
+    def safe_description(cls, value):
+        text = value.replace('\r\n', '\n')  # CRLF de editores Windows é aceito; CR isolado não
+        if UNSAFE_TEXT.search(text) or '\r' in text:
+            raise ValueError('Descrição com caractere de controle ou marca de direção.')
+        return value
 
 
 def approved_script(db, row):
@@ -122,6 +140,9 @@ class PublishingService:
             confined(root, relative + '/thumbnail.png')
             self._run([str(ffmpeg), '-nostdin', '-n', '-v', 'error', '-protocol_whitelist', 'file,pipe',
                 '-i', str(png), '-frames:v', '1', '-q:v', '2', str(jpg)], 10)
+            for image in (png, jpg):
+                if image.is_file() and image.stat().st_size > MAX_IMAGE_BYTES:
+                    raise WorkflowConflict('Saída de imagem acima do limite esperado; thumbnail recusada.')
             artifacts = [inspect_artifact(root, relative + '/thumbnail.' + suffix, 'thumbnail') for suffix in ('png', 'jpg')]
             with png.open('rb') as stream:
                 header = stream.read(24)
@@ -191,6 +212,10 @@ class PublishingService:
             row, _ = self._approved(db, production_id)
             value = self._metadata(db, row, request)
             root = self.productions.root(production_id)
+            artifacts = json.loads(row['artifacts'])
+            latest = next((a for a in reversed(artifacts) if re.fullmatch(r'publishing/metadata/[a-f0-9]{32}\.json', a['relative_path'])), None)
+            if latest and registered_json(root, artifacts, latest['relative_path']) == value:
+                return value  # mesma edição: não registra outro arquivo
             relative = 'publishing/metadata/' + uuid.uuid4().hex + '.json'
             parent = root / 'publishing/metadata'
             if not parent.exists():
@@ -217,7 +242,10 @@ class PublishingService:
             for item in receipt['artifacts']:
                 if item not in artifacts or inspect_artifact(root, item['relative_path'], 'thumbnail') != item:
                     raise WorkflowConflict('Thumbnail adulterada.')
-                data = confined(root, item['relative_path']).read_bytes()
+                image = confined(root, item['relative_path'])
+                if image.stat().st_size > MAX_IMAGE_BYTES:
+                    raise WorkflowConflict('Thumbnail acima do limite esperado.')
+                data = image.read_bytes()
                 if hashlib.sha256(data).hexdigest() != item['sha256']:
                     raise WorkflowConflict('Thumbnail alterada durante a exportação.')
                 payload['thumbnail.' + item['relative_path'].rsplit('.', 1)[1]] = data

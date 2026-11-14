@@ -39,6 +39,8 @@ O roteiro vem do recibo de aprovação correspondente à versão produzida.
 Cada chave conserva um retrato das revisões daquele momento, inclusive após
 reinício. Após nova revisão de licença, use outra chave para obter um novo pacote.
 Uma tentativa interrompida não é sobrescrita: preserve-a e use outra chave.
+**Thumbnail e metadados (revisão adversarial HOR-056).** O timecode precisa ser número finito, maior ou igual a zero e menor que a duração informada pelo ffprobe (NaN, Infinity, texto e booleano dão 422; fora da duração dá 409). O FFmpeg roda sem shell, sem stdin, com ambiente reduzido, prazo e caminhos absolutos; a chave do cliente nunca vira nome de arquivo. A imagem gerada precisa ter assinatura PNG/JPEG, 1080×1920 (PNG) e no máximo 16 MiB; se o vídeo mudar durante a extração, nada é registrado. Título (uma linha) e descrição não aceitam caracteres de controle nem marcas de direção bidirecional (a descrição aceita quebras de linha e CRLF); HTML e markdown ficam como texto literal. As divulgações obrigatórias são recalculadas a cada leitura/edição e não podem ser removidas nem simuladas; repetir a mesma edição não cria outro arquivo. Thumbnail e metadados exigem aprovação humana vigente (rejeição, mudança de revisão, job falho ou vídeo diferente/ausente dão 409, inclusive na repetição de uma chave). Testes: `backend/tests/test_publishing_adversarial.py`.
+
 Exportar é preparar arquivos para auditoria e publicação manual, não autorização
 de uso comercial nem substituição da conferência humana de QC e licenças.
 
