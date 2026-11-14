@@ -67,3 +67,20 @@ Separada do Hermes; exige autorização própria (YouTube API).
 - F0: HOR-134 #121 (roteiro via Hermes), HOR-112 #100 (perfil), HOR-110 #98 (inventário de fluxos).
 - F1–F2: HOR-026 #28.
 - F3: HOR-027 #29. F4: HOR-047 #49. F6: HOR-039 #41.
+
+## 6. Requisitos de segurança: o que existe na `main` e o que falta (revisão de 14/11/2026)
+
+Revisão deste plano e de [politica-destinos-e-ameacas.md](politica-destinos-e-ameacas.md) contra o código da `main` `cd365b1`. Não habilita inferência. Linhas marcadas **branch** estão em branches retidas da linha Hermes e **não foram editadas** nesta revisão.
+
+| Barreira | Na `main` | Lacuna | Prova / destino |
+|---|---|---|---|
+| Orçamento | Gate `security_gate` (409), tetos por execução/dia, reserva antes do envio, sem retentativa automática | Teto monetário real no provedor (C2) é decisão do idealizador; conciliação `usage` × reserva só em F3 | `test_security_budget.py`, `test_pre_inference.py` |
+| Allowlist de destinos | `HermesRunClient`/`validate_origin`: só `http` em `127.0.0.1`/`::1`, sem proxy e sem redirect; caminhos `/v1/runs…` fixos | O Hórus **não controla nem audita o provedor/modelo** para o qual o Hermes encaminha (C-Hermes); allowlist de provedor/modelo só existe como configuração do perfil Hermes (C1/C6) | `test_hermes.py`, `test_workflow_hermes.py`; política §2 |
+| Redação de dados privados | Envelope de **roteiro** (`ScriptRunEnvelope`) rejeita caminho local e credencial (`_FORBIDDEN_TEXT`); ambos os envelopes recusam campos extras e IDs com caminho | **Envelope de análise (`RunEnvelope`) não rejeita caminho/credencial em texto livre** (`objective`, `feedback`, `channel_profile.summary`); confirmado: `C:/Users/…`, `/home/…`, `api_key = …` e `Bearer …` são aceitos | `contracts/hermes/tests/test_envelope_privacy.py` (`xfail(strict)` documenta; corrigir em `hermes_contract/models.py`, fora do escopo desta entrega, e então remover a marcação) |
+| Aprovação humana | Autorização por execução, idempotência, reconciliação; aprovação humana de proposta e de roteiro | Etapa `script` ainda não existe no backend (só contrato e servidor falso); a autorização exibida ao usuário (destino/modelo/estimativa/dados) é F0.4 | `workflow_hermes.py`; F0 |
+| Auditoria | `cognitive_runs` e eventos de workflow; saída validada por esquema, fontes e `task_id` | Registro append-only de **transmissões** (hash/tamanho do que sai) — **branch** `feat-hor-115` (C5/HOR-115), ainda não integrado; nada a editar aqui | política §3.3 |
+| Injeção/saída | Perfil sem ferramentas auditado; fontes como dado; saída inválida rejeitada, nunca “consertada” | Regressões com modelo real só após autorização (C9) | `test_security_profile.py`, `contracts/hermes/tests/test_script_stage.py` |
+
+Observação de estado: a tabela da seção 1 e a F0.1 descrevem o contrato da etapa `script` como pendente, mas `hermes_contract/script.py` e `contracts/hermes/tests/test_script_stage.py` já existem na `main`; falta a etapa no backend (rotas/workflow — **branch** `feat-hor-134*`, não tocada).
+
+Ordem sugerida para fechar a lacuna de redação (antes de qualquer F3): aplicar `_FORBIDDEN_TEXT` aos textos livres de `RunEnvelope`, remover o `xfail` e acrescentar o mesmo teste ao envelope de `script` integrado.
