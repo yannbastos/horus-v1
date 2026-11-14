@@ -31,7 +31,11 @@ const CORS_HEADERS = () => ({
 test.describe('HOR-019 — Biblioteca de mídia e player acessível', () => {
   test('exibe estados carregando, erro com recuperação e vazio na Biblioteca', async ({ page }) => {
     let shouldFail = true;
-    let delayMs = 350;
+    let holdMediaRequests = true;
+    let releaseMediaResponse: (() => void) | null = null;
+    const mediaGate = new Promise<void>(resolve => {
+      releaseMediaResponse = resolve;
+    });
 
     await page.route('http://127.0.0.1:8765/**', async route => {
       const url = new URL(route.request().url());
@@ -67,8 +71,8 @@ test.describe('HOR-019 — Biblioteca de mídia e player acessível', () => {
         return;
       }
       if (url.pathname === '/v1/media') {
-        if (delayMs > 0) {
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+        if (holdMediaRequests) {
+          await mediaGate;
         }
         if (shouldFail) {
           await route.fulfill({
@@ -91,12 +95,13 @@ test.describe('HOR-019 — Biblioteca de mídia e player acessível', () => {
 
     await page.getByRole('button', { name: 'Biblioteca', exact: true }).click();
     await expect(page.getByText('Carregando biblioteca de mídia…')).toBeVisible();
+    holdMediaRequests = false;
+    releaseMediaResponse?.();
     await expect(
       page.getByRole('alert').filter({ hasText: 'Falha temporária ao ler o índice de mídia.' })
     ).toBeVisible();
 
     shouldFail = false;
-    delayMs = 0;
     await page.getByRole('button', { name: 'ATUALIZAR LISTA', exact: true }).click();
     await expect(
       page.getByRole('heading', { name: 'Traga a mídia da sua próxima produção.' })
