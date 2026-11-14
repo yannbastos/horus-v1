@@ -110,7 +110,7 @@ export default function App() {
           : page === 'transcription' ? null
           : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={() => setPage('production')} onOpenSettings={() => setPage('settings')} /></div>
           : page === 'radar' ? <div className="page"><SectionHeader section={sections.radar} /><Radar connection={connection} onOpenProduction={() => setPage('production')} /></div>
-          : <div className="page"><SectionHeader section={sections[page]} />{page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} />}{(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} />}{page !== 'production' && <Preview section={sections[page]} />}</div>}
+          : <div className="page"><SectionHeader section={sections[page]} />{page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} />}{(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} />}{page === 'history' && <Preview section={sections[page]} />}</div>}
         {(transcriptionOpened || page === 'transcription') && <Transcription connection={connection} hidden={page !== 'transcription'} />}
       </Suspense></main>
       <footer><span>{backendError ? `Backend indisponível: ${backendError}` : connection ? 'Backend local conectado' : nativeDesktop ? 'Preparando backend local…' : 'Prévia no navegador'}</span><span>Transcrição local com Whisper · Orquestração e módulos editoriais em preparação.</span></footer>
