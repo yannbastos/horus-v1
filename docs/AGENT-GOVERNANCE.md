@@ -93,6 +93,17 @@ Privacy First, Local First, Least Privilege, Deny by Default. Nenhuma inferênci
 
 Opus para coordenação, arquitetura complexa e revisão crítica; Sonnet para implementação, testes e validações; Codex para backend e integrações; Antigravity para frontend e testes visuais. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
 
+## Eficiência de consumo
+
+Maximizar progresso real por unidade de consumo, sem reduzir qualidade ou segurança.
+
+- **Maestro coordena, não implementa nem lê implementações extensas.** Revisão por `git diff --stat` e trechos dos arquivos de risco (auth, migrações, aprovação, rede, fluxo de produção); leitura completa só quando o risco exigir. Investigações e buscas amplas são delegadas.
+- **Tarefa delegada:** objetivo, issue, arquivos permitidos/proibidos e evidência esperada. Regras comuns não são repetidas: a tarefa cita esta política.
+- **Relatório do programador (`worker_done`):** 150–300 palavras com issue, resultado, arquivos, commit, testes (comando e contagem), problemas e bloqueios. Detalhes longos ficam num arquivo de relatório ou log citado pelo caminho, nunca descartados.
+- **Testes:** focados durante a implementação, com saída resumida; antes do merge, os relacionados e o build relevante. A suíte completa e a jornada real (`frontend/scripts/e2e-backend.mjs`) rodam **uma vez por lote integrado** que toque o fluxo de produção, não a cada merge. Não repetir suíte já executada sobre o mesmo estado. Registrar ambiente, commit e resultado.
+- **Contexto:** buscar antes de ler; ler trechos antes de arquivos inteiros; não reler documentos inalterados; não imprimir saídas longas (usar `tail`, `grep`, contagens). Sessão longa: compactar preservando objetivo, branch/HEAD, issues, pendências e agentes ativos; nova tarefa não relacionada: sessão limpa após registrar o estado.
+- **Modelos:** o menor nível que resolva com segurança. Opus só para decisões complexas, riscos e conflitos difíceis; nada de Opus para resumir logs, localizar arquivos ou verificações mecânicas.
+
 ## Continuidade
 
 Ao concluir um incremento: atualizar Issue + Status do Project + evidências (obrigatório em toda transição), revisar, testar, integrar e fazer push quando os critérios forem atendidos, atualizar o Project e delegar a próxima tarefa independente enquanto houver capacidade e autorização. Agente bloqueado ou no limite de uso: registrar e redistribuir. Não prometer execução futura sem mecanismo ativo; registrar o ponto de retomada na Issue.

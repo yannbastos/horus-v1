@@ -102,3 +102,11 @@ Depois disso, retome a coordenação conforme a governança:
 - Atualize Issue, Status do Project e evidências.
 
 Continua exigindo autorização do usuário: inferência real, APIs pagas, credenciais, publicação, envio de dados privados e Git destrutivo.
+
+## F. Branches retidas (não estão no Project como código)
+
+Algumas entregas validadas ficam fora da `main` por decisão de integração (ex.: migrações enquanto o usuário testa). Antes de delegar, confira na Issue indicada:
+
+- Linha Hermes com migrações v10/v11 (`feat-hor-134-script-stage` → `fix-hor-134-script-stage-review` → `feat-hor-115-transmission-audit`): Issues #121 e #103 de `horus-management`. Integrar só depois do teste do primeiro vídeo pelo usuário, em lote, com a suíte completa.
+
+Siga a seção "Eficiência de consumo" de [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md).
