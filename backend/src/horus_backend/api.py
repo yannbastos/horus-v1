@@ -31,7 +31,7 @@ from .radar_youtube.state import RadarState
 from .radar_workflow import RadarWorkflowRequest, adapt, demo, eligibility, summary
 from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
-from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
+from .scripts import HermesScriptRequest, ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .storage import Store
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
 
@@ -58,7 +58,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     radar_state = RadarState(settings.data_dir / "radar" / "radar-youtube.sqlite3")
     manager = JobManager(store, settings)
     hermes = HermesConnector(settings)
-    scripts = ScriptService(store)
+    scripts = ScriptService(store, settings)
     license_reviews = LicenseReviewService(store, settings.data_dir)
     narration = NarrationService(settings, store)
 
@@ -147,13 +147,25 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise HTTPException(404, "Roteiro ou workflow não encontrado.") from error
         except WorkflowConflict as error:
             raise HTTPException(409, str(error)) from error
+        except SecurityGate as error:
+            raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         except ValueError as error:
             raise HTTPException(422, "Estrutura do roteiro inválida.") from error
 
     @app.post("/v1/workflows/{workflow_id}/scripts", status_code=201)
-    def generate_script(workflow_id: str, request: ScriptRequest | ManualScriptRequest,
+    def generate_script(workflow_id: str, request: ScriptRequest | ManualScriptRequest | HermesScriptRequest,
                         idempotency_key: str = Header(min_length=1, max_length=128)):
-        record, created = script_call(lambda: scripts.create(workflow_id, request, idempotency_key))
+        if settings.workflow_executor == "hermes" and isinstance(request, ScriptRequest) and not isinstance(request, HermesScriptRequest):
+            try:
+                require_secure(settings)
+            except SecurityGate as error:
+                raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
+            raise HTTPException(409, "Autorize explicitamente cada execução com source=hermes e authorize=true.")
+        try:
+            record, created = script_call(lambda: scripts.create_hermes(workflow_id, request, idempotency_key)
+                                         if isinstance(request, HermesScriptRequest) else scripts.create(workflow_id, request, idempotency_key))
+        except SecurityGate as error:
+            raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         return JSONResponse(record, status_code=201 if created else 200)
 
     @app.get("/v1/workflows/{workflow_id}/scripts")

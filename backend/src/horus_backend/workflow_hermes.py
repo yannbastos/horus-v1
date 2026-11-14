@@ -23,6 +23,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from .hermes import NoRedirect, read_connection, validate_origin
 from .security import (FINAL_RUN_STATUSES, SecurityGate, cost_reservation, daily_runs, daily_tokens,
                        estimated_cost, require_budget, require_secure)
+from .hermes_contract.script import ScriptRunEnvelope, SCRIPT_INSTRUCTIONS, validate_script_output
 from .hermes_contract.mapping import Observation, decide, idempotency_key
 from .hermes_contract.models import ChannelProfile, Dataset, HermesRunRequest, RunEnvelope
 from .hermes_contract.validator import OutputError, parse_output, validate_result
@@ -157,6 +158,8 @@ class HermesStages:
     # --- etapa cognitiva -------------------------------------------------------------------
 
     def _envelope(self, context, attempt_id):
+        if "script_envelope" in context:
+            return ScriptRunEnvelope.model_validate(context["script_envelope"])
         research = context["sources"][0]["content"]
         return RunEnvelope(task_id=context["job_id"], attempt_id=attempt_id, workflow_id=context["workflow_id"],
                            revision=context["revision"], objective=context["objective"],
@@ -191,11 +194,11 @@ class HermesStages:
             # Conciliação: seguir a MESMA execução remota; nunca enviar um novo pedido.
             run_id, key, external_ref = resume["id"], resume["idempotency_key"], resume["external_ref"]
             body = json.loads(resume["request"])
-            envelope = RunEnvelope.model_validate_json(body["input"])
+            envelope = (ScriptRunEnvelope if context.get("script_envelope") else RunEnvelope).model_validate_json(body["input"])
             self._record(run_id, attempt_id=attempt_id, status="admitted" if external_ref else "submitting", error=None)
         else:
             envelope = self._envelope(context, attempt_id)
-            body = HermesRunRequest(input=envelope.model_dump_json(), instructions=INSTRUCTIONS,
+            body = HermesRunRequest(input=envelope.model_dump_json(), instructions=SCRIPT_INSTRUCTIONS if isinstance(envelope, ScriptRunEnvelope) else INSTRUCTIONS,
                                     metadata={"horus_workflow": context["workflow_id"], "horus_attempt": attempt_id,
                                               **({"horus_token_reservation": str(self.settings.max_tokens_per_run),
                                                   "horus_cost_reservation_usd": format(cost_reservation(self.settings), 'f'),
@@ -333,13 +336,16 @@ class HermesStages:
         except OutputError as error:
             self._record(run_id, status="invalid_output", remote_status=remote, usage=usage, error=str(error))
             raise CognitiveFailure(f"Resposta do Hermes fora do contrato: {error}") from None
-        result, issues = validate_result(raw, envelope)
+        result, issues = (validate_script_output(raw, envelope, "hermes") if isinstance(envelope, ScriptRunEnvelope)
+                          else validate_result(raw, envelope))
         if issues:
             # Caminhos de erros de schema podem conter chaves arbitrárias do modelo.
             detail = "; ".join(issue.code for issue in issues[:5])
             self._record(run_id, status="invalid_output", remote_status=remote, usage=usage, error=detail[:2000])
             raise CognitiveFailure(f"Resultado reprovado na validação de evidências: {detail}")
         self._record(run_id, status="completed", remote_status=remote, usage=usage, error=None)
+        if isinstance(envelope, ScriptRunEnvelope):
+            return result.model_dump(mode="json")
         return {"schema_version": 2, "simulated": False, "stage": "analysis", "title": "Análise editorial validada",
                 "result": result.model_dump(mode="json"), "usage": usage, "provider": "hermes_simulated" if context.get("cognitive_client") == "simulated" else "hermes",
                 "external_ref": external_ref, "source_artifact_ids": [context["sources"][0]["id"]]}

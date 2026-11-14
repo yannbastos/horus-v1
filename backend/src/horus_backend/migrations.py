@@ -6,7 +6,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 MIGRATIONS = {
     1: (
         """CREATE TABLE jobs (
@@ -162,6 +162,8 @@ MIGRATIONS = {
         """ALTER TABLE scripts ADD COLUMN origin TEXT NOT NULL DEFAULT 'simulated'
             CHECK(origin IN ('simulated','human'))""",
     ),
+    # Proveniência efetiva Hermes; o CHECK de origin da v9 permanece intacto.
+    10: ("ALTER TABLE scripts ADD COLUMN generator TEXT CHECK(generator IS NULL OR generator = 'hermes')",),
 }
 
 
