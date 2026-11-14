@@ -43,7 +43,7 @@ h3 { font-size: 17px; }
 .button:hover:not(:disabled) { background: var(--Sunken); border-color: var(--Ink); }
 .button:active:not(:disabled) { transform: translateY(1px); }
 .button.primary { background: var(--InvertBackground); border-color: var(--InvertBackground); color: var(--InvertForeground); }
-.button.primary:hover:not(:disabled) { border-color: var(--Ink); filter: brightness(1.08); }
+.button.primary:hover:not(:disabled) { background: var(--InvertBackground); color: var(--InvertForeground); border-color: var(--Ink); filter: brightness(1.08); }
 .button.primary:disabled { background: transparent; color: var(--Faint); border-color: var(--Line); opacity: .55; }
 .button.active { color: var(--AccentInk); border-color: var(--AccentInk); background: var(--Sunken); }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

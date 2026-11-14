@@ -384,7 +384,7 @@ export default function ProductionCompare({
             </div>
           </div>
 
-          <div className="data-table-container">
+          <div className="data-table-container" tabIndex={0}>
             <table className="data-table" aria-label="Tabela comparativa de produções">
               <thead>
                 <tr>

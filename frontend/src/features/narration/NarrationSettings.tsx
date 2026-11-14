@@ -120,7 +120,7 @@ function VoiceRow({ connection, provider, voice, text, isDefault, onDefault }: {
       {voice.preview === 'local' && <button className="button" disabled={busy || !text.trim()} onClick={() => void listen()} aria-label={`Ouvir prévia de ${label}`}>{busy ? 'GERANDO PRÉVIA…' : 'OUVIR PRÉVIA'}</button>}
       {voice.preview === 'local' && canStop && <button className="button" type="button" onClick={stopPreview} aria-label={`Parar prévia de ${label}`}>PARAR PRÉVIA</button>}
       <button className="button" disabled={estimating || !text.trim()} onClick={() => void estimateCost()} aria-label={`Estimar custo de ${label}`}>{estimating ? 'ESTIMANDO…' : 'ESTIMAR CUSTO'}</button>
-      <button className="button primary" aria-pressed={isDefault} onClick={onDefault} aria-label={`Usar ${label} como voz padrão`}>{isDefault ? 'VOZ PADRÃO' : 'USAR COMO PADRÃO'}</button>
+      <button className="button primary" aria-pressed={isDefault} onClick={onDefault} aria-label={isDefault ? `Usar ${label} como voz padrão` : `Usar ${label} como voz padrão — USAR COMO PADRÃO`}>{isDefault ? 'VOZ PADRÃO' : 'USAR COMO PADRÃO'}</button>
     </div>
     {previewState !== 'idle' && (
       <p className={previewState === 'error' ? 'error' : 'muted'} role="status" aria-live="polite">

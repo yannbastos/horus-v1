@@ -146,7 +146,9 @@ export default function QualityReportPanel({
                           style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                           aria-label={`Ir para timecode do erro ${item.id} (${formatTimecode(
                             item.timecode.start
-                          )})`}
+                          )}) — Timecode ${formatTimecode(item.timecode.start)} → ${formatTimecode(
+                            item.timecode.end
+                          )}`}
                           onClick={() =>
                             onSeekTimecode(item.timecode!.start, `QC fail: ${item.id}`)
                           }
@@ -201,7 +203,9 @@ export default function QualityReportPanel({
                           style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                           aria-label={`Ir para timecode do aviso ${item.id} (${formatTimecode(
                             item.timecode.start
-                          )})`}
+                          )}) — Timecode ${formatTimecode(item.timecode.start)} → ${formatTimecode(
+                            item.timecode.end
+                          )}`}
                           onClick={() =>
                             onSeekTimecode(item.timecode!.start, `QC warn: ${item.id}`)
                           }
@@ -224,7 +228,7 @@ export default function QualityReportPanel({
           )}
 
           {quality.checks.length > 0 && (
-            <div className="data-table-container">
+            <div className="data-table-container" tabIndex={0}>
               <table className="data-table" aria-label="Tabela de checks de qualidade">
                 <thead>
                   <tr>
@@ -284,7 +288,9 @@ export default function QualityReportPanel({
                               style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                               aria-label={`Ir para timecode do check ${check.id} (${formatTimecode(
                                 check.timecode.start
-                              )})`}
+                              )}) — ${formatTimecode(check.timecode.start)} – ${formatTimecode(
+                                check.timecode.end
+                              )}`}
                               onClick={() =>
                                 onSeekTimecode(check.timecode!.start, `Check ${check.id}`)
                               }
