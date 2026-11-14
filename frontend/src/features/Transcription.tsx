@@ -397,7 +397,7 @@ export default function Transcription({ connection, hidden }: { connection: Conn
   const warning = !connection ? connectionHelp
     : capabilities && !capabilities.engine ? 'Dependências de transcrição indisponíveis. Consulte o diagnóstico em Ajustes e prepare o extra transcription.' : '';
   return <div className="transcription" hidden={hidden}>
-    <aside className="transcription-sources">
+    <aside className="transcription-sources" aria-label="Fontes e fila de transcrição">
       <div className="stack"><p className="eyebrow accent">01 / TRANSCRIÇÃO</p><h1>Áudio e vídeo<br />em texto.</h1>
         <p className="muted">Transcrição offline com Whisper. Seus arquivos não saem do computador.</p></div>
       <div className={`drop-zone ${dragging ? 'dragging' : ''}`}>
