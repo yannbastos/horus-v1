@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from .config import Settings
+from .file_access import client_path
 from .radar_youtube.state import RadarState
 from .retention import run_retention
 from .processes import OwnedProcess, failure_detail, sanitized_tail
@@ -229,13 +230,13 @@ class JobManager:
 
     def command(self, request: JobRequest):
         if isinstance(request, TranscriptionRequest):
-            path = Path(request.path).expanduser()
+            path = client_path(request.path)
             if not path.is_file():
                 raise ValueError("Arquivo de mídia não encontrado. Verifique se ele foi movido ou removido.")
             return [*self.settings.worker(), "transcribe", "--path", str(path.resolve()), "--model", request.model,
                     "--language", request.language, "--models-dir", str(self.settings.data_dir / "models")]
         if isinstance(request, DownloadRequest):
-            directory = Path(request.directory).expanduser()
+            directory = client_path(request.directory, protected=(self.settings.data_dir,))
             if not directory.is_dir():
                 raise ValueError("Pasta de destino não encontrada.")
             return [*self.settings.worker(), "download", "--url", request.url, "--directory", str(directory.resolve())]

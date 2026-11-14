@@ -37,6 +37,7 @@ from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
 from .storage import Store
+from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
 
 STREAM_KEEPALIVE_SECONDS = 10
@@ -443,7 +444,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.post("/v1/media")
     async def register(request: MediaRequest):
         try:
-            path = Path(request.path).expanduser().resolve(strict=True)
+            path = client_path(request.path, strict=True)
             if not path.is_file() or path.suffix.lower() not in {".mp4", ".webm", ".m4v", ".mov", ".mkv", ".wav", ".mp3", ".ogg"}:
                 raise ValueError("Selecione um arquivo audiovisual compatível.")
             return media_view(store.register_media(path))
@@ -453,7 +454,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.post("/v1/media/folder")
     async def register_folder(request: MediaRequest):
         try:
-            directory = Path(request.path).expanduser().resolve(strict=True)
+            directory = client_path(request.path, strict=True)
             if not directory.is_dir():
                 raise ValueError("Selecione uma pasta existente.")
             items = []
@@ -496,7 +497,14 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.post("/v1/transcriptions/save")
     async def save_transcript(request: TranscriptSave):
         # O caminho vem do diálogo nativo de salvar; somente .txt em pasta existente.
-        path = Path(request.path).expanduser()
+        try:
+            path = client_path(request.path, protected=(settings.data_dir,))
+        except PathNotAllowed as error:
+            raise HTTPException(400, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(400, f"Caminho inválido: {error}") from error
+        if Path(request.path).expanduser().is_symlink():
+            raise HTTPException(400, "O destino não pode ser um link simbólico.")
         if path.suffix.lower() != ".txt":
             raise HTTPException(400, "Salve a transcrição como arquivo .txt.")
         if not path.parent.is_dir() or path.is_dir():
