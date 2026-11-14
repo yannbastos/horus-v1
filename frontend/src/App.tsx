@@ -104,7 +104,7 @@ export default function App() {
         </div>
       )}
       <main id="main" tabIndex={-1}><Suspense fallback={<p className="loading" role="status">Abrindo seu espaço…</p>}>
-        {page === 'overview' ? <Overview navigate={setPage} />
+        {page === 'overview' ? <Overview navigate={setPage} connection={connection} />
           : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} />
           : page === 'library' ? <Library connection={connection} />
           : page === 'transcription' ? null
