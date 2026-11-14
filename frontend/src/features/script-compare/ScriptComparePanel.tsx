@@ -3,6 +3,7 @@ import type { ScriptRecord, ScriptSectionKind, ScriptStatus } from '../../servic
 import { getScriptOrigin } from '../../services/scripts';
 import { compareScripts } from './wordDiff';
 import type { DiffSegment, SectionDiffStatus } from './wordDiff';
+import { StatusMessage } from '../../components/StatusMessage';
 
 const SCRIPT_STATUS_LABELS: Record<ScriptStatus, string> = {
   awaiting_review: 'Aguardando revisão',
@@ -133,9 +134,9 @@ export default function ScriptComparePanel({
             Fechar comparação
           </button>
         </div>
-        <p className="muted" role="status">
+        <StatusMessage state="empty" role="status">
           É necessário ter pelo menos duas versões do roteiro para comparar alterações.
-        </p>
+        </StatusMessage>
       </section>
     );
   }
@@ -261,9 +262,9 @@ export default function ScriptComparePanel({
         </table>
       </div>
 
-      <p className="muted" role="status" aria-live="polite">
+      <StatusMessage state="empty" role="status">
         <strong>Resumo:</strong> {summaryText}
-      </p>
+      </StatusMessage>
 
       <div className="fact-item" style={{ background: 'var(--Background)' }} role="group" aria-label="Comparação do título">
         <div className="row spread">

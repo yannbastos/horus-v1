@@ -16,6 +16,7 @@ import {
   retryWorkflow,
   reviewWorkflow,
 } from '../services/api';
+import { StatusMessage } from '../components/StatusMessage';
 import ScriptReview from './ScriptReview';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -278,9 +279,9 @@ export default function EditorialWorkflows({
         </p>
 
         {error && (
-          <p className="error" role="alert">
+          <StatusMessage state="error">
             {error}
-          </p>
+          </StatusMessage>
         )}
       </div>
 
@@ -312,7 +313,7 @@ export default function EditorialWorkflows({
           </aside>
 
           <main className="editorial-detail" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {loading && <p className="loading" role="status">Carregando análise…</p>}
+            {loading && <StatusMessage state="loading">Carregando análise…</StatusMessage>}
 
             {current && !loading && (
               <>
@@ -597,9 +598,9 @@ export default function EditorialWorkflows({
                       />
                     </label>
                     {feedbackError && (
-                      <p className="error" role="alert">
+                      <StatusMessage state="error">
                         {feedbackError}
-                      </p>
+                      </StatusMessage>
                     )}
 
                     <div className="actions">
