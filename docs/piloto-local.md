@@ -23,10 +23,65 @@ Após reinício, jobs em execução ou com cancelamento solicitado ficam `interr
 
 ## Meu primeiro vídeo com roteiro próprio — HOR-133
 
-1. Em **Radar**, carregue a demonstração e use **Iniciar análise** com Hermes simulado. Em **Editorial**, autorize a execução simulada e aprove a proposta resultante. Isso não chama o Hermes real.
-2. Na revisão de roteiro, use o editor manual quando disponível na sua versão: escreva título e 3 a 6 seções, com gancho, desenvolvimento e conclusão. Para 60 a 120 segundos, comece com cerca de 150 a 200 palavras; a duração final depende da voz. Aprove a versão escrita.
-3. Em **Ajustes → Narração**, confira a disponibilidade e ouça uma prévia. Na produção, selecione `local_pilot`, voz `kokoro/pf_dora` ou Microsoft Maria e qualidade `final` (1080×1920). Quando a tela ainda não expuser uma opção, use o corpo da API abaixo.
-4. Aguarde o MP4 e o QC. Na revisão da produção, assista, ouça, confira legendas e registre a verificação de licenças. Aprove pelo hash do vídeo; erros de QC exigem reconhecimento explícito. Aprovar o piloto mantém `demo_only=true` e `publishable=false`.
+Fluxo completo no aplicativo, sem Hermes real, sem nuvem e sem custo. Na **Central de Produção** (menu lateral)
+o painel **Meu primeiro vídeo** (GUIA RÁPIDO) mostra os 5 passos e o próximo pendente; **RECOLHER** / **EXPANDIR**
+o esconde, e depois da aprovação aparece **REABRIR GUIA “MEU PRIMEIRO VÍDEO”**. Os botões **ABRIR AJUSTES** e
+**ABRIR PRODUÇÃO** levam à tela do passo. Os passos do painel são: Escolher voz padrão; Escrever roteiro; Aprovar roteiro;
+Produzir em Final 1080×1920; Revisar QC/licenças e aprovar.
+
+**0. Conferir a prontidão.** Menu **Ajustes**, aba **GERAL**: conecte (**CONECTAR BACKEND**, depois **RECONECTAR BACKEND** se
+precisar). O cartão **Pronto para produzir?** mostra **PRONTO PARA PRODUZIR** ou **FALTA (n)**, com cada ferramenta como
+**DISPONÍVEL** / **INDISPONÍVEL** e para que serve. Corrija o que faltar (variáveis da seção “Conferir o ambiente”), reinicie o backend
+e use **VERIFICAR NOVAMENTE**. Um item opcional indisponível (por exemplo, o outro provedor de voz) não bloqueia.
+
+**1. Escolher a voz.** Ainda em **Ajustes**, no cartão **NARRAÇÃO** use **ABRIR NARRAÇÃO**. Em cada voz local, **OUVIR PRÉVIA**
+(**PARAR PRÉVIA** interrompe); em **kokoro/pf_dora** ou na voz Microsoft Maria, **USAR COMO PADRÃO** (vira **VOZ PADRÃO**).
+Não use o provedor pago: ele é marcado como exigindo autorização de custo.
+
+**2. Proposta aprovada (demonstração).** Menu **Radar**: **Carregar dados de demonstração**, selecione vídeos elegíveis
+(**Selecionar todos os elegíveis**) e **Iniciar análise**; depois **Ir para Produção**. Em **Produção**, abra a análise em
+**ANÁLISES RECENTES**, aguarde o fim das etapas e use **Aprovar** na **DECISÃO EDITORIAL HUMANA**. Se aparecer
+**Autorizar uma execução**, é só para o Hermes real; no modo simulado normal não é pedida. Nada disso chama o Hermes real.
+
+**3. Escrever, salvar e aprovar o roteiro.** Na mesma tela, na revisão de roteiro, clique **Escrever roteiro do zero**.
+Preencha **Título do roteiro** e, em cada seção, **Título da seção** e **Narração da seção** (3 a 30 seções: a primeira é
+**GANCHO · HOOK**, a última **CONCLUSÃO · CONCLUSION**, as do meio **DESENVOLVIMENTO · BODY**; **Adicionar seção**, **Subir**, **Descer**,
+**Remover**). Para 60 a 120 s, escreva cerca de 150 a 200 palavras; os contadores mostram palavras e caracteres.
+Clique **Salvar roteiro** (**Descartar alterações** abandona). Para mudar depois: **Editar roteiro** → **Salvar como nova versão**; **Comparar versões**
+mostra as diferenças. Revise a versão e clique **Aprovar roteiro** (também há **Rejeitar roteiro** e **Solicitar alterações no roteiro**).
+
+**4. Produzir em Final 1080×1920.** Em **Produção**, no painel **PRODUÇÃO TÉCNICA LOCAL (M4)**, em **DISPARO AUTORIZADO PELO ROTEIRO**:
+**Modo de execução** = *Piloto local com narração*; em **VOZ E QUALIDADE DO PILOTO LOCAL**, **Provedor de voz** e **Voz** (a voz padrão vem
+pré-selecionada) e **Qualidade do vídeo** = *Final 1080×1920* (*Rascunho 540×960* serve para testar antes). Clique **Iniciar piloto local com narração**.
+Tempo: a tela estima ≈ 140 a 160 s só de render em Final; neste PC a produção completa mediu cerca de 207 s, então espere 3 a 4 minutos
+(a narração Kokoro pode levar mais de 1 min sozinha). Não reinicie o backend durante a produção.
+
+**5. O que observar no progresso.** **ETAPAS DO PIPELINE DE PRODUÇÃO** avança por etapa; o aviso de produção no topo informa
+conclusão ou falha mesmo se você estiver em outra tela; a **Central de Produção** lista cada vídeo, a etapa e o próximo passo humano
+(**ATUALIZAR**). **Cancelar produção** interrompe. Ao terminar aparece **Aviso de conclusão técnica**: o MP4 existe, mas ainda não está aprovado.
+
+**6. Ler o QC.** No **PAINEL DE QUALIDADE TÉCNICA (CONTRATO 2 · QC)**, veja **STATUS DO QC** e **RESUMO DE CHECKS**: **BLOQUEANTE (FAIL)**
+impede aprovar sem reconhecimento; **AVISO (WARN)** pede atenção. O aviso `asset_provenance` (“mídia, fonte ou voz sem verificação humana de licença”)
+é **esperado** até você verificar as licenças (passo 7); some depois da verificação. Confira também a prévia de vídeo (**Prévia de vídeo (MP4)**), as legendas
+e o áudio. **QC não executado** significa que não há relatório: não é aprovação.
+
+**7. Registrar a verificação de licença.** No **PAINEL DE LICENÇAS E PROVENIÊNCIA (CONTRATO 3)**, em **VERIFICAÇÃO HUMANA POR ASSET**, para cada asset clique
+**Registrar decisão humana — <asset>**, preencha **Licença (id)**, **Nome da licença**, **URL da licença (https)**, **Uso comercial**,
+**Atribuição obrigatória** e **Evidência**, escolha **Verificar** (ou **Rejeitar**) e **Confirmar decisão**. Só verifique o que você realmente conferiu;
+`commercial_use: unknown` só pode ser rejeitado. A decisão é registrada à parte e o manifesto original não muda.
+
+**8. Aprovar com reconhecimento.** Em **REVISÃO HUMANA FINAL (VÍDEO VERIFICADO POR HASH)**, assista, ouça e confira as legendas (notas por timecode são opcionais).
+Se houver pendência de QC/licença, marque **Confirmo ciência das pendências de QC e/ou licenças não verificadas** e clique **Aprovar produção (hash verificado)**
+(**Rejeitar produção** sempre disponível). A aprovação mantém `demo_only=true` e `publishable=false`: não autoriza publicar nem uso comercial.
+
+**9. Exportar o pacote.** Depois de aprovada, em **EXPORTAÇÃO AUDITÁVEL LOCAL**: **Exportar pacote**, depois **Baixar ZIP**. O ZIP traz vídeo, legendas, roteiro,
+relatório de QC, licenças, revisão e manifesto com hashes, sem logs, caminhos locais nem credenciais. Repetir com a mesma chave devolve o mesmo pacote.
+Thumbnail e metadados de publicação existem no backend, mas ainda não têm tela: em breve.
+
+**Se algo falhar.** O quadro **FALHA NA EXECUÇÃO TÉCNICA** (ou **EXECUÇÃO INTERROMPIDA NO REINÍCIO**) mostra o erro e **O que fazer**. Abra
+**Diagnóstico técnico** (etapa, código, duração, trecho do erro) e use **Copiar diagnóstico** para enviar a quem for ajudar. Corrija a causa (voz/modelos
+em **Ajustes**, ferramentas em **Pronto para produzir?**) e inicie **uma nova produção** com **Iniciar piloto local com narração**; a falha não é repetida automaticamente
+e o vídeo de uma tentativa que falhou nunca é registrado como válido. Se a produção ficou interrompida por reinício, use **Criar nova produção após conciliação** ou **Verificar acompanhamento agora**.
 
 API local autenticada (cada POST exige uma `Idempotency-Key` nova; conserve-a para repetir o mesmo pedido):
 
@@ -55,7 +110,7 @@ $env:HORUS_KOKORO_MODEL_DIR = "$env:LOCALAPPDATA/Horus/tools/kokoro-proof/model"
 & backend/.venv/Scripts/python.exe -m pytest backend/tests/test_manual_script_flow.py -q -s --basetemp "$env:TEMP/hm-$([guid]::NewGuid().ToString('N').Substring(0,8))"
 ```
 
-O teste registra `manual-flow-report.json` para cada voz, com tempos monotônicos, hashes, duração física, alinhamento e QC. A aprovação e a verificação de uma cena são fictícias de teste; não substituem escuta humana nem autorizam a licença da voz. O roteiro humano usa `origin=human`, `authored_by=human`, `simulated=false`; somente a proposta permanece simulada. A disponibilidade e os rótulos do editor dependem do incremento de interface; este ensaio valida a API, não a tela.
+O teste registra `manual-flow-report.json` para cada voz, com tempos monotônicos, hashes, duração física, alinhamento e QC. A aprovação e a verificação de uma cena são fictícias de teste; não substituem escuta humana nem autorizam a licença da voz. O roteiro humano usa `origin=human`, `authored_by=human`, `simulated=false`; somente a proposta permanece simulada. Este ensaio valida a API, não a tela.
 
 ### Normalização da narração Kokoro
 
