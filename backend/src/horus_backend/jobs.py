@@ -83,7 +83,8 @@ _CUDA_PREFIX = "CUDA_PATH"
 # Ferramentas e opções lidas por dependencies.find_tool e transcriber.py.
 _TOOL_ENV = {"HORUS_FFMPEG", "HORUS_FFPROBE", "HORUS_TOOLS_DIR"}
 _OPERATION_ENV = {
-    "transcription.run": _TOOL_ENV | {"HORUS_WHISPER_DEVICE"},
+    "transcription.run": _TOOL_ENV | {"HORUS_WHISPER_DEVICE", "HORUS_WHISPER_MODELS_DIR",
+                                     "HF_HUB_OFFLINE", "HF_HUB_DISABLE_TELEMETRY", "TRANSFORMERS_OFFLINE"},
     # Proxy de rede do operador: necessário para o download funcionar atrás de proxy.
     "youtube.download": _TOOL_ENV | {"HORUS_YTDLP", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"},
     "factory.profile": {"HORUS_NODE"},

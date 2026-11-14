@@ -76,14 +76,26 @@ def transcribe(path: Path, model_name: str, language: str, models_dir: Path):
     from faster_whisper import WhisperModel
 
     device = choose_device(ctranslate2)
-    models_dir.mkdir(parents=True, exist_ok=True)
+    local_root = os.environ.get('HORUS_WHISPER_MODELS_DIR')
+    source = model_name
+    if local_root:
+        root = Path(local_root).expanduser()
+        candidate = next((p for p in (root / model_name, root / f'faster-whisper-{model_name}')
+                          if all((p / f).is_file() for f in ('model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'))), None)
+        if candidate is None:
+            raise ValueError(f'Modelo {model_name} não preparado em HORUS_WHISPER_MODELS_DIR; modo local não permite download.')
+        source = str(candidate.resolve())
+    else:
+        models_dir.mkdir(parents=True, exist_ok=True)
     emitted = False
     while True:
         model = segments = None
         try:
             compute = 'float16' if device == 'cuda' else 'int8'
-            emit('status', f'Carregando modelo {model_name} em {device.upper()} ({compute}); o primeiro uso pode baixar o modelo...')
-            model = WhisperModel(model_name, device=device, compute_type=compute, download_root=str(models_dir))
+            mode = 'modelo local, sem download' if local_root else 'o primeiro uso pode baixar o modelo'
+            emit('status', f'Carregando modelo {model_name} em {device.upper()} ({compute}); {mode}...')
+            model = WhisperModel(source, device=device, compute_type=compute, download_root=str(models_dir),
+                                 local_files_only=bool(local_root) or os.environ.get('HF_HUB_OFFLINE') == '1')
             emit('status', f'Transcrevendo em {device.upper()} ({compute}).')
             segments, info = model.transcribe(str(path), language=None if language == 'auto' else language)
             last = -1
