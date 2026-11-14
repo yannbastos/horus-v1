@@ -244,7 +244,7 @@ def read_audit_json(path, *, deadline, allow_unclosed_events=False, require_clos
         time.sleep(.05)
 
 
-def network_summary(root, rejected, *, timeout=5):
+def network_summary(root, rejected, *, timeout=30):
     from urllib.parse import urlsplit
     launches = sorted(root.glob('browser-launch-*.json')) or [root/'browser-launch.json']
     url_hosts, remote_addresses = set(), set()
