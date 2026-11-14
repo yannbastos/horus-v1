@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Connection, RadarDatasetDetail, RadarDatasetSummary, WorkflowDetail } from '../services/api';
 import { createRadarDemoDataset, createRadarWorkflow, getRadarDatasetDetail, getRadarDatasets } from '../services/api';
+import { StatusMessage } from '../components/StatusMessage';
 
 const REASON_LABELS: Record<string, string> = {
   invalid_source_id: 'Identificador de fonte inválido',
@@ -195,23 +196,23 @@ export default function Radar({
     <section className="workspace" aria-label="Pesquisa e análise de oportunidades do Radar">
       {!connection && (
         <div className="card sunken">
-          <p className="muted" role="status">
+          <StatusMessage state="empty" role="status">
             Conecte o backend local em Ajustes para carregar e explorar os datasets do Radar.
-          </p>
+          </StatusMessage>
         </div>
       )}
 
       {error && (
         <div className="card">
-          <p className="error" role="alert">
+          <StatusMessage state="error">
             {error}
-          </p>
+          </StatusMessage>
         </div>
       )}
 
       {connection && (loading || !initialLoaded) && datasets.length === 0 && !error && (
-        <div className="card sunken" role="status" aria-live="polite">
-          <p className="loading">Carregando datasets do Radar…</p>
+        <div className="card sunken">
+          <StatusMessage state="loading">Carregando datasets do Radar…</StatusMessage>
         </div>
       )}
 
@@ -276,7 +277,7 @@ export default function Radar({
           </aside>
 
           <main className="radar-detail" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {loadingDetail && <p className="loading" role="status">Carregando detalhes do dataset…</p>}
+            {loadingDetail && <StatusMessage state="loading">Carregando detalhes do dataset…</StatusMessage>}
 
             {detail && !loadingDetail && (
               <>
