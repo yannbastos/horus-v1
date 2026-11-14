@@ -21,6 +21,7 @@ import {
   reviewScript,
   sortScriptsDesc,
 } from '../services/scripts';
+import { StatusMessage } from '../components/StatusMessage';
 import ScriptEditor from './script-editor/ScriptEditor';
 import ScriptComparePanel from './script-compare/ScriptComparePanel';
 import {
@@ -557,11 +558,7 @@ export default function ScriptReview({
           : 'Derivação local a partir da proposta aprovada, sem inferência externa, sem custos e sem acionar renderização ou publicação na fábrica.'}
       </p>
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <StatusMessage state="error">{error}</StatusMessage>}
 
       {!isProposalApproved && (
         <div className="fact-item" role="note" aria-label="Pré-requisito de geração de roteiro">
@@ -638,19 +635,16 @@ export default function ScriptReview({
       )}
 
       {loading && (
-        <p className="loading" role="status" style={{ padding: '12px 0' }}>
+        <StatusMessage state="loading" style={{ padding: '12px 0' }}>
           Carregando versões do roteiro…
-        </p>
+        </StatusMessage>
       )}
 
       {isProposalApproved && !loading && scripts.length === 0 && !error && !editorSession && (
-        <div className="fact-item">
-          <p className="eyebrow">PRONTO PARA GERAR OU ESCREVER</p>
-          <p className="muted">
-            Proposta aprovada. Gere a primeira versão simulada ou escreva o roteiro do zero para iniciar a
-            revisão humana por seções.
-          </p>
-        </div>
+        <StatusMessage state="empty" eyebrow="PRONTO PARA GERAR OU ESCREVER">
+          Proposta aprovada. Gere a primeira versão simulada ou escreva o roteiro do zero para iniciar a
+          revisão humana por seções.
+        </StatusMessage>
       )}
 
       {editorSession && (
@@ -833,11 +827,7 @@ export default function ScriptReview({
             />
           </label>
 
-          {feedbackError && (
-            <p className="error" role="alert">
-              {feedbackError}
-            </p>
-          )}
+          {feedbackError && <StatusMessage state="error">{feedbackError}</StatusMessage>}
 
           <div className="actions">
             <button
