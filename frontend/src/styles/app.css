@@ -105,7 +105,8 @@ footer { border-top: 1px solid var(--Line); padding: 10px 28px; font-size: 11px;
 label { display: flex; flex-direction: column; gap: 8px; color: var(--Muted); font-size: 12px; }
 input, select, textarea { min-width: 0; width: 100%; background: var(--Sunken); border: 1px solid var(--LineStrong); padding: 10px 12px; color: var(--Ink); border-radius: 0; transition: border-color .14s ease, box-shadow .14s ease; }
 textarea { min-height: 80px; resize: vertical; line-height: 1.5; font-family: Inter, sans-serif; }
-input:focus, select:focus, textarea:focus { border-color: var(--AccentInk); outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--AccentInk); }
+input:focus:not(:focus-visible), select:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: none; }
 .form-row { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; }
 .job-grid { display: grid; grid-template-columns: 230px minmax(0,1fr); gap: 16px; }
 .job-list { display: flex; flex-direction: column; gap: 8px; }
@@ -257,7 +258,8 @@ main::-webkit-scrollbar-track,
   transition: border-color .14s ease;
 }
 .transcript:hover:not([readonly]) { border-color: var(--LineStrong); }
-.transcript:focus { border-color: var(--AccentInk); outline: none; }
+.transcript:focus { border-color: var(--AccentInk); }
+.transcript:focus:not(:focus-visible) { outline: none; }
 .transcript[readonly] { color: var(--Muted); background: var(--Sunken); }
 .status-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; background: var(--Sunken); border: 1px solid var(--Line); font-size: 13px; flex-wrap: wrap; }
 .status-bar p { flex: 1; min-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -327,6 +329,14 @@ main::-webkit-scrollbar-track,
 .disclosure-button[aria-expanded="true"]::before { content: "▾" / ""; }
 .disclosure-button:hover { color: var(--AccentInk); }
 .tool-tags-list[hidden] { display: none; }
+@media (max-height: 760px) {
+  .brand { margin: 18px 20px 14px; }
+  .navigation-label { margin-bottom: 6px; }
+  .tools-label { margin-top: 12px; margin-bottom: 6px; }
+  .sidebar nav button, .settings-navigation { min-height: 36px; padding: 8px 14px; margin-bottom: 2px; }
+  .sidebar-bottom { padding: 10px 16px 14px; gap: 10px; }
+  .integration { padding: 10px; }
+}
 @media (prefers-reduced-motion: reduce) { .disclosure-button, .button { transition: none; } }
 @media(max-width: 900px) {
   .topbar { flex-wrap: wrap; }
