@@ -401,3 +401,115 @@ def test_v10_check_constraints(tmp_path):
         sql = db.execute("SELECT sql FROM sqlite_master WHERE name='scripts'").fetchone()[0]
         assert "CHECK(origin IN ('simulated','human'))" in sql.replace("\n", " ").replace("  ", " ") or "origin IN ('simulated','human')" in sql
         assert "generator IS NULL OR generator = 'hermes'" in sql
+
+
+# --- 5b. Conciliação de desfecho desconhecido ----------------------------------------------------------
+
+def reconcile(client, workflow, revision=None):
+    return client.post(f"/v1/workflows/{workflow['id']}/scripts/reconcile",
+                       json={"expected_revision": revision or workflow["revision"]})
+
+
+def unknown_run(settings, hermes, monkeypatch, output):
+    """Deixa uma execução de roteiro com desfecho desconhecido e devolve o workflow; o cliente é encerrado."""
+    from horus_backend.workflow_hermes import HermesRunClient, HermesHTTPError
+    with client_for(settings) as client:
+        workflow = approved(client, hermes)
+        with monkeypatch.context() as patch:
+            def unavailable(self, run_id):
+                raise HermesHTTPError(503, "down", "unavailable")
+            patch.setattr(HermesRunClient, "status", unavailable)
+            assert run_script(client, hermes, workflow, output).status_code == 409
+        with client.app.state.store.connect() as db:
+            assert db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "unknown"
+    return workflow
+
+
+def test_reconcile_applies_late_valid_result_once_without_new_spend(settings, hermes, monkeypatch):
+    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+    with client_for(settings) as client:  # reinício com pendente
+        store = client.app.state.store
+        spent = (daily_runs(store), daily_tokens(settings, store))
+        response = reconcile(client, workflow)
+        assert response.status_code == 200, response.text
+        script = response.json()
+        assert script["origin"] == script["authored_by"] == "hermes" and script["document"]["simulated"] is False
+        assert len(hermes.runs) == 2  # nenhum envio novo
+        assert daily_runs(store) == spent[0]
+        assert daily_tokens(settings, store) < spent[1]  # reserva substituída pelo uso conhecido, nunca somada
+        repeated = reconcile(client, workflow)  # idempotente
+        assert repeated.status_code == 200 and repeated.json()["id"] == script["id"]
+        assert counts(client)["scripts"] == 1 and len(hermes.runs) == 2
+        with store.connect() as db:
+            assert db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "completed"
+            assert db.execute("SELECT status FROM job_attempts WHERE executor='script.hermes'").fetchone()[0] == "succeeded"
+        # A chave original agora responde com o roteiro (recibo normal).
+        assert generate(client, workflow, source="hermes", authorize=True, key="k1").json()["id"] == script["id"]
+
+
+def test_reconcile_late_invalid_result_closes_without_script_and_needs_new_authorization(settings, hermes, monkeypatch):
+    workflow = unknown_run(settings, hermes, monkeypatch, json.dumps({**VALID, "task_id": "b" * 32}))
+    with client_for(settings) as client:
+        store = client.app.state.store
+        spent = (daily_runs(store), daily_tokens(settings, store))
+        assert reconcile(client, workflow).status_code == 409
+        assert counts(client)["scripts"] == 0 and len(hermes.runs) == 2
+        assert (daily_runs(store), daily_tokens(settings, store)) <= (spent[0], spent[1])
+        with store.connect() as db:
+            run = db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+            assert run[0] == "invalid_output"
+        assert reconcile(client, workflow).status_code == 409  # nada pendente; sem novo envio
+        assert len(hermes.runs) == 2
+        # A chave antiga continua fechada; só nova autorização (nova chave) tenta de novo.
+        assert generate(client, workflow, source="hermes", authorize=True, key="k1").status_code == 409
+        assert len(hermes.runs) == 2
+        assert run_script(client, hermes, workflow, valid_output(), key="nova").status_code == 201
+        assert len(hermes.runs) == 3
+
+
+def test_reconcile_missing_remote_run_stays_pending_and_never_resubmits(settings, hermes, monkeypatch):
+    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+    hermes.runs.clear()  # o gateway perdeu a execução
+    posted = len(hermes.requests)
+    with client_for(settings) as client:
+        store = client.app.state.store
+        tokens = daily_tokens(settings, store)
+        for _ in range(2):
+            assert reconcile(client, workflow).status_code == 409
+        assert not any(r.get("method") == "POST" for r in hermes.requests[posted:])
+        assert len(hermes.runs) == 0 and counts(client)["scripts"] == 0
+        assert daily_tokens(settings, store) == tokens  # reserva mantida, sem gasto repetido
+        assert generate(client, workflow, key="outra", source="hermes", authorize=True).status_code == 409
+
+
+def test_reconcile_requires_pending_and_hermes_executor(settings, hermes):
+    with client_for(settings) as client:
+        workflow = approved(client, hermes)
+        assert reconcile(client, workflow).status_code == 409  # nada pendente
+    workflow = unknown_run(replace(settings, data_dir=tmp_path / "d2"), hermes, monkeypatch, valid_output()) \
+        if False else workflow
+    simulated = replace(settings, workflow_executor="simulated")
+    with client_for(simulated) as client:
+        assert reconcile(client, workflow).status_code == 409
+
+
+def test_reconcile_gate_closed_and_stale_revision(settings, hermes, monkeypatch, tmp_path):
+    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+    blocked = replace(settings, hermes_profile=tmp_path / "absent")
+    with client_for(blocked) as client:
+        response = reconcile(client, workflow)
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "security_gate"
+    with client_for(settings) as client:
+        assert reconcile(client, workflow, revision=workflow["revision"] + 1).status_code == 409
+        assert len(hermes.runs) == 2 and counts(client)["scripts"] == 0
+
+
+def test_reconcile_valid_result_not_applicable_closes_definitively(settings, hermes, monkeypatch):
+    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+    with client_for(settings) as client:
+        with client.app.state.store.connect() as db:
+            db.execute("UPDATE workflows SET status='rejected' WHERE id=?", (workflow["id"],))
+        assert reconcile(client, workflow).status_code == 409
+        assert counts(client)["scripts"] == 0 and len(hermes.runs) == 2
+        with client.app.state.store.connect() as db:
+            assert db.execute("SELECT response FROM script_receipts").fetchone()[0] == '{"failed":true}'

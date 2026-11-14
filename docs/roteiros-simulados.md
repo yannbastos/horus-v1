@@ -91,3 +91,12 @@ o armazenamento mantém o default legado `origin='simulated'` unicamente para sa
 `hermes`, com documento `simulated=false`, e exige revisão humana. A coluna extra permite consultas
 SQL antigas, preservando os roteiros humanos/simulados; isso não autoriza abrir o banco com um backend
 antigo (o migrador antigo recusa versão futura). Só foram migrados bancos temporários de testes.
+
+### Conciliação de roteiro Hermes (desfecho desconhecido)
+
+`POST /v1/workflows/{id}/scripts/reconcile` com `{"expected_revision": N}` segue a MESMA execução remota
+registrada (mesma chave e corpo; nunca cria nova execução nem nova reserva). Resultado válido vira
+roteiro `hermes`; falha definitiva (saída inválida, falha remota, resultado já pago mas não aplicável)
+fecha o recibo e só uma nova autorização humana (nova `Idempotency-Key`) libera outra tentativa.
+Run inexistente/indisponível (404/5xx) continua `unknown`, com a reserva mantida, e pode ser
+conciliado de novo. Repetir a conciliação após o sucesso devolve o mesmo roteiro (200).

@@ -168,6 +168,12 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         return JSONResponse(record, status_code=201 if created else 200)
 
+    @app.post("/v1/workflows/{workflow_id}/scripts/reconcile")
+    def reconcile_script(workflow_id: str, request: RevisionRequest):
+        """Conciliação de roteiro Hermes com desfecho desconhecido; nunca reenvia nem cria nova reserva."""
+        record, created = script_call(lambda: scripts.reconcile_hermes(workflow_id, request.expected_revision))
+        return JSONResponse(record, status_code=200)
+
     @app.get("/v1/workflows/{workflow_id}/scripts")
     def list_scripts(workflow_id: str):
         return script_call(lambda: scripts.list(workflow_id))
