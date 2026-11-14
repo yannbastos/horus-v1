@@ -101,6 +101,7 @@ const ARTIFACT_KIND_LABELS: Record<ProductionArtifactKind, string> = {
   subtitles: 'LEGENDAS',
   video: 'VÍDEO',
   manifest: 'MANIFESTO',
+  thumbnail: 'THUMBNAIL',
 };
 
 const REVIEW_DECISION_LABELS: Record<ProductionReviewDecision, string> = {
@@ -835,8 +836,9 @@ export default function ProductionRun({
         activeBlobUrlRef.current = blobUrl;
         setPreviewTarget({ artifact, kind: 'audio', blobUrl });
       } else if (
-        artifact.kind === 'scene' &&
-        artifact.relative_path.toLowerCase().endsWith('.png')
+        (artifact.kind === 'scene' &&
+          artifact.relative_path.toLowerCase().endsWith('.png')) ||
+        artifact.kind === 'thumbnail'
       ) {
         const blobUrl = URL.createObjectURL(blob);
         activeBlobUrlRef.current = blobUrl;
@@ -2347,7 +2349,12 @@ export default function ProductionRun({
             </div>
           )}
 
-          <ProductionExportPanel connection={connection} production={activeProduction} />
+          <ProductionExportPanel
+            connection={connection}
+            production={activeProduction}
+            currentTimeSeconds={currentTimeSeconds}
+            onCaptureCurrentVideoTime={handleCaptureCurrentVideoTime}
+          />
         </div>
       )}
 

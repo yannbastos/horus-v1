@@ -508,6 +508,74 @@ test.describe('Acessibilidade (axe-core WCAG 2.1 AA + Teclado) — Jornada do pr
         });
         return true;
       }
+      if (path === `/v1/productions/${PRODUCTION_ID}/metadata` && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: {
+            title: 'Como garantir sincronismo real no Hórus',
+            description:
+              'Introdução: Roteiro validado localmente.\n\nDivulgações obrigatórias:\nNarração sintética/voz local: confira a voz selecionada e seus termos de uso.\nLicenças pendentes: confira os direitos de todos os assets antes de publicar.\npublishable=false: este rascunho não autoriza publicação automática.',
+            sources: [
+              {
+                id: 'src_horus_arch',
+                title: 'Arquitetura Canônica do Hórus',
+                url: 'https://example.org/docs/architecture',
+              },
+            ],
+            disclosures: [
+              'Narração sintética/voz local: confira a voz selecionada e seus termos de uso.',
+              'Licenças pendentes: confira os direitos de todos os assets antes de publicar.',
+              'publishable=false: este rascunho não autoriza publicação automática.',
+            ],
+            licenses_pending: true,
+            publishable: false,
+          },
+        });
+        return true;
+      }
+      if (path === `/v1/productions/${PRODUCTION_ID}/thumbnail` && method === 'POST') {
+        await route.fulfill({
+          status: 201,
+          headers: corsHeaders,
+          json: {
+            timecode_seconds: 1.2,
+            video_sha256: VIDEO_SHA,
+            width: 1080,
+            height: 1920,
+            artifacts: [
+              {
+                id: 'thumb_a11y_png',
+                kind: 'thumbnail',
+                relative_path: `publishing/thumbnails/${'a'.repeat(64)}/thumbnail.png`,
+                sha256: 'd'.repeat(64),
+                size_bytes: 16384,
+              },
+              {
+                id: 'thumb_a11y_jpg',
+                kind: 'thumbnail',
+                relative_path: `publishing/thumbnails/${'a'.repeat(64)}/thumbnail.jpg`,
+                sha256: 'e'.repeat(64),
+                size_bytes: 8192,
+              },
+            ],
+            created_at: '2026-11-14T09:00:30Z',
+            publishable: false,
+          },
+        });
+        return true;
+      }
+      if (path === `/v1/productions/${PRODUCTION_ID}/artifacts/thumb_a11y_png` && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'image/png' },
+          body: Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64'
+          ),
+        });
+        return true;
+      }
       if (path === `/v1/productions/${PRODUCTION_ID}/export` && method === 'POST') {
         await route.fulfill({
           status: 201,
@@ -574,11 +642,16 @@ test.describe('Acessibilidade (axe-core WCAG 2.1 AA + Teclado) — Jornada do pr
 
     const exportPanel = region.getByTestId('production-export-panel');
     await expect(exportPanel).toBeVisible();
+    await exportPanel.getByTestId('thumbnail-timecode-input').fill('1.2');
+    await exportPanel.getByTestId('thumbnail-generate-button').click();
+    await expect(exportPanel.getByTestId('thumbnail-preview-image')).toBeVisible();
+    await exportPanel.getByTestId('metadata-title-input').fill('Título revisado para auditoria a11y');
+    await expect(exportPanel.getByTestId('metadata-unsaved-badge')).toBeVisible();
     await exportPanel.getByRole('button', { name: 'Exportar pacote', exact: true }).click();
     await expect(exportPanel.getByTestId('export-ready-status')).toBeVisible();
     await expect(exportPanel.getByTestId('exports-list')).toBeVisible();
 
-    await runAxeAudit(page, 'Tela de Produção — Produção aprovada e pacote exportado');
+    await runAxeAudit(page, 'Tela de Produção — Produção aprovada, thumbnail, metadados e pacote exportado');
   });
 
   test('Navegação por teclado do caminho principal (Tab/Enter/Space) funciona sem armadilhas de foco', async ({

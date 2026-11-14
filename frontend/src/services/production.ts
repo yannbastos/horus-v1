@@ -51,7 +51,8 @@ export type ProductionArtifactKind =
   | 'audio'
   | 'subtitles'
   | 'video'
-  | 'manifest';
+  | 'manifest'
+  | 'thumbnail';
 
 export type ProductionArtifact = {
   id: string;
