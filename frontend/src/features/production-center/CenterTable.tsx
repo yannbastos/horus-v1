@@ -29,7 +29,7 @@ const KIND_LABEL: Record<string, string> = {
 
 export default function CenterTable({ rows, onOpen }: { rows: CenterRow[]; onOpen: (row: CenterRow) => void }) {
   return (
-    <div className="data-table-container">
+    <div className="data-table-container" tabIndex={0}>
       <table className="data-table" data-testid="production-center-table">
         <caption className="eyebrow" style={{ textAlign: 'left', padding: '10px 12px', color: 'var(--Muted)' }}>
           Vídeos por etapa, do mais recentemente atualizado ao mais antigo

@@ -132,7 +132,11 @@ export default function TimecodeReviewWorkspace({
                     textAlign: 'left',
                     whiteSpace: 'normal',
                   }}
-                  aria-label={`Ir para ${scene.label} em ${formatTimecode(scene.start)}`}
+                  aria-label={`Ir para ${scene.label} em ${formatTimecode(
+                    scene.start
+                  )} — ${formatTimecode(scene.start)} → ${formatTimecode(scene.end)} · ${
+                    scene.label
+                  }`}
                   onClick={() => onSeekTimecode(scene.start, scene.label)}
                 >
                   <strong>{formatTimecode(scene.start)}</strong> → {formatTimecode(scene.end)} ·{' '}
@@ -174,7 +178,11 @@ export default function TimecodeReviewWorkspace({
                     textAlign: 'left',
                     whiteSpace: 'normal',
                   }}
-                  aria-label={`Ir para legenda #${sub.index} em ${formatTimecode(sub.start)}`}
+                  aria-label={`Ir para legenda #${sub.index} em ${formatTimecode(
+                    sub.start
+                  )} — #${sub.index} · ${formatTimecode(sub.start)} → ${formatTimecode(
+                    sub.end
+                  )} · ${sub.text}`}
                   onClick={() => onSeekTimecode(sub.start, `Legenda #${sub.index}`)}
                 >
                   <strong>
@@ -253,7 +261,11 @@ export default function TimecodeReviewWorkspace({
                         ? 'var(--Warn)'
                         : undefined,
                   }}
-                  aria-label={`Ir para problema QC ${check.id} em ${formatTimecode(tc.start)}`}
+                  aria-label={`Ir para problema QC ${check.id} em ${formatTimecode(
+                    tc.start
+                  )} — [${check.status.toUpperCase()}] ${check.id} · ${formatTimecode(
+                    tc.start
+                  )} → ${formatTimecode(tc.end)}`}
                   onClick={() => onSeekTimecode(tc.start, `QC ${check.id}`)}
                 >
                   [{check.status.toUpperCase()}] {check.id} · {formatTimecode(tc.start)} →{' '}
@@ -363,7 +375,9 @@ export default function TimecodeReviewWorkspace({
                     className="button"
                     type="button"
                     style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
-                    aria-label={`Ir para nota ${idx + 1} (${formatTimecode(note.at_seconds)})`}
+                    aria-label={`Ir para nota ${idx + 1} (${formatTimecode(
+                      note.at_seconds
+                    )}) — ${formatTimecode(note.at_seconds)}`}
                     onClick={() => onSeekTimecode(note.at_seconds, `Nota #${idx + 1}`)}
                   >
                     {formatTimecode(note.at_seconds)}
