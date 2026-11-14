@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Connection } from '../services/api';
 import { describeLoadError, filterAndSort, loadProductionCenter } from '../services/productionCenter';
 import type { CenterRow, StageFilter } from '../services/productionCenter';
+import { StatusMessage } from '../components/StatusMessage';
 import CenterFilters from './production-center/CenterFilters';
 import CenterTable from './production-center/CenterTable';
 import FirstVideoGuide from './production-center/FirstVideoGuide';
@@ -57,15 +58,15 @@ export default function ProductionCenter({ connection, onOpenProduction, onOpenS
         onOpenSettings={onOpenSettings ?? (() => {})}
         onOpenProduction={onOpenProduction}
       />
-      {!connection && <p className="muted" role="status">Conecte o backend local em Ajustes para ver a Central de Produção.</p>}
-      {connection && loading && <p className="loading" role="status">Carregando vídeos…</p>}
-      {error && <p className="error" role="alert">{error}</p>}
+      {!connection && <StatusMessage state="empty" role="status">Conecte o backend local em Ajustes para ver a Central de Produção.</StatusMessage>}
+      {connection && loading && <StatusMessage state="loading">Carregando vídeos…</StatusMessage>}
+      {error && <StatusMessage state="error">{error}</StatusMessage>}
       {connection && rows && (
         <>
           <CenterFilters stage={stage} onlyBlocked={onlyBlocked} onStage={setStage} onBlocked={setOnlyBlocked} />
-          <p className="muted" role="status">{visible.length} de {rows.length} vídeo(s) exibido(s). A lista do backend é limitada a 100 fluxos.</p>
+          <StatusMessage state="success">{visible.length} de {rows.length} vídeo(s) exibido(s). A lista do backend é limitada a 100 fluxos.</StatusMessage>
           {visible.length === 0
-            ? <p className="muted">{rows.length === 0 ? 'Nenhum fluxo editorial registrado.' : 'Nenhum vídeo corresponde aos filtros.'}</p>
+            ? <StatusMessage state="empty">{rows.length === 0 ? 'Nenhum fluxo editorial registrado.' : 'Nenhum vídeo corresponde aos filtros.'}</StatusMessage>
             : <CenterTable rows={visible} onOpen={() => onOpenProduction()} />}
         </>
       )}
