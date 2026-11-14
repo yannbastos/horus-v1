@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { finalPilotScript } from './helpers/final-pilot-script';
 
 const backendUrl = process.env.HORUS_E2E_BACKEND_URL ?? '';
 const token = process.env.HORUS_E2E_TOKEN ?? '';
@@ -72,7 +73,7 @@ async function startPilotProduction(page: Page): Promise<string | null> {
 }
 
 /** Espera o desfecho técnico da produção mais recente; falha com o motivo exibido se bloquear. */
-async function waitProduction(page: Page, previous: string | null = null): Promise<number> {
+async function waitProduction(page: Page, previous: string | null = null, timeout = 8 * 60_000): Promise<number> {
   const started = Date.now();
   // A tela mantém a execução concluída anterior até a nova aparecer: espera o id mudar.
   if (previous) await expect(productionHeading(page)).not.toHaveText(previous, { timeout: 60_000 });
@@ -80,7 +81,7 @@ async function waitProduction(page: Page, previous: string | null = null): Promi
   const details = page.getByRole('region', { name: /^Detalhes da produção/ });
   const done = details.getByText('Execução técnica concluída').first();
   const blocked = details.getByText('EXECUÇÃO BLOQUEADA POR PRÉ-CONDIÇÃO OU DEPENDÊNCIA');
-  await expect(done.or(blocked)).toBeVisible({ timeout: 8 * 60_000 });
+  await expect(done.or(blocked)).toBeVisible({ timeout });
   if (await blocked.isVisible()) {
     const reason = await page.locator('.blocker-item').first().innerText().catch(() => '(motivo não exibido)');
     throw new Error(`Produção bloqueada: ${reason}`);
@@ -417,5 +418,239 @@ test.describe('Jornada de produção — backend real', () => {
       await test.info().attach('export-verification.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
       await shot(page, '15-pacote-manual-exportado');
     });
+  });
+  // Opt-in: HORUS_E2E_FINAL=1 node frontend/scripts/e2e-backend.mjs run --grep 'Final 1080x1920'
+  // Sem a variável, nenhuma produção adicional é disparada na suíte padrão.
+  test('Final 1080x1920: primeiro vídeo pelo guia, Kokoro, revisão e pacote auditado', async ({ page }) => {
+    test.skip(process.env.HORUS_E2E_FINAL !== '1', 'Defina HORUS_E2E_FINAL=1 para renderizar o primeiro vídeo Final real.');
+    expect(withKokoro, 'O ensaio Final exige HORUS_KOKORO_PYTHON e HORUS_KOKORO_MODEL_DIR').toBe(true);
+    const started = Date.now();
+    const headers = { Authorization: `Bearer ${token}` };
+    const evidence: Record<string, any> = { started_at: new Date().toISOString(), success: false,
+      script_words: finalPilotScript.sections.flatMap(s => s.narration.split(/\s+/)).length,
+      license_review_is_test_fixture: true, observed_progress: [] };
+    let approvedScript: any;
+    let productionId = '';
+    try {
+      await timed('final: conectar e salvar preferência Kokoro pela interface', async () => {
+        await connect(page);
+        await page.getByRole('button', { name: 'ABRIR NARRAÇÃO', exact: true }).click();
+        const voice = page.getByRole('listitem', { name: 'pf_dora (Kokoro-82M)', exact: true });
+        await expect(voice).toBeVisible({ timeout: 30_000 });
+        const narration = page.getByRole('region', { name: 'Narração', exact: true });
+        await narration.getByLabel(/Texto fictício da prévia/).fill('Esta é uma prévia local em português brasileiro para conferir a voz do vídeo.');
+        await voice.getByRole('button', { name: 'Ouvir prévia de pf_dora (Kokoro-82M)', exact: true }).click();
+        const audio = voice.getByLabel('Prévia de pf_dora (Kokoro-82M)', { exact: true });
+        await expect(audio).toBeVisible({ timeout: 120_000 });
+        await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.readyState)).toBeGreaterThanOrEqual(2);
+        expect(await audio.evaluate((el: HTMLAudioElement) => el.duration)).toBeGreaterThan(0);
+        await voice.getByRole('button', { name: 'Parar prévia de pf_dora (Kokoro-82M)', exact: true }).click();
+        await voice.getByRole('button', { name: 'Usar pf_dora (Kokoro-82M) como voz padrão', exact: true }).click();
+        await expect(narration.getByText(/Voz padrão salva: pf_dora/)).toBeVisible();
+        await shot(page, 'final-01-voz-preferida');
+      });
+
+      await timed('final: Radar, análise simulada e proposta aprovada pela interface', async () => {
+        await goTo(page, 'Radar');
+        const demo = page.getByRole('button', { name: 'Carregar dados de demonstração' });
+        const eligible = page.getByText(/elegíveis selecionados/);
+        await expect(demo.or(eligible)).toBeVisible({ timeout: 15_000 });
+        if (await demo.isVisible()) await demo.click();
+        await expect(eligible).toBeVisible();
+        await page.getByLabel('Identificador do canal').fill('primeiro-video-final-e2e');
+        await page.getByLabel('Resumo editorial do canal').fill('Exemplo fictício de divulgação científica, com roteiro humano e revisão de evidências.');
+        await page.getByLabel('Objetivo editorial da análise').fill('Preparar roteiro próprio sobre observar, testar e revisar o consumo de água.');
+        await page.getByRole('button', { name: 'Iniciar análise', exact: true }).click();
+        await expect(page.getByText('ANÁLISE INICIADA COM SUCESSO')).toBeVisible();
+        await goTo(page, 'Produção');
+        await page.getByRole('button', { name: /Autorizar uma execução/ }).click();
+        await expect(page.getByRole('button', { name: 'Aprovar', exact: true })).toBeVisible({ timeout: 60_000 });
+        await page.getByRole('button', { name: 'Aprovar', exact: true }).click();
+        await expect(page.getByRole('button', { name: 'Escrever roteiro do zero' })).toBeEnabled();
+      });
+
+      await timed('final: escrever quatro seções, salvar e aprovar roteiro humano', async () => {
+        await page.getByRole('button', { name: 'Escrever roteiro do zero' }).click();
+        const editor = page.getByRole('region', { name: 'Editor de roteiro humano' });
+        await editor.getByRole('button', { name: 'Adicionar seção', exact: true }).click();
+        await editor.getByLabel(/Título do roteiro/).fill(finalPilotScript.title);
+        for (const [index, section] of finalPilotScript.sections.entries()) {
+          await editor.getByLabel(new RegExp(`Título da seção #${index + 1}`)).fill(section.heading);
+          await editor.getByLabel(new RegExp(`Narração da seção #${index + 1}`)).fill(section.narration);
+        }
+        await editor.getByRole('button', { name: 'Salvar roteiro', exact: true }).click();
+        await expect(page.getByText('ESCRITO POR VOCÊ').first()).toBeVisible();
+        const response = page.waitForResponse(r => /\/v1\/scripts\/[a-f0-9]{32}\/review$/.test(r.url()) && r.request().method() === 'POST');
+        await page.getByRole('button', { name: 'Aprovar roteiro', exact: true }).click();
+        const approved = await response;
+        expect(approved.ok()).toBe(true);
+        approvedScript = await approved.json();
+        expect(approvedScript.origin).toBe('human');
+        expect(approvedScript.document.sections).toHaveLength(4);
+        await shot(page, 'final-02-roteiro-aprovado');
+      });
+
+      await timed('final: selecionar Final e acompanhar render com progresso real', async () => {
+        await page.getByLabel('Modo de execução da produção').selectOption('local_pilot');
+        await expect(page.getByLabel('Provedor de voz', { exact: true })).toHaveValue('kokoro', { timeout: 30_000 });
+        await expect(page.getByLabel('Voz da narração')).toHaveValue('pf_dora');
+        await page.getByLabel('Qualidade da renderização').selectOption('final');
+        await expect(page.getByLabel('Qualidade da renderização')).toHaveValue('final');
+        const previous = await startPilotProduction(page);
+        const progress = page.getByRole('status', { name: 'Progresso da execução', exact: true });
+        await expect(progress).toBeVisible();
+        productionId = (await productionHeading(page).textContent())!.match(/[a-f0-9]{32}/)![0];
+        evidence.production_id = productionId;
+        let previousStage = '';
+        const timer = setInterval(() => {
+          void progress.locator('.info-block').first().innerText({ timeout: 1_000 }).then(stage => {
+            if (stage !== previousStage) {
+              evidence.observed_progress.push({ elapsed_seconds: (Date.now() - started) / 1000, stage });
+              previousStage = stage;
+            }
+          }).catch(() => {});
+        }, 2_000);
+        try { await waitProduction(page, previous, 15 * 60_000); }
+        finally { clearInterval(timer); }
+        productionId = (await productionHeading(page).textContent())!.match(/[a-f0-9]{32}/)![0];
+        evidence.production_id = productionId;
+        await shot(page, 'final-03-render-concluido');
+      });
+
+      await timed('final: abrir revisão, assistir prévia e conferir QC medido', async () => {
+        await goTo(page, 'Central de Produção');
+        await page.getByRole('button', { name: /Revisar produção/i }).first().click();
+        const response = await page.request.get(`${backendUrl}/v1/productions/${productionId}`, { headers });
+        expect(response.ok()).toBe(true);
+        const production = await response.json();
+        evidence.production = { render_quality: production.render_quality, narration: production.narration,
+          speech_aligned: production.speech_aligned, publishable: production.publishable };
+        evidence.qc = production.quality_report;
+        expect(production.render_quality).toBe('final');
+        expect(production.narration).toEqual({ provider: 'kokoro', voice_id: 'pf_dora' });
+        expect(production.publishable).toBe(false);
+        expect(production.quality_report).not.toBeNull();
+        expect(production.quality_report.blocking_errors).toEqual([]);
+        expect(production.quality_report.checks.filter((c: any) => c.status === 'fail')).toEqual([]);
+        evidence.qc_warns = production.quality_report.checks.filter((c: any) => c.status === 'warn');
+        for (const check of evidence.qc_warns) test.info().annotations.push({ type: 'QC warn', description: `${check.id}: ${check.detail}` });
+        const loudness = production.quality_report.checks.find((c: any) => c.id === 'audio_loudness');
+        expect(loudness.method).toBe('measured');
+        evidence.integrated_lufs = loudness.measured.integrated_lufs;
+        evidence.true_peak_dbtp = loudness.measured.true_peak_dbtp;
+        expect(Number.isFinite(evidence.integrated_lufs)).toBe(true);
+        expect(Number.isFinite(evidence.true_peak_dbtp)).toBe(true);
+        const wordsArtifact = production.artifacts.find((a: any) => a.relative_path === 'word-timings.json');
+        expect(wordsArtifact).toBeTruthy();
+        const wordsResponse = await page.request.get(`${backendUrl}/v1/productions/${productionId}/artifacts/${wordsArtifact.id}`, { headers });
+        expect(wordsResponse.ok()).toBe(true);
+        const words = await wordsResponse.json();
+        evidence.alignment = words.alignment;
+        evidence.narration_duration_seconds = words.duration_seconds;
+        expect(words.source).toBe('forced_alignment');
+        expect(production.speech_aligned).toBe(true);
+        expect(words.alignment.matched_words + words.alignment.interpolated_words).toBe(words.words.length);
+        expect(words.duration_seconds).toBeGreaterThanOrEqual(60);
+        expect(words.duration_seconds).toBeLessThanOrEqual(90);
+        const qc = page.getByRole('region', { name: 'Painel de qualidade (QC)' });
+        await expect(qc.getByText(/0 fail/)).toBeVisible();
+        await page.getByRole('button', { name: 'Prévia de vídeo (MP4)' }).click();
+        const video = page.locator('video');
+        await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.readyState)).toBeGreaterThanOrEqual(3);
+        expect(await video.evaluate((el: HTMLVideoElement) => el.videoWidth)).toBe(1080);
+        expect(await video.evaluate((el: HTMLVideoElement) => el.videoHeight)).toBe(1920);
+        await video.evaluate((el: HTMLVideoElement) => el.play());
+        await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeGreaterThan(1);
+        evidence.preview_playback_seconds = await video.evaluate((el: HTMLVideoElement) => { el.pause(); return el.currentTime; });
+        await page.getByRole('button', { name: 'Legendas / transcrição SRT' }).click();
+        await shot(page, 'final-04-previa-qc');
+      });
+
+      await timed('final: revisar licenças e registrar decisão humana fictícia', async () => {
+        const panel = page.getByRole('region', { name: 'Verificação humana de licença por asset' });
+        await panel.scrollIntoViewIfNeeded();
+        await panel.getByRole('button', { name: 'Registrar decisão humana — scene-1', exact: true }).click();
+        await panel.getByLabel('Nome da licença').fill('Licença fictícia do ensaio Final');
+        await panel.getByLabel('URL da licença (https)').fill('https://example.org/licenca-ficticia-final');
+        await panel.getByLabel(/Uso comercial/).selectOption('restricted');
+        await panel.getByLabel(/Evidência/).fill('Revisão FICTÍCIA da cena original gerada no teste; sem validade para publicação ou direitos da voz.');
+        await panel.getByRole('button', { name: 'Verificar', exact: true }).click();
+        await panel.getByRole('button', { name: 'Confirmar decisão', exact: true }).click();
+        await expect(panel.getByText('Verificado (verified)')).toBeVisible();
+        const response = await page.request.get(`${backendUrl}/v1/productions/${productionId}/license-reviews`, { headers });
+        expect(response.ok()).toBe(true);
+        evidence.license_reviews = await response.json();
+        expect(evidence.license_reviews.history).toHaveLength(1);
+        expect(evidence.license_reviews.publishable).toBe(false);
+        await shot(page, 'final-05-licencas');
+      });
+
+      await timed('final: aprovar pelo hash com reconhecimento das pendências', async () => {
+        const panel = page.getByRole('region', { name: 'Revisão humana final da produção' });
+        await panel.scrollIntoViewIfNeeded();
+        const approve = page.getByRole('button', { name: 'Aprovar produção (hash verificado)' });
+        await expect(approve).toBeDisabled();
+        await page.getByLabel(/Confirmo ciência das pendências/).check();
+        await approve.click();
+        await expect(page.getByText('REVISÃO HUMANA FINAL REGISTRADA')).toBeVisible();
+      });
+
+      await timed('final: thumbnail, metadados, exportar e baixar pela interface', async () => {
+        const thumbnail = await page.request.post(`${backendUrl}/v1/productions/${productionId}/thumbnail`, {
+          headers: { ...headers, 'Idempotency-Key': `final-thumbnail-${productionId}` }, data: { timecode_seconds: 5 },
+        });
+        expect(thumbnail.status(), await thumbnail.text()).toBe(201);
+        const image = await thumbnail.json();
+        expect([image.width, image.height]).toEqual([1080, 1920]);
+        const draft = await page.request.get(`${backendUrl}/v1/productions/${productionId}/metadata`, { headers });
+        expect(draft.ok()).toBe(true);
+        const metadata = await draft.json();
+        const saved = await page.request.put(`${backendUrl}/v1/productions/${productionId}/metadata`, {
+          headers, data: { title: metadata.title, description: metadata.description },
+        });
+        expect(saved.ok()).toBe(true);
+        const panel = page.getByRole('region', { name: 'Pacote para publicação manual', exact: true });
+        await panel.scrollIntoViewIfNeeded();
+        const response = page.waitForResponse(r => r.url() === `${backendUrl}/v1/productions/${productionId}/export` && r.request().method() === 'POST');
+        await panel.getByRole('button', { name: 'Exportar pacote', exact: true }).click();
+        const exported = await response;
+        expect(exported.status(), await exported.text()).toBe(201);
+        const item = await exported.json();
+        evidence.export = item;
+        const event = page.waitForEvent('download');
+        await panel.getByTestId(`export-item-${item.id}`).getByRole('button', { name: 'Baixar ZIP' }).click();
+        const download = await event;
+        const archive = test.info().outputPath('final-approved-package.zip');
+        await download.saveAs(archive);
+        expect(await download.failure()).toBeNull();
+        expect(createHash('sha256').update(fs.readFileSync(archive)).digest('hex')).toBe(item.sha256);
+        const python = path.resolve(here, '../../backend/.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+        const ffprobe = path.join(path.dirname(process.env.HORUS_FFMPEG!), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+        const report = JSON.parse(execFileSync(python, [path.join(here, 'helpers/inspect-production-export.py'), archive, ffprobe],
+          { encoding: 'utf-8', timeout: 20_000 }));
+        expect([report.video.width, report.video.height]).toEqual([1080, 1920]);
+        expect(report.video.duration_seconds).toBeGreaterThanOrEqual(evidence.narration_duration_seconds);
+        expect(report.video.duration_seconds).toBeLessThan(evidence.narration_duration_seconds + 3);
+        expect(report.script).toEqual(approvedScript.document);
+        expect(report.manifest.publishable).toBe(false);
+        expect(report.metadata.publishable).toBe(false);
+        evidence.package = report;
+        await shot(page, 'final-06-pacote-exportado');
+      });
+      evidence.success = true;
+    } catch (error) {
+      evidence.failure_message = String(error);
+      if (productionId) {
+        const response = await page.request.get(`${backendUrl}/v1/productions/${productionId}`, { headers }).catch(() => null);
+        if (response?.ok()) evidence.failure_production = await response.json();
+      }
+      throw error;
+    } finally {
+      evidence.elapsed_seconds = (Date.now() - started) / 1000;
+      evidence.timings = Object.fromEntries(Object.entries(timings).filter(([name]) => name.startsWith('final:')));
+      fs.mkdirSync(artifactDir, { recursive: true });
+      fs.writeFileSync(path.join(artifactDir, 'final-report.json'), JSON.stringify(evidence, null, 2));
+      await test.info().attach('final-report.json', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
+    }
   });
 });
