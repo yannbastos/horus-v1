@@ -13,6 +13,7 @@ from .license_reviews import LicenseReviewService
 from .media_contracts import apply_license_reviews
 from .migrations import SCHEMA_VERSION
 from .production import confined, inspect_artifact
+from .publishing import failure_message, mark_failed, read_failure
 from .storage import now
 from .workflows import WorkflowConflict, digest
 
@@ -138,66 +139,73 @@ class ExportService:
 
     def _create(self, production_id, key):
         export_id = hashlib.sha256(f'{production_id}:{key}'.encode()).hexdigest()
-        with self.lock, self.store.connect() as db:
-            db.execute('BEGIN')
-            row = self.productions.require(db, production_id)
-            root = self._root(production_id)
-            folder = root / export_id
-            if folder.exists() or folder.is_symlink():
-                return self._metadata(production_id, export_id), False
-            review = json.loads(row['review']) if row['review'] else {}
-            job = self.store.job(db.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone())
-            if review.get('decision') != 'approve' or job['status'] != 'succeeded':
-                raise WorkflowConflict('Exportação exige produção concluída e aprovada por revisão humana.')
-            artifacts = json.loads(row['artifacts'])
-            source = self.productions.root(production_id)
+        with self.lock:
+            # 1) Transação curta: só leituras do banco e montagem dos textos. Nenhum hash de arquivo aqui.
+            with self.store.connect() as db:
+                db.execute('BEGIN')
+                row = self.productions.require(db, production_id)
+                root = self._root(production_id)
+                folder = root / export_id
+                if folder.exists() or folder.is_symlink():
+                    reason = read_failure(folder)
+                    if reason:
+                        raise WorkflowConflict(f'Tentativa anterior desta chave falhou ({reason}); use uma nova chave.')
+                    return self._metadata(production_id, export_id), False
+                review = json.loads(row['review']) if row['review'] else {}
+                job = self.store.job(db.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone())
+                if review.get('decision') != 'approve' or job['status'] != 'succeeded':
+                    raise WorkflowConflict('Exportação exige produção concluída e aprovada por revisão humana.')
+                artifacts = json.loads(row['artifacts'])
+                source = self.productions.root(production_id)
+                video = next((a for a in artifacts if a['kind'] == 'video' and a['sha256'] == review.get('artifact_sha256')), None)
+                subtitles = next((a for a in artifacts if a['kind'] == 'subtitles'), None)
+                if not video or not subtitles:
+                    raise WorkflowConflict('Exportação exige vídeo aprovado e legendas registrados.')
+                snapshot = None
+                for receipt in db.execute('SELECT response FROM script_receipts WHERE scope=?', (f"review:{row['script_id']}",)):
+                    approved = json.loads(receipt['response'])
+                    if (approved.get('status') == 'approved' and approved.get('version') == row['script_version']
+                            and approved.get('review') == json.loads(row['script_review'])
+                            and digest(approved.get('document')) == row['script_content_hash']):
+                        snapshot = approved
+                        break
+                if snapshot is None:
+                    raise WorkflowConflict('Snapshot do roteiro aprovado indisponível; exportação recusada.')
+                record = self.productions.record(db, row)
+                licenses = LicenseReviewService(self.store, self.settings.data_dir)
+                provenance = licenses._provenance(db, production_id)
+                history = licenses._history(db, production_id)
+                effective = apply_license_reviews(provenance, history) if provenance is not None else None
+                document = snapshot['document']
+                text = document['title'] + '\n\n' + '\n\n'.join(
+                    section['heading'] + '\n' + section['narration'] for section in document['sections']) + '\n'
+                audit = {'quality-report.json': record['quality_report'] or {'status': 'not_run',
+                               'reason': 'Relatório de QC registrado indisponível nesta produção.'},
+                           'licenses.json': {'original_provenance': provenance, 'history': history,
+                               'effective_provenance': effective, 'publishable': False},
+                           'review.json': {'production_review': review, 'script_review': snapshot['review'],
+                               'script_id': row['script_id'], 'script_version': row['script_version'],
+                               'script_content_hash': row['script_content_hash'], 'publishable': False}}
+                safe_audit = self._audit_metadata(audit)
+                payload = {name: _json(data) for name, data in safe_audit.items()}
+                payload.update({'script.json': _json(document), 'script.txt': text.encode('utf-8')})
+                from .publishing import PublishingService
+                optional = PublishingService(self.productions).optional_files(db, row)
+                if 'metadata.json' in optional:
+                    original_metadata = json.loads(optional['metadata.json'])
+                    safe_metadata = self._audit_metadata(original_metadata)
+                    optional['metadata.json'] = _json(safe_metadata)
+                else:
+                    original_metadata = safe_metadata = None
+                payload.update(optional)
+                for data in payload.values():
+                    if not data.startswith((b'\x89PNG', b'\xff\xd8\xff')):
+                        self._private(data)
+                redacted = safe_audit != audit or safe_metadata != original_metadata
+            # 2) Fora da transação: hash de todos os artefatos registrados e leitura das legendas.
             for item in artifacts:
                 if inspect_artifact(source, item['relative_path'], item['kind']) != item:
                     raise WorkflowConflict('Artefato adulterado; exportação recusada.')
-            video = next((a for a in artifacts if a['kind'] == 'video' and a['sha256'] == review.get('artifact_sha256')), None)
-            subtitles = next((a for a in artifacts if a['kind'] == 'subtitles'), None)
-            if not video or not subtitles:
-                raise WorkflowConflict('Exportação exige vídeo aprovado e legendas registrados.')
-            snapshot = None
-            for receipt in db.execute('SELECT response FROM script_receipts WHERE scope=?', (f"review:{row['script_id']}",)):
-                approved = json.loads(receipt['response'])
-                if (approved.get('status') == 'approved' and approved.get('version') == row['script_version']
-                        and approved.get('review') == json.loads(row['script_review'])
-                        and digest(approved.get('document')) == row['script_content_hash']):
-                    snapshot = approved
-                    break
-            if snapshot is None:
-                raise WorkflowConflict('Snapshot do roteiro aprovado indisponível; exportação recusada.')
-            record = self.productions.record(db, row)
-            licenses = LicenseReviewService(self.store, self.settings.data_dir)
-            provenance = licenses._provenance(db, production_id)
-            history = licenses._history(db, production_id)
-            effective = apply_license_reviews(provenance, history) if provenance is not None else None
-            document = snapshot['document']
-            text = document['title'] + '\n\n' + '\n\n'.join(
-                section['heading'] + '\n' + section['narration'] for section in document['sections']) + '\n'
-            audit = {'quality-report.json': record['quality_report'] or {'status': 'not_run',
-                           'reason': 'Relatório de QC registrado indisponível nesta produção.'},
-                       'licenses.json': {'original_provenance': provenance, 'history': history,
-                           'effective_provenance': effective, 'publishable': False},
-                       'review.json': {'production_review': review, 'script_review': snapshot['review'],
-                           'script_id': row['script_id'], 'script_version': row['script_version'],
-                           'script_content_hash': row['script_content_hash'], 'publishable': False}}
-            safe_audit = self._audit_metadata(audit)
-            payload = {name: _json(data) for name, data in safe_audit.items()}
-            payload.update({'script.json': _json(document), 'script.txt': text.encode('utf-8')})
-            from .publishing import PublishingService
-            optional = PublishingService(self.productions).optional_files(db, row)
-            if 'metadata.json' in optional:
-                original_metadata = json.loads(optional['metadata.json'])
-                safe_metadata = self._audit_metadata(original_metadata)
-                optional['metadata.json'] = _json(safe_metadata)
-            else:
-                original_metadata = safe_metadata = None
-            payload.update(optional)
-            for data in payload.values():
-                if not data.startswith((b'\x89PNG', b'\xff\xd8\xff')):
-                    self._private(data)
             # Só os artefatos explicitamente selecionados entram no ZIP.
             srt = confined(source, subtitles['relative_path']).read_bytes()
             if hashlib.sha256(srt).hexdigest() != subtitles['sha256']:
@@ -206,8 +214,7 @@ class ExportService:
             payload['subtitles.srt'] = srt
             manifest = {'schema_version': 1, 'horus_version': HORUS_VERSION, 'database_schema_version': SCHEMA_VERSION,
                         'id': export_id, 'production_id': production_id, 'created_at': now(), 'publishable': False,
-                        'metadata_redacted': safe_audit != audit or safe_metadata != original_metadata,
-                        'files': []}
+                        'metadata_redacted': redacted, 'files': []}
             root.mkdir(parents=True, exist_ok=True)
             folder.mkdir()  # reserva exclusiva; uma tentativa interrompida nunca é sobrescrita
             temporary = folder / ('partial-' + uuid.uuid4().hex)
@@ -217,7 +224,8 @@ class ExportService:
                         zipped.writestr(name, data)
                         manifest['files'].append({'name': name, 'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data)})
                     sha, size = hashlib.sha256(), 0
-                    # MP4 já comprimido: armazenar sem nova compressão e permitir ZIP64.
+                    # MP4 já comprimido: armazenar sem nova compressão e permitir ZIP64. O hash é conferido DURANTE a
+                    # cópia: o arquivo verificado é exatamente o que entra no pacote.
                     with confined(source, video['relative_path']).open('rb') as stream, zipped.open(ZipInfo('video.mp4'), 'w', force_zip64=True) as target:
                         while block := stream.read(1024 * 1024):
                             sha.update(block)
@@ -228,6 +236,9 @@ class ExportService:
                     manifest['files'].append({'name': 'video.mp4', 'sha256': sha.hexdigest(), 'size_bytes': size})
                     zipped.writestr('manifest.json', _json(manifest))
                 temporary.rename(folder / 'package.zip')
+            except (WorkflowConflict, OSError, ValueError, BadZipFile) as failure:
+                mark_failed(folder, failure_message(failure))  # a chave fica registrada como falha; nova chave funciona
+                raise
             finally:
                 if temporary.exists():
                     temporary.unlink()  # apenas o temporário criado por esta chamada

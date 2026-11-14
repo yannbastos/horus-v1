@@ -25,7 +25,7 @@ from .narration.service import NarrationService, narration_router
 from .config import Settings
 from .diagnostics import diagnose
 from .exports import ExportService
-from .publishing import PublishingService, ThumbnailRequest, MetadataRequest
+from .publishing import MetadataRequest, MetadataTextError, PublishingService, ThumbnailRequest
 from .dependencies import transcription_capabilities
 from .hermes import HermesConnector
 from .license_reviews import LicenseReviewRequest, LicenseReviewService
@@ -159,6 +159,8 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise HTTPException(404, "Roteiro ou workflow não encontrado.") from error
         except WorkflowConflict as error:
             raise HTTPException(409, str(error)) from error
+        except MetadataTextError as error:  # recusa explicada: nada é descartado em silêncio
+            raise HTTPException(422, str(error)) from None
         except ValueError as error:
             raise HTTPException(422, "Estrutura do roteiro inválida.") from error
 
