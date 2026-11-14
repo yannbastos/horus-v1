@@ -1,0 +1,1224 @@
+{
+  "frontend_required": {
+    "GET /v1/narration/preference 200": [
+      "provider"
+    ],
+    "GET /v1/productions/{id} 200 [aprovada]": [
+      "artifacts",
+      "artifacts[].id",
+      "artifacts[].kind",
+      "artifacts[].relative_path",
+      "artifacts[].sha256",
+      "artifacts[].size_bytes",
+      "created_at",
+      "id",
+      "job_id",
+      "mode",
+      "review",
+      "review.artifact_sha256",
+      "review.decision",
+      "review.reviewed_at",
+      "script_content_hash",
+      "script_id",
+      "script_version",
+      "stage",
+      "status",
+      "updated_at"
+    ],
+    "GET /v1/productions/{id} 200 [simulada concluída]": [
+      "artifacts",
+      "artifacts[].id",
+      "artifacts[].kind",
+      "artifacts[].relative_path",
+      "artifacts[].sha256",
+      "artifacts[].size_bytes",
+      "created_at",
+      "id",
+      "job_id",
+      "mode",
+      "review",
+      "script_content_hash",
+      "script_id",
+      "script_version",
+      "stage",
+      "status",
+      "updated_at"
+    ],
+    "GET /v1/productions/{id}/exports 200": [
+      "items[].created_at",
+      "items[].id",
+      "items[].production_id",
+      "items[].publishable",
+      "items[].relative_path",
+      "items[].sha256",
+      "items[].size_bytes"
+    ],
+    "GET /v1/productions/{id}/license-reviews 200 [com decisão]": [
+      "current",
+      "current[].asset_id",
+      "current[].asset_sha256",
+      "current[].decision",
+      "current[].evidence",
+      "current[].id",
+      "current[].license",
+      "current[].license.attribution_required",
+      "current[].license.commercial_use",
+      "current[].license.id",
+      "current[].license.name",
+      "current[].license.url",
+      "current[].production_id",
+      "current[].reviewed_at",
+      "current[].reviewed_by",
+      "current[].supersedes",
+      "effective_provenance",
+      "history",
+      "production_id",
+      "publishable"
+    ],
+    "GET /v1/scripts/{id} 200 [v1]": [
+      "created_at",
+      "document",
+      "document.schema_version",
+      "document.sections",
+      "document.sections[].heading",
+      "document.sections[].id",
+      "document.sections[].kind",
+      "document.sections[].narration",
+      "document.sections[].source_ids",
+      "document.simulated",
+      "document.title",
+      "id",
+      "proposal_artifact_id",
+      "proposal_content_hash",
+      "review",
+      "status",
+      "version",
+      "workflow_id",
+      "workflow_revision"
+    ],
+    "GET /v1/scripts/{id}/productions 200 [uma produção]": [
+      "items[].artifacts",
+      "items[].created_at",
+      "items[].id",
+      "items[].job_id",
+      "items[].mode",
+      "items[].review",
+      "items[].script_content_hash",
+      "items[].script_id",
+      "items[].script_version",
+      "items[].stage",
+      "items[].status",
+      "items[].updated_at"
+    ],
+    "GET /v1/workflows/{id}/scripts 200 [duas versões]": [
+      "items[].created_at",
+      "items[].document",
+      "items[].id",
+      "items[].proposal_artifact_id",
+      "items[].proposal_content_hash",
+      "items[].review",
+      "items[].status",
+      "items[].version",
+      "items[].workflow_id",
+      "items[].workflow_revision"
+    ],
+    "POST /v1/productions/{id}/export 200 [repetida]": [
+      "created_at",
+      "id",
+      "production_id",
+      "publishable",
+      "relative_path",
+      "sha256",
+      "size_bytes"
+    ],
+    "POST /v1/productions/{id}/export 201": [
+      "created_at",
+      "id",
+      "production_id",
+      "publishable",
+      "relative_path",
+      "sha256",
+      "size_bytes"
+    ],
+    "POST /v1/productions/{id}/review 200": [
+      "artifacts",
+      "artifacts[].id",
+      "artifacts[].kind",
+      "artifacts[].relative_path",
+      "artifacts[].sha256",
+      "artifacts[].size_bytes",
+      "created_at",
+      "id",
+      "job_id",
+      "mode",
+      "review",
+      "review.artifact_sha256",
+      "review.decision",
+      "review.reviewed_at",
+      "script_content_hash",
+      "script_id",
+      "script_version",
+      "stage",
+      "status",
+      "updated_at"
+    ],
+    "POST /v1/scripts/{id}/productions 201": [
+      "artifacts",
+      "created_at",
+      "id",
+      "job_id",
+      "mode",
+      "review",
+      "script_content_hash",
+      "script_id",
+      "script_version",
+      "stage",
+      "status",
+      "updated_at"
+    ],
+    "POST /v1/scripts/{id}/review 200 [aprovado]": [
+      "created_at",
+      "document",
+      "document.schema_version",
+      "document.sections",
+      "document.sections[].heading",
+      "document.sections[].id",
+      "document.sections[].kind",
+      "document.sections[].narration",
+      "document.sections[].source_ids",
+      "document.simulated",
+      "document.title",
+      "id",
+      "proposal_artifact_id",
+      "proposal_content_hash",
+      "review",
+      "review.decision",
+      "review.feedback",
+      "review.reviewed_at",
+      "status",
+      "version",
+      "workflow_id",
+      "workflow_revision"
+    ],
+    "POST /v1/scripts/{id}/versions 201": [
+      "created_at",
+      "document",
+      "document.schema_version",
+      "document.sections",
+      "document.sections[].heading",
+      "document.sections[].id",
+      "document.sections[].kind",
+      "document.sections[].narration",
+      "document.sections[].source_ids",
+      "document.simulated",
+      "document.title",
+      "id",
+      "proposal_artifact_id",
+      "proposal_content_hash",
+      "review",
+      "status",
+      "version",
+      "workflow_id",
+      "workflow_revision"
+    ],
+    "POST /v1/workflows/{id}/scripts 201": [
+      "created_at",
+      "document",
+      "document.schema_version",
+      "document.sections",
+      "document.sections[].heading",
+      "document.sections[].id",
+      "document.sections[].kind",
+      "document.sections[].narration",
+      "document.sections[].source_ids",
+      "document.simulated",
+      "document.title",
+      "id",
+      "proposal_artifact_id",
+      "proposal_content_hash",
+      "review",
+      "status",
+      "version",
+      "workflow_id",
+      "workflow_revision"
+    ]
+  },
+  "schema": 1,
+  "shapes": {
+    "GET /v1/diagnostics 200": {
+      "checks": {
+        "__array__": {
+          "available": "boolean",
+          "detail": "string",
+          "id": "string",
+          "name": "string"
+        }
+      },
+      "hermes_connected": "boolean",
+      "notice": "string",
+      "production": {
+        "checks": {
+          "__array__": {
+            "available": "boolean",
+            "detail": "string",
+            "id": "string",
+            "name": "string",
+            "required_for": {
+              "__array__": "string"
+            }
+          }
+        },
+        "missing": {
+          "__array__": "string"
+        },
+        "ready": "boolean"
+      }
+    },
+    "GET /v1/narration/preference 200": {
+      "provider": "null",
+      "voice_id": "null"
+    },
+    "GET /v1/narration/providers 200": {
+      "__array__": {
+        "engine_license": {
+          "name": "string",
+          "notes": "string",
+          "url": "string"
+        },
+        "id": "string",
+        "kind": "string",
+        "name": "string",
+        "native_word_timestamps": "boolean",
+        "reason": "string",
+        "requires_authorization": "boolean",
+        "status": "string",
+        "voices": {
+          "__array__": {
+            "commercial_use": "string",
+            "id": "string",
+            "language": "string",
+            "license": {
+              "name": "string",
+              "url": "null"
+            },
+            "name": "string",
+            "preview": "string"
+          }
+        }
+      }
+    },
+    "GET /v1/productions/{id} 200 [aprovada]": {
+      "alignment_method": "null",
+      "artifacts": {
+        "__array__": {
+          "id": "string",
+          "kind": "string",
+          "relative_path": "string",
+          "sha256": "string",
+          "size_bytes": "integer"
+        }
+      },
+      "asset_provenance": {
+        "assets": {
+          "__array__": {
+            "asset_id": "string",
+            "author": "null",
+            "kind": "string",
+            "license": {
+              "attribution_required": "null",
+              "commercial_use": "string",
+              "id": "null",
+              "name": "null",
+              "url": "null",
+              "verified_at": "null",
+              "verified_by": "null"
+            },
+            "notes": "string",
+            "origin": "string",
+            "relative_path": "string",
+            "sha256": "string",
+            "source_url": "null",
+            "status": "string"
+          }
+        },
+        "schema_version": "integer"
+      },
+      "created_at": "string",
+      "demo_only": "boolean",
+      "error": "null",
+      "failure": "null",
+      "id": "string",
+      "job_id": "string",
+      "mode": "string",
+      "narration": "null",
+      "narration_disclosure": "string",
+      "narration_kind": "string",
+      "publishable": "boolean",
+      "quality_acknowledgement_required": "boolean",
+      "quality_report": "null",
+      "real_voice": "boolean",
+      "render_quality": "string",
+      "review": {
+        "acknowledge_quality_errors": "boolean",
+        "artifact_sha256": "string",
+        "decision": "string",
+        "notes": {
+          "__array__": "unknown"
+        },
+        "reviewed_at": "string"
+      },
+      "script_content_hash": "string",
+      "script_id": "string",
+      "script_version": "integer",
+      "speech_aligned": "boolean",
+      "stage": "string",
+      "status": "string",
+      "updated_at": "string"
+    },
+    "GET /v1/productions/{id} 200 [simulada concluída]": {
+      "alignment_method": "null",
+      "artifacts": {
+        "__array__": {
+          "id": "string",
+          "kind": "string",
+          "relative_path": "string",
+          "sha256": "string",
+          "size_bytes": "integer"
+        }
+      },
+      "asset_provenance": "null",
+      "created_at": "string",
+      "demo_only": "boolean",
+      "error": "null",
+      "failure": "null",
+      "id": "string",
+      "job_id": "string",
+      "mode": "string",
+      "narration": "null",
+      "narration_disclosure": "string",
+      "narration_kind": "string",
+      "publishable": "boolean",
+      "quality_acknowledgement_required": "boolean",
+      "quality_report": "null",
+      "real_voice": "boolean",
+      "render_quality": "string",
+      "review": "null",
+      "script_content_hash": "string",
+      "script_id": "string",
+      "script_version": "integer",
+      "speech_aligned": "boolean",
+      "stage": "string",
+      "status": "string",
+      "updated_at": "string"
+    },
+    "GET /v1/productions/{id}/exports 200": {
+      "items": {
+        "__array__": {
+          "created_at": "string",
+          "id": "string",
+          "production_id": "string",
+          "publishable": "boolean",
+          "relative_path": "string",
+          "sha256": "string",
+          "size_bytes": "integer"
+        }
+      }
+    },
+    "GET /v1/productions/{id}/exports/{hash}/file 200": {
+      "__binary__": "application/zip"
+    },
+    "GET /v1/productions/{id}/license-reviews 200 [com decisão]": {
+      "current": {
+        "__array__": {
+          "asset_id": "string",
+          "asset_sha256": "string",
+          "decision": "string",
+          "evidence": "string",
+          "id": "string",
+          "license": {
+            "attribution_required": "boolean",
+            "commercial_use": "string",
+            "id": "string",
+            "name": "string",
+            "url": "string"
+          },
+          "production_id": "string",
+          "reviewed_at": "string",
+          "reviewed_by": "string",
+          "supersedes": "null"
+        }
+      },
+      "effective_provenance": {
+        "assets": {
+          "__array__": {
+            "asset_id": "string",
+            "author": "null",
+            "kind": "string",
+            "license": {
+              "attribution_required": "boolean|null",
+              "commercial_use": "string",
+              "id": "null|string",
+              "name": "null|string",
+              "url": "null|string",
+              "verified_at": "null|string",
+              "verified_by": "null|string"
+            },
+            "notes": "string",
+            "origin": "string",
+            "relative_path": "string",
+            "sha256": "string",
+            "source_url": "null",
+            "status": "string"
+          }
+        },
+        "schema_version": "integer"
+      },
+      "history": {
+        "__array__": {
+          "asset_id": "string",
+          "asset_sha256": "string",
+          "decision": "string",
+          "evidence": "string",
+          "id": "string",
+          "license": {
+            "attribution_required": "boolean",
+            "commercial_use": "string",
+            "id": "string",
+            "name": "string",
+            "url": "string"
+          },
+          "production_id": "string",
+          "reviewed_at": "string",
+          "reviewed_by": "string",
+          "supersedes": "null"
+        }
+      },
+      "production_id": "string",
+      "publishable": "boolean"
+    },
+    "GET /v1/productions/{id}/license-reviews 200 [sem decisões]": {
+      "current": {
+        "__array__": "unknown"
+      },
+      "effective_provenance": {
+        "assets": {
+          "__array__": {
+            "asset_id": "string",
+            "author": "null",
+            "kind": "string",
+            "license": {
+              "attribution_required": "null",
+              "commercial_use": "string",
+              "id": "null",
+              "name": "null",
+              "url": "null",
+              "verified_at": "null",
+              "verified_by": "null"
+            },
+            "notes": "string",
+            "origin": "string",
+            "relative_path": "string",
+            "sha256": "string",
+            "source_url": "null",
+            "status": "string"
+          }
+        },
+        "schema_version": "integer"
+      },
+      "history": {
+        "__array__": "unknown"
+      },
+      "production_id": "string",
+      "publishable": "boolean"
+    },
+    "GET /v1/productions/{id}/metadata 200 [rascunho]": {
+      "description": "string",
+      "disclosures": {
+        "__array__": "string"
+      },
+      "licenses_pending": "boolean",
+      "publishable": "boolean",
+      "sources": {
+        "__array__": "unknown"
+      },
+      "title": "string"
+    },
+    "GET /v1/scripts/{id} 200 [v1]": {
+      "authored_by": "string",
+      "created_at": "string",
+      "document": {
+        "schema_version": "integer",
+        "sections": {
+          "__array__": {
+            "heading": "string",
+            "id": "string",
+            "kind": "string",
+            "narration": "string",
+            "source_ids": {
+              "__array__": "unknown"
+            }
+          }
+        },
+        "simulated": "boolean",
+        "title": "string"
+      },
+      "id": "string",
+      "origin": "string",
+      "proposal_artifact_id": "string",
+      "proposal_content_hash": "string",
+      "review": {
+        "decision": "string",
+        "feedback": "string",
+        "reviewed_at": "string"
+      },
+      "status": "string",
+      "version": "integer",
+      "workflow_id": "string",
+      "workflow_revision": "integer"
+    },
+    "GET /v1/scripts/{id}/productions 200 [uma produção]": {
+      "items": {
+        "__array__": {
+          "alignment_method": "null",
+          "artifacts": {
+            "__array__": {
+              "id": "string",
+              "kind": "string",
+              "relative_path": "string",
+              "sha256": "string",
+              "size_bytes": "integer"
+            }
+          },
+          "asset_provenance": "null",
+          "created_at": "string",
+          "demo_only": "boolean",
+          "error": "null",
+          "failure": "null",
+          "id": "string",
+          "job_id": "string",
+          "mode": "string",
+          "narration": "null",
+          "narration_disclosure": "string",
+          "narration_kind": "string",
+          "publishable": "boolean",
+          "quality_acknowledgement_required": "boolean",
+          "quality_report": "null",
+          "real_voice": "boolean",
+          "render_quality": "string",
+          "review": "null",
+          "script_content_hash": "string",
+          "script_id": "string",
+          "script_version": "integer",
+          "speech_aligned": "boolean",
+          "stage": "string",
+          "status": "string",
+          "updated_at": "string"
+        }
+      }
+    },
+    "GET /v1/workflows/{id} 200 [aguardando aprovação]": {
+      "approvals": {
+        "__array__": "unknown"
+      },
+      "artifacts": {
+        "__array__": {
+          "attempt_id": "string",
+          "content": {
+            "schema_version": "integer",
+            "simulated": "boolean",
+            "source_artifact_ids": {
+              "__array__": "string"
+            },
+            "stage": "string",
+            "text": "string",
+            "title": "string"
+          },
+          "content_hash": "string",
+          "created_at": "string",
+          "id": "string",
+          "job_id": "string",
+          "revision": "integer",
+          "schema_version": "integer",
+          "stage": "string",
+          "workflow_id": "string"
+        }
+      },
+      "attempts": {
+        "__array__": {
+          "error": "null",
+          "executor": "string",
+          "finished_at": "string",
+          "id": "string",
+          "input_artifacts": {
+            "__array__": "string"
+          },
+          "input_hash": "string",
+          "job_id": "string",
+          "number": "integer",
+          "result": {
+            "artifact_id": "string",
+            "simulated": "boolean",
+            "stage": "string"
+          },
+          "started_at": "string",
+          "status": "string"
+        }
+      },
+      "authorizations": {
+        "__array__": "unknown"
+      },
+      "cognitive_runs": {
+        "__array__": "unknown"
+      },
+      "created_at": "string",
+      "current_artifact_id": "string",
+      "executor": "string",
+      "feedback": "string",
+      "id": "string",
+      "pending_authorization": "null",
+      "request": {
+        "objective": "string",
+        "references": {
+          "__array__": "unknown"
+        }
+      },
+      "revision": "integer",
+      "simulated": "boolean",
+      "status": "string",
+      "steps": {
+        "__array__": {
+          "attempt": "integer",
+          "created_at": "string",
+          "depends_on": "null|string",
+          "error": "null",
+          "id": "string",
+          "payload": {
+            "operation": "string",
+            "stage": "string"
+          },
+          "result": {
+            "artifact_id": "string",
+            "simulated": "boolean",
+            "stage": "string"
+          },
+          "status": "string",
+          "step_index": "integer",
+          "step_key": "string",
+          "updated_at": "string",
+          "workflow_id": "string",
+          "workflow_revision": "integer"
+        }
+      },
+      "updated_at": "string"
+    },
+    "GET /v1/workflows/{id}/scripts 200 [duas versões]": {
+      "items": {
+        "__array__": {
+          "authored_by": "string",
+          "changes": "null|object",
+          "created_at": "string",
+          "document": {
+            "schema_version": "integer",
+            "sections": {
+              "__array__": {
+                "heading": "string",
+                "id": "string",
+                "kind": "string",
+                "narration": "string",
+                "source_ids": {
+                  "__array__": "unknown"
+                }
+              }
+            },
+            "simulated": "boolean",
+            "title": "string"
+          },
+          "id": "string",
+          "origin": "string",
+          "proposal_artifact_id": "string",
+          "proposal_content_hash": "string",
+          "review": "null|object",
+          "status": "string",
+          "version": "integer",
+          "workflow_id": "string",
+          "workflow_revision": "integer"
+        }
+      }
+    },
+    "GET /v1/workflows/{id}/scripts 200 [uma versão]": {
+      "items": {
+        "__array__": {
+          "authored_by": "string",
+          "changes": "null",
+          "created_at": "string",
+          "document": {
+            "schema_version": "integer",
+            "sections": {
+              "__array__": {
+                "heading": "string",
+                "id": "string",
+                "kind": "string",
+                "narration": "string",
+                "source_ids": {
+                  "__array__": "unknown"
+                }
+              }
+            },
+            "simulated": "boolean",
+            "title": "string"
+          },
+          "id": "string",
+          "origin": "string",
+          "proposal_artifact_id": "string",
+          "proposal_content_hash": "string",
+          "review": "null",
+          "status": "string",
+          "version": "integer",
+          "workflow_id": "string",
+          "workflow_revision": "integer"
+        }
+      }
+    },
+    "POST /v1/productions/{id}/export 200 [repetida]": {
+      "created_at": "string",
+      "id": "string",
+      "production_id": "string",
+      "publishable": "boolean",
+      "relative_path": "string",
+      "sha256": "string",
+      "size_bytes": "integer"
+    },
+    "POST /v1/productions/{id}/export 201": {
+      "created_at": "string",
+      "id": "string",
+      "production_id": "string",
+      "publishable": "boolean",
+      "relative_path": "string",
+      "sha256": "string",
+      "size_bytes": "integer"
+    },
+    "POST /v1/productions/{id}/license-reviews 201": {
+      "asset_id": "string",
+      "asset_sha256": "string",
+      "decision": "string",
+      "evidence": "string",
+      "id": "string",
+      "license": {
+        "attribution_required": "boolean",
+        "commercial_use": "string",
+        "id": "string",
+        "name": "string",
+        "url": "string"
+      },
+      "production_id": "string",
+      "reviewed_at": "string",
+      "reviewed_by": "string",
+      "supersedes": "null"
+    },
+    "POST /v1/productions/{id}/review 200": {
+      "alignment_method": "null",
+      "artifacts": {
+        "__array__": {
+          "id": "string",
+          "kind": "string",
+          "relative_path": "string",
+          "sha256": "string",
+          "size_bytes": "integer"
+        }
+      },
+      "asset_provenance": {
+        "assets": {
+          "__array__": {
+            "asset_id": "string",
+            "author": "null",
+            "kind": "string",
+            "license": {
+              "attribution_required": "null",
+              "commercial_use": "string",
+              "id": "null",
+              "name": "null",
+              "url": "null",
+              "verified_at": "null",
+              "verified_by": "null"
+            },
+            "notes": "string",
+            "origin": "string",
+            "relative_path": "string",
+            "sha256": "string",
+            "source_url": "null",
+            "status": "string"
+          }
+        },
+        "schema_version": "integer"
+      },
+      "created_at": "string",
+      "demo_only": "boolean",
+      "error": "null",
+      "failure": "null",
+      "id": "string",
+      "job_id": "string",
+      "mode": "string",
+      "narration": "null",
+      "narration_disclosure": "string",
+      "narration_kind": "string",
+      "publishable": "boolean",
+      "quality_acknowledgement_required": "boolean",
+      "quality_report": "null",
+      "real_voice": "boolean",
+      "render_quality": "string",
+      "review": {
+        "acknowledge_quality_errors": "boolean",
+        "artifact_sha256": "string",
+        "decision": "string",
+        "notes": {
+          "__array__": "unknown"
+        },
+        "reviewed_at": "string"
+      },
+      "script_content_hash": "string",
+      "script_id": "string",
+      "script_version": "integer",
+      "speech_aligned": "boolean",
+      "stage": "string",
+      "status": "string",
+      "updated_at": "string"
+    },
+    "POST /v1/scripts/{id}/productions 201": {
+      "alignment_method": "null",
+      "artifacts": {
+        "__array__": "unknown"
+      },
+      "asset_provenance": "null",
+      "created_at": "string",
+      "demo_only": "boolean",
+      "error": "null",
+      "failure": "null",
+      "id": "string",
+      "job_id": "string",
+      "mode": "string",
+      "narration": "null",
+      "narration_disclosure": "null",
+      "narration_kind": "null",
+      "publishable": "boolean",
+      "quality_acknowledgement_required": "boolean",
+      "quality_report": "null",
+      "real_voice": "boolean",
+      "render_quality": "string",
+      "review": "null",
+      "script_content_hash": "string",
+      "script_id": "string",
+      "script_version": "integer",
+      "speech_aligned": "boolean",
+      "stage": "string",
+      "status": "string",
+      "updated_at": "string"
+    },
+    "POST /v1/scripts/{id}/review 200 [alterações]": {
+      "authored_by": "string",
+      "created_at": "string",
+      "document": {
+        "schema_version": "integer",
+        "sections": {
+          "__array__": {
+            "heading": "string",
+            "id": "string",
+            "kind": "string",
+            "narration": "string",
+            "source_ids": {
+              "__array__": "unknown"
+            }
+          }
+        },
+        "simulated": "boolean",
+        "title": "string"
+      },
+      "id": "string",
+      "origin": "string",
+      "proposal_artifact_id": "string",
+      "proposal_content_hash": "string",
+      "review": {
+        "decision": "string",
+        "feedback": "string",
+        "reviewed_at": "string"
+      },
+      "status": "string",
+      "version": "integer",
+      "workflow_id": "string",
+      "workflow_revision": "integer"
+    },
+    "POST /v1/scripts/{id}/review 200 [aprovado]": {
+      "authored_by": "string",
+      "created_at": "string",
+      "document": {
+        "schema_version": "integer",
+        "sections": {
+          "__array__": {
+            "heading": "string",
+            "id": "string",
+            "kind": "string",
+            "narration": "string",
+            "source_ids": {
+              "__array__": "unknown"
+            }
+          }
+        },
+        "simulated": "boolean",
+        "title": "string"
+      },
+      "id": "string",
+      "origin": "string",
+      "proposal_artifact_id": "string",
+      "proposal_content_hash": "string",
+      "review": {
+        "decision": "string",
+        "feedback": "string",
+        "reviewed_at": "string"
+      },
+      "status": "string",
+      "version": "integer",
+      "workflow_id": "string",
+      "workflow_revision": "integer"
+    },
+    "POST /v1/scripts/{id}/versions 201": {
+      "authored_by": "string",
+      "created_at": "string",
+      "document": {
+        "schema_version": "integer",
+        "sections": {
+          "__array__": {
+            "heading": "string",
+            "id": "string",
+            "kind": "string",
+            "narration": "string",
+            "source_ids": {
+              "__array__": "unknown"
+            }
+          }
+        },
+        "simulated": "boolean",
+        "title": "string"
+      },
+      "id": "string",
+      "origin": "string",
+      "proposal_artifact_id": "string",
+      "proposal_content_hash": "string",
+      "review": "null",
+      "status": "string",
+      "version": "integer",
+      "workflow_id": "string",
+      "workflow_revision": "integer"
+    },
+    "POST /v1/workflows 202": {
+      "approvals": {
+        "__array__": "unknown"
+      },
+      "artifacts": {
+        "__array__": "unknown"
+      },
+      "attempts": {
+        "__array__": "unknown"
+      },
+      "authorizations": {
+        "__array__": "unknown"
+      },
+      "cognitive_runs": {
+        "__array__": "unknown"
+      },
+      "created_at": "string",
+      "current_artifact_id": "null",
+      "executor": "string",
+      "feedback": "string",
+      "id": "string",
+      "pending_authorization": "null",
+      "request": {
+        "objective": "string",
+        "references": {
+          "__array__": "unknown"
+        }
+      },
+      "revision": "integer",
+      "simulated": "boolean",
+      "status": "string",
+      "steps": {
+        "__array__": {
+          "attempt": "integer",
+          "created_at": "string",
+          "depends_on": "null|string",
+          "error": "null",
+          "id": "string",
+          "payload": {
+            "operation": "string",
+            "stage": "string"
+          },
+          "result": "null",
+          "status": "string",
+          "step_index": "integer",
+          "step_key": "string",
+          "updated_at": "string",
+          "workflow_id": "string",
+          "workflow_revision": "integer"
+        }
+      },
+      "updated_at": "string"
+    },
+    "POST /v1/workflows/{id}/review 200": {
+      "approval": {
+        "artifact_id": "string",
+        "created_at": "string",
+        "decision": "string",
+        "feedback": "string",
+        "id": "string",
+        "operator_id": "string",
+        "revision": "integer",
+        "scope": "string",
+        "workflow_id": "string"
+      },
+      "workflow": {
+        "approvals": {
+          "__array__": {
+            "artifact_id": "string",
+            "created_at": "string",
+            "decision": "string",
+            "feedback": "string",
+            "id": "string",
+            "operator_id": "string",
+            "revision": "integer",
+            "scope": "string",
+            "workflow_id": "string"
+          }
+        },
+        "artifacts": {
+          "__array__": {
+            "attempt_id": "string",
+            "content": {
+              "schema_version": "integer",
+              "simulated": "boolean",
+              "source_artifact_ids": {
+                "__array__": "string"
+              },
+              "stage": "string",
+              "text": "string",
+              "title": "string"
+            },
+            "content_hash": "string",
+            "created_at": "string",
+            "id": "string",
+            "job_id": "string",
+            "revision": "integer",
+            "schema_version": "integer",
+            "stage": "string",
+            "workflow_id": "string"
+          }
+        },
+        "attempts": {
+          "__array__": {
+            "error": "null",
+            "executor": "string",
+            "finished_at": "string",
+            "id": "string",
+            "input_artifacts": {
+              "__array__": "string"
+            },
+            "input_hash": "string",
+            "job_id": "string",
+            "number": "integer",
+            "result": {
+              "artifact_id": "string",
+              "simulated": "boolean",
+              "stage": "string"
+            },
+            "started_at": "string",
+            "status": "string"
+          }
+        },
+        "authorizations": {
+          "__array__": "unknown"
+        },
+        "cognitive_runs": {
+          "__array__": "unknown"
+        },
+        "created_at": "string",
+        "current_artifact_id": "string",
+        "executor": "string",
+        "feedback": "string",
+        "id": "string",
+        "pending_authorization": "null",
+        "request": {
+          "objective": "string",
+          "references": {
+            "__array__": "unknown"
+          }
+        },
+        "revision": "integer",
+        "simulated": "boolean",
+        "status": "string",
+        "steps": {
+          "__array__": {
+            "attempt": "integer",
+            "created_at": "string",
+            "depends_on": "null|string",
+            "error": "null",
+            "id": "string",
+            "payload": {
+              "operation": "string",
+              "stage": "string"
+            },
+            "result": {
+              "artifact_id": "string",
+              "simulated": "boolean",
+              "stage": "string"
+            },
+            "status": "string",
+            "step_index": "integer",
+            "step_key": "string",
+            "updated_at": "string",
+            "workflow_id": "string",
+            "workflow_revision": "integer"
+          }
+        },
+        "updated_at": "string"
+      }
+    },
+    "POST /v1/workflows/{id}/scripts 201": {
+      "authored_by": "string",
+      "created_at": "string",
+      "document": {
+        "schema_version": "integer",
+        "sections": {
+          "__array__": {
+            "heading": "string",
+            "id": "string",
+            "kind": "string",
+            "narration": "string",
+            "source_ids": {
+              "__array__": "unknown"
+            }
+          }
+        },
+        "simulated": "boolean",
+        "title": "string"
+      },
+      "id": "string",
+      "origin": "string",
+      "proposal_artifact_id": "string",
+      "proposal_content_hash": "string",
+      "review": "null",
+      "status": "string",
+      "version": "integer",
+      "workflow_id": "string",
+      "workflow_revision": "integer"
+    },
+    "PUT /v1/productions/{id}/metadata 200": {
+      "description": "string",
+      "disclosures": {
+        "__array__": "string"
+      },
+      "licenses_pending": "boolean",
+      "publishable": "boolean",
+      "sources": {
+        "__array__": "unknown"
+      },
+      "title": "string"
+    }
+  }
+}
