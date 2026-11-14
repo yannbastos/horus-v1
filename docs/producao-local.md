@@ -42,7 +42,34 @@ Uma tentativa interrompida não é sobrescrita: preserve-a e use outra chave.
 Exportar é preparar arquivos para auditoria e publicação manual, não autorização
 de uso comercial nem substituição da conferência humana de QC e licenças.
 
-### Contrato existente de produção
+### Thumbnail e metadados para publicação manual
+
+Em produção concluída e aprovada, `POST /v1/productions/{id}/thumbnail` com
+`Idempotency-Key` e `{"timecode_seconds": 1.5}` extrai um quadro do MP4 aprovado
+em PNG **1080×1920** e converte esse mesmo quadro para JPG, sem texto sobreposto.
+Preserva a proporção e preenche com preto quando necessário. Exige `HORUS_FFMPEG`
+e ffprobe ao lado; o timecode deve ser não negativo e menor que a duração medida.
+Campos inválidos retornam 422; falta de aprovação, ferramenta ou timecode fora do
+vídeo retorna 409 com orientação. A mesma chave/timecode recupera os artefatos;
+outro timecode exige nova chave. Tentativa interrompida não é sobrescrita.
+
+`GET /v1/productions/{id}/metadata` retorna rascunho determinístico a partir do
+recibo do roteiro aprovado: título até 100 caracteres, descrição com excertos do
+gancho e das seções até 5000, fontes citadas (IDs, URLs/títulos quando presentes
+no snapshot da análise) e divulgações. Nenhuma IA ou consulta externa é usada.
+`PUT` nessa rota aceita somente `{"title":"...","description":"..."}` para
+editar o texto. O limite da descrição inclui o bloco final de divulgações, que é
+recolocado pelo servidor: áudio/voz conforme a produção, situação das licenças e
+`publishable=false`. Fontes e divulgações não são editáveis pelo pedido.
+
+Cada edição e extração é registrada como artefato com SHA-256 em `publishing/`
+na raiz da produção, preservando a aprovação e o MP4. GET do rascunho não grava
+arquivo; PUT persiste a edição. Novas exportações incluem `metadata.json` quando
+houver edição salva e `thumbnail.png`/`thumbnail.jpg` da extração mais recente,
+com hashes no manifesto. Sem esses artefatos, o pacote anterior continua válido.
+Pacotes já exportados não mudam: use nova chave de exportação após editar/extrair.
+
+### Operação existente de produção
 
 Todas as rotas exigem a autenticação local existente. Os POSTs abaixo exigem `Idempotency-Key` (1–128 caracteres):
 

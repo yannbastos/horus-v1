@@ -107,6 +107,7 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "url:openfontlicense.org": "F-11"},
     "production.py": {"call:OwnedProcess.start": "F-12"},
     "av_quality.py": {"call:OwnedProcess.start": "F-13"},
+    "publishing.py": {"import:subprocess": "F-19", "call:subprocess.run": "F-19"},
     "production_worker.py": {  # F-12 render Remotion offline com auditoria de rede
         "import:http.server": "F-12", "import:socket": "F-12", "import:subprocess": "F-12", "call:subprocess.run": "F-12",
         "embedded_js_network:fetch/net/http": "F-12"},

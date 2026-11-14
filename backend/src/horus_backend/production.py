@@ -76,7 +76,7 @@ def confined(root: Path, relative: str) -> Path:
 def inspect_artifact(root, relative, kind):
     path = confined(root, relative)
     suffixes = {"plan": {".json"}, "scene": {".png"}, "audio": {".wav"}, "subtitles": {".srt"},
-                "video": {".mp4"}, "manifest": {".json"}, "font": {".ttf", ".otf"}}
+                "video": {".mp4"}, "manifest": {".json"}, "font": {".ttf", ".otf"}, "thumbnail": {".png", ".jpg"}}
     if kind not in suffixes or path.suffix not in suffixes[kind] or path.stat().st_size == 0:
         raise WorkflowConflict("Tipo ou conteúdo de artefato inválido.")
     with path.open("rb") as stream:
@@ -87,6 +87,8 @@ def inspect_artifact(root, relative, kind):
         json.loads(path.read_bytes())
     elif kind == "scene" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise WorkflowConflict("Imagem inválida.")
+    elif kind == 'thumbnail' and not (data.startswith(b'\x89PNG\r\n\x1a\n') if path.suffix == '.png' else data.startswith(b'\xff\xd8\xff')):
+        raise WorkflowConflict('Thumbnail inválida.')
     elif kind == "audio" and not (data.startswith(b"RIFF") and data[8:12] == b"WAVE"):
         raise WorkflowConflict("Áudio inválido.")
     elif kind == "subtitles" and " --> " not in path.read_text(encoding="utf-8"):

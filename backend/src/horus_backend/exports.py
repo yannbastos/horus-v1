@@ -29,6 +29,7 @@ PATH_START = (r'(?i)(?:(?<!\w)[a-z]:[\\/]'                                  # C:
 # A chave não pode estar colada a outra palavra alfanumérica, mas '_' separa ('access_token=', 'client_secret=').
 CREDENTIAL = r'(?<![A-Za-z0-9])(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)'
 FILES = {'video.mp4', 'subtitles.srt', 'script.json', 'script.txt', 'quality-report.json', 'licenses.json', 'review.json'}
+OPTIONAL_FILES = {'metadata.json', 'thumbnail.png', 'thumbnail.jpg'}
 
 
 def _json(value):
@@ -86,7 +87,7 @@ class ExportService:
                 if manifest['id'] != export_id or manifest['production_id'] != production_id:
                     raise ValueError()
                 expected = {item['name']: item for item in manifest['files']}
-                if set(expected) != FILES:
+                if not FILES <= set(expected) or not set(expected) <= FILES | OPTIONAL_FILES:
                     raise ValueError()
                 if set(zipped.namelist()) != {'manifest.json', *expected} or len(zipped.namelist()) != len(expected) + 1:
                     raise ValueError()
@@ -185,8 +186,18 @@ class ExportService:
             safe_audit = self._audit_metadata(audit)
             payload = {name: _json(data) for name, data in safe_audit.items()}
             payload.update({'script.json': _json(document), 'script.txt': text.encode('utf-8')})
+            from .publishing import PublishingService
+            optional = PublishingService(self.productions).optional_files(db, row)
+            if 'metadata.json' in optional:
+                original_metadata = json.loads(optional['metadata.json'])
+                safe_metadata = self._audit_metadata(original_metadata)
+                optional['metadata.json'] = _json(safe_metadata)
+            else:
+                original_metadata = safe_metadata = None
+            payload.update(optional)
             for data in payload.values():
-                self._private(data)
+                if not data.startswith((b'\x89PNG', b'\xff\xd8\xff')):
+                    self._private(data)
             # Só os artefatos explicitamente selecionados entram no ZIP.
             srt = confined(source, subtitles['relative_path']).read_bytes()
             if hashlib.sha256(srt).hexdigest() != subtitles['sha256']:
@@ -195,7 +206,7 @@ class ExportService:
             payload['subtitles.srt'] = srt
             manifest = {'schema_version': 1, 'horus_version': HORUS_VERSION, 'database_schema_version': SCHEMA_VERSION,
                         'id': export_id, 'production_id': production_id, 'created_at': now(), 'publishable': False,
-                        'metadata_redacted': safe_audit != audit,
+                        'metadata_redacted': safe_audit != audit or safe_metadata != original_metadata,
                         'files': []}
             root.mkdir(parents=True, exist_ok=True)
             folder.mkdir()  # reserva exclusiva; uma tentativa interrompida nunca é sobrescrita
