@@ -208,6 +208,8 @@ class ScriptService:
             if previous and previous["status"] != "changes_requested":
                 raise WorkflowConflict("O roteiro atual não permite nova geração.")
             if _prepare:
+                if workflow["cognitive_client"] != "live":
+                    raise WorkflowConflict("Workflow com cliente cognitivo simulado não pode acionar o Hermes real.")
                 if proposal.get("schema_version") != 2 or not proposal.get("recommendation"):
                     raise WorkflowConflict("Proposta com recomendação e fontes validadas necessária para o Hermes.")
                 if db.execute("SELECT 1 FROM script_receipts WHERE scope=? AND response=?", (scope, encode({"pending": True}))).fetchone():
@@ -224,10 +226,14 @@ class ScriptService:
                     allowed_sources=[{"source_id": source["id"], "title": source.get("title") or source["id"]}
                                      for source in analysis["result"]["sources"] if source["id"] in allowed],
                     constraints={"target_duration_seconds": 60 if recommendation["format"] == "short" else 600})
-                db.execute("INSERT INTO jobs(id,idempotency_key,payload,status,created_at,updated_at) VALUES(?,?,?,'running',?,?)",
-                           (job_id, "script:" + attempt_id, '{}', timestamp, timestamp))
+                # O job precisa de workflow_id: o orçamento (execuções/tokens/USD) só soma cognitive_runs ligados a um
+                # workflow. Nasce 'interrupted' (desfecho honesto se o processo morrer em voo); o recover() dos workflows
+                # só toca tentativas 'running' e rebaixaria o workflow aprovado. create_hermes promove no final.
+                db.execute("""INSERT INTO jobs(id,idempotency_key,payload,status,created_at,updated_at,workflow_id,workflow_revision)
+                    VALUES(?,?,?,'interrupted',?,?,?,?)""",
+                           (job_id, "script:" + attempt_id, '{}', timestamp, timestamp, workflow_id, request.expected_revision))
                 db.execute("""INSERT INTO job_attempts(id,job_id,number,status,executor,input_hash,input_artifacts,started_at)
-                    VALUES(?,?,1,'running','script.hermes',?,?,?)""", (attempt_id, job_id, digest(envelope.model_dump()), encode([artifact["id"]]), timestamp))
+                    VALUES(?,?,1,'interrupted','script.hermes',?,?,?)""", (attempt_id, job_id, digest(envelope.model_dump()), encode([artifact["id"]]), timestamp))
                 db.execute("""INSERT INTO authorizations(id,workflow_id,revision,job_id,input_artifact_id,scope,max_runs,
                     operator_id,idempotency_key,request,consumed_attempt_id,created_at) VALUES(?,?,?,?,?,'cognitive_run',1,'local-operator',?,?,?,?)""",
                     (uuid.uuid4().hex, workflow_id, request.expected_revision, job_id, artifact["id"], "script:" + key, encoded, attempt_id, timestamp))
