@@ -47,7 +47,7 @@ export default function ProductionCenter({ connection, onOpenProduction, onOpenS
       <div className="row spread">
         <div>
           <p className="eyebrow accent">CENTRAL DE PRODUÇÃO</p>
-          <h2 id="production-center-title">Cada vídeo, sua etapa e o próximo passo humano</h2>
+          <h1 id="production-center-title">Cada vídeo, sua etapa e o próximo passo humano</h1>
           <p className="muted">Proposta, roteiro, produção e revisão humana. Estados vêm do backend local; o que não vem aparece como “não informado”. Não há publicação.</p>
         </div>
         <button type="button" className="button" onClick={() => { setRefreshKey(value => value + 1); void reload(); }} disabled={!connection || loading}>ATUALIZAR</button>
