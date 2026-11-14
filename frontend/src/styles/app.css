@@ -136,10 +136,21 @@ summary { cursor: pointer; color: var(--Muted); font-size: 12px; }
 @media(max-width: 900px) {
   .editorial-grid, .radar-grid, .proposal-grid { grid-template-columns: 1fr; }
 }
-.player video { display: block; width: 100%; max-height: 480px; background: var(--Sunken); }
-.media-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.player video { display: block; width: 100%; max-height: 480px; background: var(--Sunken); border: 1px solid var(--Line); }
+.player-header-info { display: flex; flex-direction: column; gap: var(--Space3); min-width: 0; }
+.player-header-info h3 { overflow-wrap: anywhere; }
+.player-controls-bar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--Space5); padding-top: var(--Space2); border-top: 1px solid var(--Line); }
+.player-rate-label { flex-direction: row; align-items: center; gap: var(--Space3); width: auto; }
+.player-rate-label select { width: auto; min-width: 78px; min-height: var(--Space12); padding: 6px var(--Space4); }
+.player-caption-box { padding: var(--Space4) var(--Space6); background: var(--Sunken); border: 1px solid var(--Line); border-left: 3px solid var(--AccentInk); display: flex; flex-direction: column; gap: var(--Space2); }
+.player-footer-meta { padding-top: var(--Space2); border-top: 1px solid var(--Line); }
+.library-toolbar { gap: var(--Space6); }
+.library-filters-row { display: grid; grid-template-columns: minmax(200px, 1.4fr) auto minmax(160px, 0.8fr); gap: var(--Space6); align-items: end; }
+.library-type-group { display: flex; flex-wrap: wrap; gap: var(--Space2); }
+.media-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--Space5); }
 .media-item { text-align: left; color: var(--Ink); cursor: pointer; }
-.media-item:hover { border-color: var(--AccentInk); }
+.media-item:hover, .media-item.selected { border-color: var(--AccentInk); }
+@media(max-width: 900px) { .library-filters-row { grid-template-columns: 1fr; } }
 .settings { max-width: 860px; }
 .settings form { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
 .settings form label { width: 100%; }
