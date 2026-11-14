@@ -25,6 +25,7 @@ from .narration.service import NarrationService, narration_router
 from .config import Settings
 from .diagnostics import diagnose
 from .exports import ExportService
+from .publishing import PublishingService, ThumbnailRequest, MetadataRequest
 from .dependencies import transcription_capabilities
 from .hermes import HermesConnector
 from .license_reviews import LicenseReviewRequest, LicenseReviewService
@@ -67,6 +68,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     scripts = ScriptService(store)
     license_reviews = LicenseReviewService(store, settings.data_dir)
     exports = ExportService(manager.productions)
+    publishing = PublishingService(manager.productions)
     narration = NarrationService(settings, store)
 
     @asynccontextmanager
@@ -225,6 +227,20 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         record, created = script_call(lambda: exports.create(production_id, idempotency_key))
         return JSONResponse(record, status_code=201 if created else 200)
 
+    @app.post('/v1/productions/{production_id}/thumbnail')
+    def create_thumbnail(production_id: str, request: ThumbnailRequest,
+                         idempotency_key: str = Header(min_length=1, max_length=128)):
+        record, created = script_call(lambda: publishing.thumbnail(production_id, request, idempotency_key))
+        return JSONResponse(record, status_code=201 if created else 200)
+
+    @app.get('/v1/productions/{production_id}/metadata')
+    def production_metadata(production_id: str):
+        return script_call(lambda: publishing.metadata(production_id))
+
+    @app.put('/v1/productions/{production_id}/metadata')
+    def edit_production_metadata(production_id: str, request: MetadataRequest):
+        return script_call(lambda: publishing.edit_metadata(production_id, request))
+
     @app.get("/v1/productions/{production_id}/exports")
     def list_exports(production_id: str):
         return script_call(lambda: exports.list(production_id))
@@ -232,7 +248,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.get("/v1/productions/{production_id}/exports/{export_id}/file")
     def export_file(production_id: str, export_id: str):
         path = script_call(lambda: exports.file(production_id, export_id))
-        return FileResponse(path, filename=f'horus-{production_id}-{export_id[:12]}.zip')
+        return FileResponse(path, filename=f'horus-{production_id}-{export_id[:12]}.zip', media_type='application/zip')
 
     @app.post("/v1/productions/{production_id}/license-reviews")
     def create_license_review(production_id: str, request: LicenseReviewRequest,

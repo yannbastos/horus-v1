@@ -39,10 +39,39 @@ O roteiro vem do recibo de aprovação correspondente à versão produzida.
 Cada chave conserva um retrato das revisões daquele momento, inclusive após
 reinício. Após nova revisão de licença, use outra chave para obter um novo pacote.
 Uma tentativa interrompida não é sobrescrita: preserve-a e use outra chave.
+**Thumbnail e metadados (revisão adversarial HOR-056).** O timecode precisa ser número finito, maior ou igual a zero e menor que a duração informada pelo ffprobe (NaN, Infinity, texto e booleano dão 422; fora da duração dá 409). O FFmpeg roda sem shell, sem stdin, com ambiente reduzido, prazo e caminhos absolutos; a chave do cliente nunca vira nome de arquivo. A imagem gerada precisa ter assinatura PNG/JPEG, 1080×1920 (PNG) e no máximo 16 MiB; se o vídeo mudar durante a extração, nada é registrado. Título (uma linha) e descrição não aceitam caracteres de controle nem marcas de direção bidirecional (a descrição aceita quebras de linha e CRLF); HTML e markdown ficam como texto literal. As divulgações obrigatórias são recalculadas a cada leitura/edição e não podem ser removidas nem simuladas; repetir a mesma edição não cria outro arquivo. Thumbnail e metadados exigem aprovação humana vigente (rejeição, mudança de revisão, job falho ou vídeo diferente/ausente dão 409, inclusive na repetição de uma chave). Testes: `backend/tests/test_publishing_adversarial.py`.
+
 Exportar é preparar arquivos para auditoria e publicação manual, não autorização
 de uso comercial nem substituição da conferência humana de QC e licenças.
 
-### Contrato existente de produção
+### Thumbnail e metadados para publicação manual
+
+Em produção concluída e aprovada, `POST /v1/productions/{id}/thumbnail` com
+`Idempotency-Key` e `{"timecode_seconds": 1.5}` extrai um quadro do MP4 aprovado
+em PNG **1080×1920** e converte esse mesmo quadro para JPG, sem texto sobreposto.
+Preserva a proporção e preenche com preto quando necessário. Exige `HORUS_FFMPEG`
+e ffprobe ao lado; o timecode deve ser não negativo e menor que a duração medida.
+Campos inválidos retornam 422; falta de aprovação, ferramenta ou timecode fora do
+vídeo retorna 409 com orientação. A mesma chave/timecode recupera os artefatos;
+outro timecode exige nova chave. Tentativa interrompida não é sobrescrita.
+
+`GET /v1/productions/{id}/metadata` retorna rascunho determinístico a partir do
+recibo do roteiro aprovado: título até 100 caracteres, descrição com excertos do
+gancho e das seções até 5000, fontes citadas (IDs, URLs/títulos quando presentes
+no snapshot da análise) e divulgações. Nenhuma IA ou consulta externa é usada.
+`PUT` nessa rota aceita somente `{"title":"...","description":"..."}` para
+editar o texto. O limite da descrição inclui o bloco final de divulgações, que é
+recolocado pelo servidor: áudio/voz conforme a produção, situação das licenças e
+`publishable=false`. Fontes e divulgações não são editáveis pelo pedido.
+
+Cada edição e extração é registrada como artefato com SHA-256 em `publishing/`
+na raiz da produção, preservando a aprovação e o MP4. GET do rascunho não grava
+arquivo; PUT persiste a edição. Novas exportações incluem `metadata.json` quando
+houver edição salva e `thumbnail.png`/`thumbnail.jpg` da extração mais recente,
+com hashes no manifesto. Sem esses artefatos, o pacote anterior continua válido.
+Pacotes já exportados não mudam: use nova chave de exportação após editar/extrair.
+
+### Operação existente de produção
 
 Todas as rotas exigem a autenticação local existente. Os POSTs abaixo exigem `Idempotency-Key` (1–128 caracteres):
 

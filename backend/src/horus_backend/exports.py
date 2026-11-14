@@ -17,7 +17,19 @@ from .storage import now
 from .workflows import WorkflowConflict, digest
 
 HORUS_VERSION = '0.1.0'  # mesma versão do backend em /health e pyproject.toml
+# Raízes POSIX comuns: uma barra seguida de uma delas já é caminho absoluto. Fora delas, exige-se ao menos dois
+# segmentos ('/a/b'): '100 km /h', '/ou/' e 'dia /noite' são texto comum em pt-BR e não são caminhos.
+_ROOTS = r'(?:home|users|etc|var|tmp|usr|opt|root|mnt|srv|dev|proc|sys|bin|sbin|lib|volumes|private|library|applications|system|media|run|boot)'
+PATH_START = (r'(?i)(?:(?<!\w)[a-z]:[\\/]'                                  # C:\ ou c:/
+              r'|(?<![\w\\])\\\\(?=[\w.$-])'                                # \\servidor\compartilhado
+              r'|(?<![\w:/])//[\w.$-]+/[\w.$-]'                             # //servidor/compartilhado
+              r'|\bfile:/'                                                  # file:///...
+              r'|(?<!\w)~[\\/]|%[a-z_]+%[\\/]'                              # ~/ e %USERPROFILE%\
+              r'|(?<![\w:/])/(?!/)(?:' + _ROOTS + r'(?![\w-])|[\w.~-]+/[\w.~-]))')  # /home, /a/b
+# A chave não pode estar colada a outra palavra alfanumérica, mas '_' separa ('access_token=', 'client_secret=').
+CREDENTIAL = r'(?<![A-Za-z0-9])(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)'
 FILES = {'video.mp4', 'subtitles.srt', 'script.json', 'script.txt', 'quality-report.json', 'licenses.json', 'review.json'}
+OPTIONAL_FILES = {'metadata.json', 'thumbnail.png', 'thumbnail.jpg'}
 
 
 def _json(value):
@@ -42,8 +54,8 @@ class ExportService:
         text = data.decode('utf-8')
         # Não alterar silenciosamente o roteiro aprovado ou as evidências.
         # URLs públicas e caminhos relativos de artefatos são preservados.
-        paths = re.compile(r'''(?i)(?:(?<!\w)[a-z]:[\\/]|(?<![\w\\])\\\\|(?<![\w:/])/(?!/)[\w.~])''')
-        credentials = re.compile(r'''(?i)\b(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[=:]\s*\S+)''')
+        paths = re.compile(PATH_START)
+        credentials = re.compile(CREDENTIAL + r'\s*[=:]\s*\S+)', re.I)
         if self.settings.token in text or paths.search(text) or credentials.search(text):
             raise WorkflowConflict('O pacote contém caminho absoluto ou possível credencial em texto; revise o conteúdo antes de exportar.')
 
@@ -57,11 +69,8 @@ class ExportService:
         if not isinstance(value, str):
             return value
         value = value.replace(self.settings.token, '[credencial omitida]')
-        value = re.sub(r'''(?i)\b(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)["']?\s*[=:]\s*["']?[^\s,;"']+)''',
-                       '[credencial omitida]', value)
-        value = re.sub(r'''(?i)(?:(?<!\w)[a-z]:[\\/]|(?<![\w:/])/(?!/)[\w.~])[^\r\n;"']*''',
-                       '[caminho omitido]', value)
-        return re.sub(r'''(?<!\S)\\\\[^\r\n;"']+''', '[caminho omitido]', value)
+        value = re.sub(CREDENTIAL + r'''["']?\s*[=:]\s*["']?[^\s,;"']+)''', '[credencial omitida]', value, flags=re.I)
+        return re.sub(PATH_START + r'''[^\r\n;"']*''', '[caminho omitido]', value)
 
     def _metadata(self, production_id, export_id):
         if not re.fullmatch(r'[a-f0-9]{64}', export_id):
@@ -78,7 +87,7 @@ class ExportService:
                 if manifest['id'] != export_id or manifest['production_id'] != production_id:
                     raise ValueError()
                 expected = {item['name']: item for item in manifest['files']}
-                if set(expected) != FILES:
+                if not FILES <= set(expected) or not set(expected) <= FILES | OPTIONAL_FILES:
                     raise ValueError()
                 if set(zipped.namelist()) != {'manifest.json', *expected} or len(zipped.namelist()) != len(expected) + 1:
                     raise ValueError()
@@ -101,9 +110,17 @@ class ExportService:
             self.productions.require(db, production_id)
         with self.lock:
             root = self._root(production_id)
-            items = [self._metadata(production_id, p.name) for p in root.iterdir()
-                     if re.fullmatch(r'[a-f0-9]{64}', p.name) and (p / 'package.zip').exists()] if root.exists() else []
-            return {'items': sorted(items, key=lambda item: (item['created_at'], item['id']))}
+            items, invalid = [], []
+            for p in (sorted(root.iterdir()) if root.exists() else []):
+                if re.fullmatch(r'[a-f0-9]{64}', p.name) and (p / 'package.zip').exists():
+                    try:
+                        items.append(self._metadata(production_id, p.name))
+                    except WorkflowConflict:  # um pacote adulterado não esconde os demais
+                        invalid.append({'id': p.name, 'detail': 'Pacote ausente ou adulterado; preserve-o e gere outro com nova chave.'})
+            result = {'items': sorted(items, key=lambda item: (item['created_at'], item['id']))}
+            if invalid:
+                result['invalid'] = invalid
+            return result
 
     def file(self, production_id, export_id):
         with self.store.connect() as db:
@@ -169,8 +186,18 @@ class ExportService:
             safe_audit = self._audit_metadata(audit)
             payload = {name: _json(data) for name, data in safe_audit.items()}
             payload.update({'script.json': _json(document), 'script.txt': text.encode('utf-8')})
+            from .publishing import PublishingService
+            optional = PublishingService(self.productions).optional_files(db, row)
+            if 'metadata.json' in optional:
+                original_metadata = json.loads(optional['metadata.json'])
+                safe_metadata = self._audit_metadata(original_metadata)
+                optional['metadata.json'] = _json(safe_metadata)
+            else:
+                original_metadata = safe_metadata = None
+            payload.update(optional)
             for data in payload.values():
-                self._private(data)
+                if not data.startswith((b'\x89PNG', b'\xff\xd8\xff')):
+                    self._private(data)
             # Só os artefatos explicitamente selecionados entram no ZIP.
             srt = confined(source, subtitles['relative_path']).read_bytes()
             if hashlib.sha256(srt).hexdigest() != subtitles['sha256']:
@@ -179,7 +206,7 @@ class ExportService:
             payload['subtitles.srt'] = srt
             manifest = {'schema_version': 1, 'horus_version': HORUS_VERSION, 'database_schema_version': SCHEMA_VERSION,
                         'id': export_id, 'production_id': production_id, 'created_at': now(), 'publishable': False,
-                        'metadata_redacted': safe_audit != audit,
+                        'metadata_redacted': safe_audit != audit or safe_metadata != original_metadata,
                         'files': []}
             root.mkdir(parents=True, exist_ok=True)
             folder.mkdir()  # reserva exclusiva; uma tentativa interrompida nunca é sobrescrita
