@@ -5,6 +5,7 @@ gerados a partir destes modelos e um teste garante que não divergem.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -15,6 +16,22 @@ from . import CONTRACT_VERSION
 Id = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")]
 HexId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 Text = Annotated[str, Field(min_length=1, max_length=4000)]
+
+# Texto livre enviado ao Hermes nunca carrega caminho local nem credencial: rejeitado, não higienizado
+# (mesma regra do envelope de `script`).
+_PRIVATE_TEXT = re.compile(
+    r"([A-Za-z]:[\\/]|\\\\[\w.$-]+\\|file://|(?<![\w.])/(?:Users|home|etc|var|mnt)/|~[\\/]"
+    r"|\bBearer\s+\S{8,}|\bsk-[A-Za-z0-9_-]{16,}|\b(?:api[_-]?key|secret|token|password|senha)\s*[:=])",
+    re.IGNORECASE)
+
+
+def _no_private(value: str) -> str:
+    if _PRIVATE_TEXT.search(value):
+        raise ValueError("Texto não pode conter caminho local nem credencial.")
+    return value
+
+
+PublicText = Annotated[str, Field(min_length=1, max_length=4000), AfterValidator(_no_private)]
 
 
 def _https(value: str) -> str:
@@ -64,7 +81,7 @@ class Dataset(Strict):
 class ChannelProfile(Strict):
     channel_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")]
     revision_hash: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
-    summary: Text
+    summary: PublicText
 
 
 class Market(Strict):
@@ -80,12 +97,12 @@ class RunEnvelope(Strict):
     attempt_id: HexId
     workflow_id: HexId
     revision: Annotated[int, Field(ge=1)]
-    objective: Text
+    objective: PublicText
     channel_profile: ChannelProfile
     market: Market = Market()
     dataset: Dataset
     constraints: list[Text] = Field(default_factory=list, max_length=20)
-    feedback: Annotated[str, Field(max_length=2000)] = ""
+    feedback: Annotated[str, Field(max_length=2000), AfterValidator(_no_private)] = ""
 
 
 class HermesRunRequest(Strict):

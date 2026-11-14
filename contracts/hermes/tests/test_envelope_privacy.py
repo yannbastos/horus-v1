@@ -1,8 +1,6 @@
 """Redação de dados privados no envelope da etapa de análise (requisito S-4 da política de destinos). Offline.
 
-O envelope de `script` já rejeita caminhos locais e credenciais (`test_script_stage.py`). O envelope de `analysis`
-(`RunEnvelope`) ainda não: os testes marcados `xfail(strict=True)` documentam a lacuna e passam a falhar (acusando
-o xfail) quando ela for corrigida em `hermes_contract/models.py`, momento de remover a marcação.
+Ambos os envelopes (`script` e `analysis`) rejeitam caminhos locais e credenciais em texto livre.
 """
 import copy
 
@@ -45,7 +43,6 @@ def test_identifier_fields_reject_paths_and_keys(value):
             RunEnvelope.model_validate(build(path, value))
 
 
-@pytest.mark.xfail(strict=True, reason="Lacuna S-4: texto livre do envelope de análise não rejeita caminho/credencial.")
 @pytest.mark.parametrize("value", PRIVATE)
 @pytest.mark.parametrize("path", FREE_TEXT)
 def test_free_text_rejects_local_paths_and_credentials(path, value):

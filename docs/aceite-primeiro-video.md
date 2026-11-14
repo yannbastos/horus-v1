@@ -38,8 +38,8 @@ Marque cada item como executado/aprovado/reprovado/não executado; item não exe
 
 | # | Lacuna | Evidência | Situação |
 |---|---|---|---|
-| G1 | O guia diz “se houver pendência de QC/licença, marque Confirmo ciência…”, mas o reconhecimento só é exigido com QC `fail`/`not_run` (`production.py`, `quality_acknowledgement_required`). **Licença pendente (`warn`) não bloqueia a aprovação.** | `production.py:292`, `test_license_reviews.py::test_approval_does_not_publish_or_change_artifacts` | **Decisão do Maestro/idealizador**: manter (aprovação ≠ publicação) ou exigir reconhecimento também em `warn` de licença. Não alterado. |
-| G2 | `verified` + `commercial_use=restricted` passava como “Licenças revisadas” nos metadados e `pass` no QC. | `publishing.py`, `av_quality.provenance_check` | **Metadados corrigidos** (`licenses_pending`: só `verified`+`allowed`+humano libera). **QC (`av_quality.py`) fora do escopo**: lacuna registrada em teste `xfail(strict)` em `test_licensing_gates.py`. |
+| G1 | O guia diz “se houver pendência de QC/licença, marque Confirmo ciência…”, mas o reconhecimento só é exigido com QC `fail`/`not_run` (`production.py`, `quality_acknowledgement_required`). **Decisão do Maestro (14/11/2026): manter.** Licença pendente (`warn`) **não bloqueia a aprovação do vídeo**; bloqueia só a publicação (inexistente por desenho, `publishable=false`) e mantém os metadados com “Licenças pendentes”. | `production.py:292`, `test_license_reviews.py::test_approval_does_not_publish_or_change_artifacts` | Decidido; sem alteração de código ou UI. |
+| G2 | `verified` + `commercial_use=restricted` passava como “Licenças revisadas” nos metadados e `pass` no QC. | `publishing.py`, `av_quality.provenance_check` | **Corrigido** (branch `fix-licensing-provenance-envelope`): metadados (`licenses_pending`) e QC (`provenance_check`) usam `commercial_use_permitted`; só `verified`+`allowed`+humano dá `pass`, o resto é `warn` (mesma política dos não verificados). |
 | G3 | O guia diz que o aviso `asset_provenance` “some depois da verificação”: só ocorre quando **todos** os assets (cenas, trechos de voz, narração, fonte) estão verificados, não só a voz. | `validate_asset_provenance` | Texto da UI não alterado; registrar para o redator do guia. |
 | G4 | O guia manda verificar “cada asset”, mas não diz que verificar a voz **não** prova a licença dos dados de treino (Kokoro) nem a do Windows (Maria). | seção 2 abaixo | Texto da UI não alterado. |
 | G5 | Inteligibilidade/naturalidade, loudness-alvo de plataforma e alinhamento legenda×fala real **não são medidos**. | `qualidade-piloto.md` | Só o humano confere (itens 2, 5, 6). |
@@ -67,7 +67,7 @@ Fonte local = arquivo no disco deste PC lido nesta entrega. Nada foi baixado nem
 - QC: asset não verificado → `asset_provenance` **warn** (não `fail`). Aprovação: **não bloqueada** por licença (G1). Publicação: **inexistente por desenho** (`publishable=false` sempre); metadados sempre trazem “Licenças pendentes” até todo asset ser `verified`+`allowed`.
 - Portanto, “bloqueia o que não tiver licença” vale para **publicação e metadados**, não para a aprovação técnica do vídeo.
 
-### 2.2 Testes negativos adicionados (`backend/tests/test_licensing_gates.py`, 29 passed + 1 xfail)
+### 2.2 Testes negativos adicionados (`backend/tests/test_licensing_gates.py`, 30 testes)
 
 Motor sem licença/fonte/nota; voz padrão nunca comercial; matriz origem × estado (`unverified`, `rejected`, `verified`+`restricted`, sem humano) nunca permite uso comercial; uma voz não verificada mantém QC `warn` e divulgação pendente; `verified`+`restricted` permanece pendente; ausência de proveniência = pendente; aprovação não é herdada por arquivo de voz regenerado.
 
