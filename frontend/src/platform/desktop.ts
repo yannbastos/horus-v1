@@ -22,6 +22,13 @@ export async function selectDirectory(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null;
 }
 
+export async function selectLocalPath(directory = false): Promise<string | null> {
+  if (!nativeDesktop) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({ multiple: false, directory });
+  return typeof selected === 'string' ? selected : null;
+}
+
 export const transcriptionExtensions = ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma',
   'mp4', 'mkv', 'mov', 'avi', 'webm', 'wmv', 'flv', 'm4v'];
 

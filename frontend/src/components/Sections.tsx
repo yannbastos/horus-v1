@@ -1,4 +1,6 @@
 import { Orbit } from './Identity';
+import { ReadinessPanel } from './ReadinessPanel';
+import type { Connection } from '../services/api';
 
 export type Page = 'overview' | 'radar' | 'library' | 'production' | 'channels' | 'history' | 'transcription' | 'settings';
 export const navigation: { id: Page; title: string }[] = [
@@ -15,10 +17,11 @@ export const sections = {
   history: { caption: '06 / HISTÓRICO OPERACIONAL', title: 'Cada produção deixa um registro.', description: 'Execuções, revisões e decisões da operação audiovisual.', emptyTitle: 'Rastreie o caminho até a entrega.', emptyDescription: 'Esta área consolidada ainda não está integrada. As tarefas técnicas e seus logs já podem ser consultados em Produção.', features: [['Execuções', 'Etapas, falhas e novas tentativas por vídeo.'], ['Revisões', 'Decisões editoriais associadas à versão aprovada.'], ['Resultados', 'Custos e métricas das produções, quando disponíveis.']] },
 };
 
-export function Overview({ navigate }: { navigate: (page: Page) => void }) {
+export function Overview({ navigate, connection = null }: { navigate: (page: Page) => void; connection?: Connection | null }) {
   return <div className="page overview">
     <div className="page-heading"><div><p className="eyebrow accent">01 / VISÃO GERAL</p><h1>Um novo olhar para criar.</h1></div><span className="tag">PRÉVIA DE LAYOUT</span></div>
     <section className="hero"><div className="hero-copy"><p className="eyebrow accent">PESQUISE. PLANEJE. PRODUZA.</p><h2>Da referência<br />à sua próxima história.</h2><p className="muted">Pesquise oportunidades, planeje vídeos originais e acompanhe sua produção audiovisual.</p><div className="actions"><button className="button primary" onClick={() => navigate('production')}>ABRIR PRODUÇÃO</button><button className="button" onClick={() => navigate('radar')}>EXPLORAR RADAR</button></div></div><Orbit /></section>
+    <ReadinessPanel connection={connection} onOpenSettings={() => navigate('settings')} />
     <section><p className="eyebrow section-label">UM FLUXO, DO PRIMEIRO SINAL À ENTREGA</p><div className="three-columns">
       <article className="card"><p className="eyebrow accent">01 / DESCOBRIR</p><h3>Encontre um caminho.</h3><p className="muted">Referências, formatos e ideias que merecem um olhar mais atento.</p><p className="eyebrow small">RADAR · EM PREPARAÇÃO</p></article>
       <article className="card"><p className="eyebrow accent">02 / PLANEJAR</p><h3>Prepare o próximo vídeo.</h3><p className="muted">Defina abordagem, roteiro, título e direção visual antes de produzir.</p><p className="eyebrow small good">PLANEJAMENTO · EM PREPARAÇÃO</p></article>
