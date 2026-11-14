@@ -6,7 +6,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 MIGRATIONS = {
     1: (
         """CREATE TABLE jobs (
@@ -164,6 +164,26 @@ MIGRATIONS = {
     ),
     # Proveniência efetiva Hermes; o CHECK de origin da v9 permanece intacto.
     10: ("ALTER TABLE scripts ADD COLUMN generator TEXT CHECK(generator IS NULL OR generator = 'hermes')",),
+    # Auditoria de transmissões externas (HOR-115, C5): append-only, somente metadados (nunca conteúdo).
+    11: (
+        """CREATE TABLE transmissions (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, at TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('submit','outcome','gate_refusal','probe')),
+            stage TEXT NOT NULL, workflow_id TEXT, job_id TEXT, attempt_id TEXT, run_id TEXT,
+            destination TEXT, provider TEXT, model TEXT,
+            envelope_bytes INTEGER CHECK(envelope_bytes IS NULL OR envelope_bytes >= 0),
+            envelope_sha256 TEXT CHECK(envelope_sha256 IS NULL OR length(envelope_sha256) = 64),
+            authorization_id TEXT,
+            result TEXT NOT NULL CHECK(result IN ('attempted','sent','error','unknown','refused_gate','completed',
+                'failed','cancelled','interrupted','invalid_output','policy_violation')),
+            detail TEXT CHECK(detail IS NULL OR length(detail) <= 120),
+            tokens_total INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0), cost_usd TEXT)""",
+        "CREATE INDEX transmissions_run ON transmissions(run_id, seq)",
+        """CREATE TRIGGER transmissions_no_update BEFORE UPDATE ON transmissions
+            BEGIN SELECT RAISE(ABORT, 'transmissions é append-only'); END""",
+        """CREATE TRIGGER transmissions_no_delete BEFORE DELETE ON transmissions
+            BEGIN SELECT RAISE(ABORT, 'transmissions é append-only'); END""",
+    ),
 }
 
 

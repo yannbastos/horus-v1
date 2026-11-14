@@ -64,8 +64,9 @@ def get_json(base_url: str, token: str, path: str):
 
 
 class HermesConnector:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, audit=None):
         self.settings = settings
+        self.audit = audit
         self.lock = asyncio.Lock()
         self.last_report = None
         self.last_check = 0.0
@@ -123,5 +124,9 @@ class HermesConnector:
             if self.last_report and time.monotonic() - self.last_check < 2:
                 return self.status()
             self.last_report = await asyncio.to_thread(self._probe)
+            if self.audit is not None and self.last_report.get("state") not in {"not_configured", "invalid_config"}:
+                # O diagnóstico só envia o token em cabeçalho (GET /health e /v1/capabilities): sem envelope.
+                self.audit.best_effort("probe", "diagnostic", "sent" if self.last_report.get("connected") else "error",
+                                       detail="probe_" + str(self.last_report.get("state", "unknown")).lower()[:30])
             self.last_check = time.monotonic()
             return self.status()

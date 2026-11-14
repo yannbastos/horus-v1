@@ -92,6 +92,11 @@ def simulate_script(proposal, feedback, allowed_source_ids):
 class ScriptService:
     def __init__(self, store, settings=None):
         self.store, self.settings = store, settings
+        from .transmissions import TransmissionLog
+        self.audit = TransmissionLog(store)
+
+    def refuse_gate(self, workflow_id):
+        self.audit.best_effort("gate_refusal", "script", "refused_gate", workflow_id=workflow_id, detail="security_gate")
 
     @staticmethod
     def _record(row):
@@ -255,11 +260,15 @@ class ScriptService:
             return record, True
 
     def create_hermes(self, workflow_id, request, key):
-        from .security import require_secure
+        from .security import SecurityGate, require_secure
         from .workflow_hermes import HermesStages, CognitiveFailure, CognitiveUnknown
         if self.settings.workflow_executor != "hermes":
             raise WorkflowConflict("Executor Hermes não selecionado pelo operador.")
-        require_secure(self.settings)
+        try:
+            require_secure(self.settings)
+        except SecurityGate:
+            self.refuse_gate(workflow_id)
+            raise
         context, created = self.create(workflow_id, request, key, _prepare=True)
         if not created:
             return context, False
@@ -290,7 +299,7 @@ class ScriptService:
         contabilizado pela reserva/uso) e só uma nova autorização humana (nova chave) libera outra tentativa;
         desfecho ainda desconhecido mantém o recibo pendente e pode ser conciliado de novo.
         """
-        from .security import require_secure
+        from .security import SecurityGate, require_secure
         from .workflow_hermes import HermesStages, CognitiveFailure, CognitiveUnknown
         if self.settings.workflow_executor != "hermes":
             raise WorkflowConflict("Executor Hermes não selecionado pelo operador.")
@@ -314,7 +323,11 @@ class ScriptService:
             if run is None:
                 raise WorkflowConflict("Execução pendente sem registro de envio; intervenção técnica necessária.")
             run = dict(run)
-        require_secure(self.settings)
+        try:
+            require_secure(self.settings)
+        except SecurityGate:
+            self.refuse_gate(workflow_id)
+            raise
         request = HermesScriptRequest.model_validate(json.loads(encoded))
         attempt_id, job_id = run["attempt_id"], run["job_id"]
         context = {"script_envelope": json.loads(json.loads(run["request"])["input"]), "resume_run": run,
