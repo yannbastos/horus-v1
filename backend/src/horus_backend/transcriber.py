@@ -49,8 +49,9 @@ def emit(kind: str, message: str):
     print(json.dumps({"type": kind, "message": message}, ensure_ascii=False), flush=True)
 
 
-def choose_device(runtime) -> str:
-    requested = os.environ.get('HORUS_WHISPER_DEVICE', 'auto').strip().lower()
+def choose_device(runtime, *, report=None, default='auto') -> str:
+    report = report or emit
+    requested = os.environ.get('HORUS_WHISPER_DEVICE', default).strip().lower()
     if requested not in {'auto', 'cpu', 'cuda'}:
         raise ValueError('HORUS_WHISPER_DEVICE inválido. Use auto, cpu ou cuda.')
     if requested == 'cpu':
@@ -58,10 +59,10 @@ def choose_device(runtime) -> str:
     try:
         available = runtime.get_cuda_device_count() > 0
     except (RuntimeError, OSError) as error:
-        emit('status', f'Não foi possível consultar CUDA ({type(error).__name__}). Usando CPU int8.')
+        report('status', f'Não foi possível consultar CUDA ({type(error).__name__}). Usando CPU int8.')
         return 'cpu'
     if not available and requested == 'cuda':
-        emit('status', 'CUDA solicitada, mas nenhuma GPU utilizável foi detectada. Usando CPU int8.')
+        report('status', 'CUDA solicitada, mas nenhuma GPU utilizável foi detectada. Usando CPU int8.')
     return 'cuda' if available else 'cpu'
 
 
@@ -76,14 +77,17 @@ def transcribe(path: Path, model_name: str, language: str, models_dir: Path):
     from faster_whisper import WhisperModel
 
     device = choose_device(ctranslate2)
-    models_dir.mkdir(parents=True, exist_ok=True)
+    from .speech_alignment import resolve_model_path
+    model_path = resolve_model_path(models_dir, model_name)
+    if model_path is None:
+        raise FileNotFoundError(f'Modelo Whisper {model_name!r} não instalado em {models_dir}. Instale-o explicitamente antes de transcrever.')
     emitted = False
     while True:
         model = segments = None
         try:
             compute = 'float16' if device == 'cuda' else 'int8'
-            emit('status', f'Carregando modelo {model_name} em {device.upper()} ({compute}); o primeiro uso pode baixar o modelo...')
-            model = WhisperModel(model_name, device=device, compute_type=compute, download_root=str(models_dir))
+            emit('status', f'Carregando modelo local {model_name} em {device.upper()} ({compute}).')
+            model = WhisperModel(str(model_path), device=device, compute_type=compute, local_files_only=True)
             emit('status', f'Transcrevendo em {device.upper()} ({compute}).')
             segments, info = model.transcribe(str(path), language=None if language == 'auto' else language)
             last = -1

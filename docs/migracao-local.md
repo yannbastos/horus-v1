@@ -101,6 +101,8 @@ Não depende das pastas do Avalonia nem copia ferramentas da instalação antiga
 
 Política de dispositivo:
 
+Modelos Whisper devem ser provisionados explicitamente antes do uso, em `models/whisper/<nome>` ou `models/whisper/faster-whisper-<nome>` (com `model.bin` e os demais arquivos CTranslate2). A transcrição usa caminho local e `local_files_only=True`; modelo ausente gera erro e nunca inicia download automático. Validação de hardware e reprodução: [CUDA e fallback](validacao-cuda-hor-008.md).
+
 - `cpu`: usa CPU int8 e não consulta dispositivos CUDA.
 - `auto`/`cuda`: consulta CTranslate2; GPU ausente ou erro na consulta seleciona CPU com aviso. Uma configuração diferente de auto/cpu/cuda falha com mensagem acionável.
 - Falha reconhecida CUDA/cuDNN/cuBLAS, driver, DLL ou memória durante carga/início da inferência: faz no máximo uma alternativa CPU, dentro do mesmo job e antes de emitir texto. Erros de mídia/modelo/rede sem relação com GPU não acionam fallback.

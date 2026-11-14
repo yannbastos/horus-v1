@@ -101,7 +101,8 @@ ALLOWLIST: dict[str, dict[str, str]] = {
     "narration/providers.py": {  # F-08 SAPI/Piper locais, F-09 ElevenLabs sem transporte
         "import:subprocess": "F-08", "url:www.microsoft.com": "F-08", "url:github.com": "F-08", "url:elevenlabs.io": "F-09"},
     "speech_alignment.py": {  # F-06 ASR offline para alinhamento
-        "call:OwnedProcess.start": "F-06", "import:faster_whisper": "F-06", "call:WhisperModel": "F-06"},
+        "call:OwnedProcess.start": "F-06", "import:faster_whisper": "F-06", "call:WhisperModel": "F-06",
+        "import:ctranslate2": "F-06"},
     "local_pilot.py": {  # URLs de licença de fonte/fonte tipográfica são metadado, nunca acessadas
         "call:OwnedProcess.start": "F-11", "url:github.com": "F-11", "url:learn.microsoft.com": "F-11",
         "url:openfontlicense.org": "F-11"},

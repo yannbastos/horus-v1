@@ -18,6 +18,8 @@ def clean_configuration(monkeypatch):
 
 
 def fake_engine(monkeypatch, factory, count=0):
+    from horus_backend import speech_alignment
+    monkeypatch.setattr(speech_alignment, 'resolve_model_path', lambda folder, name: folder / name)
     monkeypatch.setitem(sys.modules, 'ctranslate2', SimpleNamespace(get_cuda_device_count=lambda: count))
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=factory))
     frames = []
@@ -40,11 +42,12 @@ def test_device_and_actual_compute_are_reported(monkeypatch, tmp_path, requested
     transcriber.transcribe(tmp_path / 'audio.wav', 'tiny', 'pt', tmp_path / 'models')
     assert [item['device'] for item in calls] == [expected]
     assert calls[0]['compute_type'] == ('int8' if expected == 'cpu' else 'float16')
+    assert calls[0]['local_files_only'] is True
     assert any(kind == 'status' and f'Transcrevendo em {expected.upper()}' in message for kind, message in frames)
     assert [text for kind, text in frames if kind == 'segment'] == ['Olá!']
 
 
-@pytest.mark.parametrize('failure', ['count', 'load', 'lazy'])
+@pytest.mark.parametrize('failure', ['count', 'load', 'lazy', 'oom'])
 def test_cuda_failures_fallback_once_before_text(monkeypatch, tmp_path, failure):
     calls = []
     def lazy():
@@ -53,6 +56,8 @@ def test_cuda_failures_fallback_once_before_text(monkeypatch, tmp_path, failure)
     def factory(name, **kwargs):
         calls.append(kwargs['device'])
         if kwargs['device'] == 'cuda':
+            if failure == 'oom':
+                raise RuntimeError('CUDA failed with error out of memory')
             if failure == 'load':
                 raise RuntimeError('CUDA driver version insufficient')
             return model_with_generator(lazy())
