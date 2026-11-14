@@ -202,6 +202,28 @@ def test_youtube_url_rule(url, valid):
     assert is_youtube_url(url) is valid
 
 
+@pytest.mark.parametrize('url', [
+    'https://youtube.com:invalid/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com:65536/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com:0/watch?v=dQw4w9WgXcQ',
+    'https://@youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://:@youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com/watch?v=dQw4w9WgXcQ%0A',
+    'https://youtu.be/dQw4w9WgXcQ\n',
+    'https://you\ttube.com/watch?v=dQw4w9WgXcQ',
+    '\x00https://youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://youtube.com/watch?v=dQw4w9WgXcQ\x7f',
+    'https://[youtube.com/watch?v=dQw4w9WgXcQ',
+])
+def test_malformed_youtube_urls_are_rejected_before_scheduling(client, tmp_path, url):
+    assert is_youtube_url(url) is False
+    response = client.post('/v1/jobs', json={
+        'operation': 'youtube.download', 'url': url, 'directory': str(tmp_path),
+    })
+    assert response.status_code == 422
+    assert client.get('/v1/transcription/jobs').json() == []
+
+
 def test_partial_checkpoint_survives_log_retention_and_recovery(tmp_path):
     store = Store(tmp_path / 'temporary.sqlite3')
     job, _ = store.create_job({'operation': 'transcription.run', 'path': 'local.wav'}, 'checkpoint')
