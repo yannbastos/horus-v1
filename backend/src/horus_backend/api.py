@@ -230,7 +230,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.get("/v1/productions/{production_id}/exports/{export_id}/file")
     def export_file(production_id: str, export_id: str):
         path = script_call(lambda: exports.file(production_id, export_id))
-        return FileResponse(path, filename=f'horus-{production_id}-{export_id[:12]}.zip')
+        return FileResponse(path, filename=f'horus-{production_id}-{export_id[:12]}.zip', media_type='application/zip')
 
     @app.post("/v1/productions/{production_id}/license-reviews")
     def create_license_review(production_id: str, request: LicenseReviewRequest,

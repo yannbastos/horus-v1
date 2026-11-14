@@ -17,6 +17,17 @@ from .storage import now
 from .workflows import WorkflowConflict, digest
 
 HORUS_VERSION = '0.1.0'  # mesma versão do backend em /health e pyproject.toml
+# Raízes POSIX comuns: uma barra seguida de uma delas já é caminho absoluto. Fora delas, exige-se ao menos dois
+# segmentos ('/a/b'): '100 km /h', '/ou/' e 'dia /noite' são texto comum em pt-BR e não são caminhos.
+_ROOTS = r'(?:home|users|etc|var|tmp|usr|opt|root|mnt|srv|dev|proc|sys|bin|sbin|lib|volumes|private|library|applications|system|media|run|boot)'
+PATH_START = (r'(?i)(?:(?<!\w)[a-z]:[\\/]'                                  # C:\ ou c:/
+              r'|(?<![\w\\])\\\\(?=[\w.$-])'                                # \\servidor\compartilhado
+              r'|(?<![\w:/])//[\w.$-]+/[\w.$-]'                             # //servidor/compartilhado
+              r'|\bfile:/'                                                  # file:///...
+              r'|(?<!\w)~[\\/]|%[a-z_]+%[\\/]'                              # ~/ e %USERPROFILE%\
+              r'|(?<![\w:/])/(?!/)(?:' + _ROOTS + r'(?![\w-])|[\w.~-]+/[\w.~-]))')  # /home, /a/b
+# A chave não pode estar colada a outra palavra alfanumérica, mas '_' separa ('access_token=', 'client_secret=').
+CREDENTIAL = r'(?<![A-Za-z0-9])(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)'
 FILES = {'video.mp4', 'subtitles.srt', 'script.json', 'script.txt', 'quality-report.json', 'licenses.json', 'review.json'}
 
 
@@ -42,8 +53,8 @@ class ExportService:
         text = data.decode('utf-8')
         # Não alterar silenciosamente o roteiro aprovado ou as evidências.
         # URLs públicas e caminhos relativos de artefatos são preservados.
-        paths = re.compile(r'''(?i)(?:(?<!\w)[a-z]:[\\/]|(?<![\w\\])\\\\|(?<![\w:/])/(?!/)[\w.~])''')
-        credentials = re.compile(r'''(?i)\b(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[=:]\s*\S+)''')
+        paths = re.compile(PATH_START)
+        credentials = re.compile(CREDENTIAL + r'\s*[=:]\s*\S+)', re.I)
         if self.settings.token in text or paths.search(text) or credentials.search(text):
             raise WorkflowConflict('O pacote contém caminho absoluto ou possível credencial em texto; revise o conteúdo antes de exportar.')
 
@@ -57,11 +68,8 @@ class ExportService:
         if not isinstance(value, str):
             return value
         value = value.replace(self.settings.token, '[credencial omitida]')
-        value = re.sub(r'''(?i)\b(?:bearer\s+\S+|(?:api[_-]?key|token|secret|password)["']?\s*[=:]\s*["']?[^\s,;"']+)''',
-                       '[credencial omitida]', value)
-        value = re.sub(r'''(?i)(?:(?<!\w)[a-z]:[\\/]|(?<![\w:/])/(?!/)[\w.~])[^\r\n;"']*''',
-                       '[caminho omitido]', value)
-        return re.sub(r'''(?<!\S)\\\\[^\r\n;"']+''', '[caminho omitido]', value)
+        value = re.sub(CREDENTIAL + r'''["']?\s*[=:]\s*["']?[^\s,;"']+)''', '[credencial omitida]', value, flags=re.I)
+        return re.sub(PATH_START + r'''[^\r\n;"']*''', '[caminho omitido]', value)
 
     def _metadata(self, production_id, export_id):
         if not re.fullmatch(r'[a-f0-9]{64}', export_id):
@@ -101,9 +109,17 @@ class ExportService:
             self.productions.require(db, production_id)
         with self.lock:
             root = self._root(production_id)
-            items = [self._metadata(production_id, p.name) for p in root.iterdir()
-                     if re.fullmatch(r'[a-f0-9]{64}', p.name) and (p / 'package.zip').exists()] if root.exists() else []
-            return {'items': sorted(items, key=lambda item: (item['created_at'], item['id']))}
+            items, invalid = [], []
+            for p in (sorted(root.iterdir()) if root.exists() else []):
+                if re.fullmatch(r'[a-f0-9]{64}', p.name) and (p / 'package.zip').exists():
+                    try:
+                        items.append(self._metadata(production_id, p.name))
+                    except WorkflowConflict:  # um pacote adulterado não esconde os demais
+                        invalid.append({'id': p.name, 'detail': 'Pacote ausente ou adulterado; preserve-o e gere outro com nova chave.'})
+            result = {'items': sorted(items, key=lambda item: (item['created_at'], item['id']))}
+            if invalid:
+                result['invalid'] = invalid
+            return result
 
     def file(self, production_id, export_id):
         with self.store.connect() as db:
