@@ -37,7 +37,7 @@ def test_sapi_process_diagnostics_are_separate(monkeypatch, kind):
              'exit': subprocess.CalledProcessError(9, ['ignored'], stderr=(private+'\ntoken=secret').encode())}[kind]
     def fail(*args, **kwargs):
         raise error
-    monkeypatch.setattr(providers.subprocess, 'run', fail)
+    monkeypatch.setattr(providers, 'run_sync', fail)
     with pytest.raises(providers.NarrationError) as caught:
         providers.run(['fake'], payload={'text': private})
     failure = caught.value.detail

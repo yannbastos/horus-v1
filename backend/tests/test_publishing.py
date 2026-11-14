@@ -175,12 +175,13 @@ def test_process_timeout_has_no_private_stderr_or_environment(production, monkey
     service = PublishingService(client.app.state.manager.productions)
 
     def fail(command, **kwargs):
-        assert kwargs['timeout'] == 5 and kwargs['stdin'] == subprocess.DEVNULL
+        assert kwargs['timeout'] == 5
         assert 'HORUS_API_TOKEN' not in kwargs['env']
         raise subprocess.TimeoutExpired(command, 5, stderr=b'private secret')
 
     monkeypatch.setenv('HORUS_API_TOKEN', 'secret')
-    monkeypatch.setattr(subprocess, 'run', fail)
+    import horus_backend.publishing as publishing_module
+    monkeypatch.setattr(publishing_module, 'run_sync', fail)
     from horus_backend.workflows import WorkflowConflict
     with pytest.raises(WorkflowConflict) as error:
         service._run(['local-tool'], 5)

@@ -444,7 +444,7 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
     except (OSError, NotImplementedError) as error:
         return _not_run(f"não foi possível iniciar o ASR ({type(error).__name__})")
     try:
-        out, err = await asyncio.wait_for(owned.process.communicate(), timeout=timeout)
+        out, err = await owned.communicate(timeout=timeout)
     except TimeoutError:
         return _not_run(f"timeout de {timeout:.0f}s no reconhecimento")
     finally:

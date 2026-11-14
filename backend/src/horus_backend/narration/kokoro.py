@@ -89,7 +89,7 @@ class Kokoro(LocalProvider):
             try:
                 owned = await OwnedProcess.start([str(self.python), '-I',
                     str(Path(__file__).with_name('kokoro_worker.py')), str(request)], env=env, cwd=folder)
-                _, stderr = await asyncio.wait_for(owned.process.communicate(), timeout=self.timeout)
+                _, stderr = await owned.communicate(timeout=self.timeout)
                 if owned.process.returncode:
                     raise NarrationError('kokoro_synthesis_failed', detail=failure_detail(
                         'kokoro_synthesis_failed', 'narration', started=started, stderr=stderr,
