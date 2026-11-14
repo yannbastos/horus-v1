@@ -101,6 +101,16 @@ SAFE_ENV_KEYS = {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP'}
 OUTPUT_LIMIT = 16 * 1024 * 1024
 
 
+# Telemetria desligada em todo subprocesso (HOR-117): bibliotecas e ferramentas que respeitam estas convenções não enviam nada.
+TELEMETRY_OFF = {'HF_HUB_DISABLE_TELEMETRY': '1', 'DO_NOT_TRACK': '1', 'NEXT_TELEMETRY_DISABLED': '1',
+                 'STORYBOOK_DISABLE_TELEMETRY': '1', 'NO_UPDATE_NOTIFIER': '1', 'NPM_CONFIG_UPDATE_NOTIFIER': 'false',
+                 'SCARF_ANALYTICS': 'false'}
+
+
+def with_telemetry_off(env: dict[str, str]) -> dict[str, str]:
+    return {**TELEMETRY_OFF, **env}
+
+
 def minimal_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k.upper() in SAFE_ENV_KEYS}
 
@@ -122,7 +132,7 @@ class OwnedProcess:
     @classmethod
     async def start(cls, command: list[str], **kwargs):
         options = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
-        kwargs.setdefault("env", minimal_env())
+        kwargs["env"] = with_telemetry_off(kwargs.get("env") if kwargs.get("env") is not None else minimal_env())
         process = await asyncio.create_subprocess_exec(
             *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024, **options, **kwargs)
@@ -183,7 +193,7 @@ def run_sync(command: list[str], *, timeout: float, input_text: str | None = Non
     options = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         process = subprocess.Popen(command, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-                                   stdout=out, stderr=err, env=env if env is not None else minimal_env(), cwd=cwd, **options)
+                                   stdout=out, stderr=err, env=with_telemetry_off(env if env is not None else minimal_env()), cwd=cwd, **options)
         job = None
         try:
             job = WindowsJob(process.pid) if os.name == "nt" else None
