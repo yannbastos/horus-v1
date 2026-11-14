@@ -68,3 +68,26 @@ Sem IA e sem Hermes: o usuário escreve o texto no Hórus e o aprova pelo mesmo 
 - Produção: aprovada a versão humana mais recente, `POST /v1/scripts/{id}/productions` funciona como antes (hash e recibo do roteiro aprovado), inclusive no modo `simulated`.
 
 Testes: `& backend/.venv/Scripts/python.exe -m pytest backend/tests/test_scripts_manual.py backend/tests/test_scripts.py -q`.
+
+## Etapa Hermes de roteiro (HOR-134, F0)
+
+O padrão `HORUS_WORKFLOW_EXECUTOR=simulated` mantém a geração simulada e a escrita manual existentes.
+Com executor `hermes`, o POST de geração exige `source: "hermes"` e `authorize: true`, além de
+`expected_revision`, `proposal_artifact_id` e `Idempotency-Key`. Esse pedido é a autorização humana
+para **uma** execução, persistida e consumida antes do envio. A escrita manual continua local.
+Não há ativação de inferência real neste incremento: o gate continua fechado neste PC e responde
+HTTP 409 com `code: "security_gate"` enquanto houver blockers. A validação usou somente servidor falso.
+
+O envelope contém apenas a proposta aprovada (alias local `P1`), títulos/ids das fontes permitidas,
+restrições de duração/idioma/seções e ids da execução. A autorização mantém a referência ao artefato
+original. Reserva de orçamento/tokens, idempotência remota e `cognitive_runs` reutilizam os controles
+da análise. Saída inválida registra `invalid_output` e não cria roteiro. Uma falha definitiva exige
+nova chave e nova autorização; desfecho desconhecido bloqueia nova geração, sem retry automático.
+A conciliação de roteiro desconhecido ainda exige intervenção técnica; não há rota própria nesta F0.
+
+A migração **aditiva v10** acrescenta `scripts.generator`, sem reconstrução de tabela. Para Hermes,
+o armazenamento mantém o default legado `origin='simulated'` unicamente para satisfazer o CHECK v9;
+`generator='hermes'` é a proveniência efetiva. A API sempre projeta `origin` e `authored_by` como
+`hermes`, com documento `simulated=false`, e exige revisão humana. A coluna extra permite consultas
+SQL antigas, preservando os roteiros humanos/simulados; isso não autoriza abrir o banco com um backend
+antigo (o migrador antigo recusa versão futura). Só foram migrados bancos temporários de testes.
