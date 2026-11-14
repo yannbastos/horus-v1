@@ -208,6 +208,8 @@ class ScriptService:
             if previous and previous["status"] != "changes_requested":
                 raise WorkflowConflict("O roteiro atual não permite nova geração.")
             if _prepare:
+                if workflow["cognitive_client"] != "live":
+                    raise WorkflowConflict("Workflow com cliente cognitivo simulado não pode acionar o Hermes real.")
                 if proposal.get("schema_version") != 2 or not proposal.get("recommendation"):
                     raise WorkflowConflict("Proposta com recomendação e fontes validadas necessária para o Hermes.")
                 if db.execute("SELECT 1 FROM script_receipts WHERE scope=? AND response=?", (scope, encode({"pending": True}))).fetchone():
@@ -224,10 +226,14 @@ class ScriptService:
                     allowed_sources=[{"source_id": source["id"], "title": source.get("title") or source["id"]}
                                      for source in analysis["result"]["sources"] if source["id"] in allowed],
                     constraints={"target_duration_seconds": 60 if recommendation["format"] == "short" else 600})
-                db.execute("INSERT INTO jobs(id,idempotency_key,payload,status,created_at,updated_at) VALUES(?,?,?,'running',?,?)",
-                           (job_id, "script:" + attempt_id, '{}', timestamp, timestamp))
+                # O job precisa de workflow_id: o orçamento (execuções/tokens/USD) só soma cognitive_runs ligados a um
+                # workflow. Nasce 'interrupted' (desfecho honesto se o processo morrer em voo); o recover() dos workflows
+                # só toca tentativas 'running' e rebaixaria o workflow aprovado. create_hermes promove no final.
+                db.execute("""INSERT INTO jobs(id,idempotency_key,payload,status,created_at,updated_at,workflow_id,workflow_revision)
+                    VALUES(?,?,?,'interrupted',?,?,?,?)""",
+                           (job_id, "script:" + attempt_id, '{}', timestamp, timestamp, workflow_id, request.expected_revision))
                 db.execute("""INSERT INTO job_attempts(id,job_id,number,status,executor,input_hash,input_artifacts,started_at)
-                    VALUES(?,?,1,'running','script.hermes',?,?,?)""", (attempt_id, job_id, digest(envelope.model_dump()), encode([artifact["id"]]), timestamp))
+                    VALUES(?,?,1,'interrupted','script.hermes',?,?,?)""", (attempt_id, job_id, digest(envelope.model_dump()), encode([artifact["id"]]), timestamp))
                 db.execute("""INSERT INTO authorizations(id,workflow_id,revision,job_id,input_artifact_id,scope,max_runs,
                     operator_id,idempotency_key,request,consumed_attempt_id,created_at) VALUES(?,?,?,?,?,'cognitive_run',1,'local-operator',?,?,?,?)""",
                     (uuid.uuid4().hex, workflow_id, request.expected_revision, job_id, artifact["id"], "script:" + key, encoded, attempt_id, timestamp))
@@ -275,6 +281,68 @@ class ScriptService:
                                (encode({"failed": True}), f"generate:{workflow_id}", key))
                 db.execute("UPDATE job_attempts SET status=?,error=?,finished_at=? WHERE id=?", (status, error, now(), attempt_id))
                 db.execute("UPDATE jobs SET status=?,error=?,updated_at=? WHERE id=?", (status, error, now(), context["job_id"]))
+
+    def reconcile_hermes(self, workflow_id, expected_revision):
+        """Conciliação técnica: segue a MESMA execução remota registrada (mesma chave, mesmo corpo).
+
+        Mesmo padrão de `WorkflowService.reconcile`/`HermesStages.analysis(resume_run)`: nunca cria nova
+        execução nem nova reserva. Resultado válido vira roteiro; falha definitiva fecha o recibo (gasto já
+        contabilizado pela reserva/uso) e só uma nova autorização humana (nova chave) libera outra tentativa;
+        desfecho ainda desconhecido mantém o recibo pendente e pode ser conciliado de novo.
+        """
+        from .security import require_secure
+        from .workflow_hermes import HermesStages, CognitiveFailure, CognitiveUnknown
+        if self.settings.workflow_executor != "hermes":
+            raise WorkflowConflict("Executor Hermes não selecionado pelo operador.")
+        scope = f"generate:{workflow_id}"
+        with self.store.connect() as db:
+            workflow = WorkflowService._require(db, workflow_id)
+            if workflow["revision"] != expected_revision:
+                raise WorkflowConflict("Somente a revisão atual pode ser conciliada.")
+            receipt = db.execute("SELECT * FROM script_receipts WHERE scope=? AND response=?",
+                                 (scope, encode({"pending": True}))).fetchone()
+            if receipt is None:
+                done = db.execute("""SELECT * FROM scripts WHERE workflow_id=? AND workflow_revision=? AND generator='hermes'
+                    ORDER BY version DESC LIMIT 1""", (workflow_id, expected_revision)).fetchone()
+                if done:  # conciliação repetida: devolve o resultado já aplicado, sem tocar no Hermes
+                    return self._record(done), False
+                raise WorkflowConflict("Não há execução de roteiro pendente nesta revisão.")
+            key, encoded = receipt["idempotency_key"], receipt["request"]
+            run = db.execute("""SELECT r.* FROM cognitive_runs r JOIN authorizations a ON a.job_id=r.job_id
+                WHERE a.workflow_id=? AND a.idempotency_key=? ORDER BY r.created_at DESC LIMIT 1""",
+                             (workflow_id, "script:" + key)).fetchone()
+            if run is None:
+                raise WorkflowConflict("Execução pendente sem registro de envio; intervenção técnica necessária.")
+            run = dict(run)
+        require_secure(self.settings)
+        request = HermesScriptRequest.model_validate(json.loads(encoded))
+        attempt_id, job_id = run["attempt_id"], run["job_id"]
+        context = {"script_envelope": json.loads(json.loads(run["request"])["input"]), "resume_run": run,
+                   "job_id": job_id, "workflow_id": workflow_id, "revision": expected_revision}
+        status, error, final = "failed", "Conciliação de roteiro interrompida.", False
+        try:
+            document = asyncio.run(HermesStages(self.store, self.settings).analysis(context, attempt_id, lambda: False))
+            try:
+                result = self.create(workflow_id, request, key, _document=document)
+            except WorkflowConflict as conflict:
+                # Resultado válido e já pago, mas o workflow não aceita mais o roteiro: fechar sem aplicar.
+                error, final = f"Resultado não aplicável: {conflict}", True
+                raise WorkflowConflict(error) from None
+            status, error = "succeeded", None
+            return result
+        except CognitiveFailure as failure:
+            error, final = str(failure), True
+            raise WorkflowConflict(error) from None
+        except CognitiveUnknown as failure:
+            error = str(failure)
+            raise WorkflowConflict(error) from None
+        finally:
+            with self.store.connect() as db:
+                if final and status == "failed":
+                    db.execute("UPDATE script_receipts SET response=? WHERE scope=? AND idempotency_key=?",
+                               (encode({"failed": True}), scope, key))
+                db.execute("UPDATE job_attempts SET status=?,error=?,finished_at=? WHERE id=?", (status, error, now(), attempt_id))
+                db.execute("UPDATE jobs SET status=?,error=?,updated_at=? WHERE id=?", (status, error, now(), job_id))
 
     def new_version(self, script_id, request: ScriptVersionRequest, key):
         """Versão N+1 escrita pelo usuário; nunca aprova: a decisão continua em `review`."""
