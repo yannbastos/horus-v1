@@ -24,20 +24,25 @@ _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.yout
 
 def is_youtube_url(value: str) -> bool:
     """Mesma regra do desktop Avalonia: somente vídeo único, HTTPS e sem credenciais."""
+    # urlsplit remove TAB/CR/LF silenciosamente. Valide o valor que será enviado
+    # ao downloader, sem aceitar um endereço diferente após essa normalização.
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
     try:
         url = urlsplit(value)
+        if url.scheme != "https" or url.username is not None or url.password is not None or url.port is not None:
+            return False
     except ValueError:
-        return False
-    if url.scheme != "https" or url.username or url.password or url.port:
+        # A propriedade port também lança ValueError para portas inválidas.
         return False
     if url.hostname == "youtu.be":
-        return bool(_VIDEO_ID.match(url.path.strip("/")))
+        return bool(_VIDEO_ID.fullmatch(url.path.strip("/")))
     if url.hostname not in _YOUTUBE_HOSTS:
         return False
     parts = [part for part in url.path.split("/") if part]
     if len(parts) == 2 and parts[0] in {"shorts", "live", "embed"}:
-        return bool(_VIDEO_ID.match(parts[1]))
-    return url.path == "/watch" and any(_VIDEO_ID.match(v) for v in parse_qs(url.query).get("v", []))
+        return bool(_VIDEO_ID.fullmatch(parts[1]))
+    return url.path == "/watch" and any(_VIDEO_ID.fullmatch(v) for v in parse_qs(url.query).get("v", []))
 
 
 def emit(kind: str, message: str):
