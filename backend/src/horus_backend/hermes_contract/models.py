@@ -20,7 +20,7 @@ Text = Annotated[str, Field(min_length=1, max_length=4000)]
 # Texto livre enviado ao Hermes nunca carrega caminho local nem credencial: rejeitado, não higienizado
 # (mesma regra do envelope de `script`).
 _PRIVATE_TEXT = re.compile(
-    r"([A-Za-z]:[\\/]|\\\\[\w.$-]+\\|file://|(?<![\w.])/(?:Users|home|etc|var|mnt)/|~[\\/]"
+    r"((?<![A-Za-z])[A-Za-z]:[\\/]|\\\\[\w.$-]+\\|file://|(?<![\w.])/(?:Users|home|etc|var|mnt)/|~[\\/]"
     r"|\bBearer\s+\S{8,}|\bsk-[A-Za-z0-9_-]{16,}|\b(?:api[_-]?key|secret|token|password|senha)\s*[:=])",
     re.IGNORECASE)
 

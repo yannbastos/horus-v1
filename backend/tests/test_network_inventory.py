@@ -30,7 +30,7 @@ NETWORK_CALLS = {"open_connection", "open_unix_connection", "start_server", "cre
                  "system", "popen", "Popen", "check_output", "check_call", "from_pretrained", "snapshot_download",
                  "hf_hub_download", "WhisperModel", "KPipeline", "KModel"}
 # `subprocess.run/call` e `OwnedProcess.start` são tratados abaixo (nome qualificado), para não pegar `.run` genérico.
-PROCESS_QUALIFIED = {"subprocess.run", "subprocess.call", "OwnedProcess.start"}
+PROCESS_QUALIFIED = {"subprocess.run", "subprocess.call", "OwnedProcess.start", "run_sync"}
 DYNAMIC_IMPORTS = {"__import__", "import_module"}
 FOREIGN_TEXT = re.compile(r"(?<![\w.])fetch\(|node:(?:net|http|https|dns|tls)|require\(['\"](?:net|http|https|dns|tls)['\"]\)")
 URL = re.compile(r"https?://([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9a-z]*)?(?![A-Za-z0-9.-])", re.I)
@@ -93,7 +93,7 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "import:faster_whisper": "F-04", "call:WhisperModel": "F-04", "import:ctranslate2": "F-04", "import:subprocess": "F-05", "import:yt_dlp": "F-05", "call:subprocess.call": "F-05"},
     "jobs.py": {  # F-04/F-05/F-12 workers de tarefa herdam o ambiente completo
         "call:OwnedProcess.start": "F-04"},
-    "processes.py": {"call:create_subprocess_exec": "F-11"},  # F-11 lançador único de processos possuídos
+    "processes.py": {"call:create_subprocess_exec": "F-11", "call:Popen": "F-11", "import:subprocess": "F-11"},  # F-11 lançador único de processos possuídos
     "__main__.py": {"import:socket": "F-10", "import:uvicorn": "F-10"},  # F-10 API local em 127.0.0.1
     "narration/kokoro_worker.py": {  # F-07 Kokoro offline com bloqueio de socket
         "import:socket": "F-07", "import:kokoro": "F-07", "call:KModel": "F-07", "call:KPipeline": "F-07"},
@@ -107,7 +107,7 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "url:openfontlicense.org": "F-11"},
     "production.py": {"call:OwnedProcess.start": "F-12"},
     "av_quality.py": {"call:OwnedProcess.start": "F-13"},
-    "publishing.py": {"import:subprocess": "F-19", "call:subprocess.run": "F-19"},
+    "publishing.py": {"import:subprocess": "F-19", "call:run_sync": "F-19"},
     "production_worker.py": {  # F-12 render Remotion offline com auditoria de rede
         "import:http.server": "F-12", "import:socket": "F-12", "import:subprocess": "F-12", "call:subprocess.run": "F-12",
         "embedded_js_network:fetch/net/http": "F-12"},
@@ -117,7 +117,7 @@ ALLOWLIST: dict[str, dict[str, str]] = {
     "radar_workflow.py": {"url:example.org": "F-16"},  # URL fictícia de fixture simulada
     "radar_youtube/collector.py": {"url:www.youtube.com": "F-03"},  # só monta links de registros públicos
 }
-ALLOWLIST["narration/providers.py"]["call:subprocess.run"] = "F-08"
+ALLOWLIST["narration/providers.py"]["call:run_sync"] = "F-08"
 
 # Frontend: só o cliente HTTP dos serviços fala com a API local (CSP do Tauri limita connect-src a loopback).
 FRONTEND_FETCH_FILES = {"services/api.ts", "services/narration.ts", "services/production.ts", "services/exports.ts"}  # F-14
