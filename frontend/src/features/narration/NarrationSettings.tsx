@@ -5,6 +5,7 @@ import {
   previewNarration, removeElevenLabsCredential, setDefaultVoice, setElevenLabsCredential,
 } from '../../services/narration';
 import type { CommercialUse, DefaultVoice, NarrationEstimate, NarrationProvider, NarrationVoice, ProviderStatus } from '../../services/narration';
+import { StatusMessage } from '../../components/StatusMessage';
 import './narration.css';
 
 const STATUS: Record<ProviderStatus, { label: string; tone: string }> = {
@@ -123,7 +124,11 @@ function VoiceRow({ connection, provider, voice, text, isDefault, onDefault }: {
       <button className="button primary" aria-pressed={isDefault} onClick={onDefault} aria-label={isDefault ? `Usar ${label} como voz padrão` : `Usar ${label} como voz padrão — USAR COMO PADRÃO`}>{isDefault ? 'VOZ PADRÃO' : 'USAR COMO PADRÃO'}</button>
     </div>
     {previewState !== 'idle' && (
-      <p className={previewState === 'error' ? 'error' : 'muted'} role="status" aria-live="polite">
+      <StatusMessage
+        state={previewState === 'error' ? 'error' : previewState === 'generating' ? 'loading' : 'success'}
+        role="status"
+        ariaLive="polite"
+      >
         Estado da prévia:{' '}
         {previewState === 'generating'
           ? 'gerando áudio…'
@@ -132,10 +137,10 @@ function VoiceRow({ connection, provider, voice, text, isDefault, onDefault }: {
           : previewState === 'paused'
           ? 'pausada / parada'
           : 'erro na prévia'}
-      </p>
+      </StatusMessage>
     )}
-    {voice.preview === 'requires_authorization' && <p className="muted">A prévia desta voz exige autorização por geração e custa créditos. Nenhuma chamada é feita aqui.</p>}
-    {voice.preview === 'unavailable' && <p className="muted">Prévia indisponível para esta voz.</p>}
+    {voice.preview === 'requires_authorization' && <StatusMessage state="empty">A prévia desta voz exige autorização por geração e custa créditos. Nenhuma chamada é feita aqui.</StatusMessage>}
+    {voice.preview === 'unavailable' && <StatusMessage state="empty">Prévia indisponível para esta voz.</StatusMessage>}
     {audio && (
       <audio
         ref={player}
@@ -152,7 +157,7 @@ function VoiceRow({ connection, provider, voice, text, isDefault, onDefault }: {
       />
     )}
     {estimate && <EstimateView estimate={estimate} />}
-    {error && <p className="error" role="alert">{error}</p>}
+    {error && <StatusMessage state="error">{error}</StatusMessage>}
   </li>;
 }
 
@@ -185,7 +190,7 @@ function ElevenLabsCredential({ connection, status }: { connection: Connection; 
       <button className="button primary" type="submit" disabled={busy || !key.trim()}>{configured ? 'SUBSTITUIR CHAVE' : 'SALVAR CHAVE'}</button>
       {configured && <button className="button" type="button" disabled={busy} onClick={() => void remove()}>REMOVER CHAVE</button>}
     </div>
-    {error && <p className="error" role="alert">{error}</p>}
+    {error && <StatusMessage state="error">{error}</StatusMessage>}
   </form>;
 }
 
@@ -246,9 +251,9 @@ function NarrationPanel({ connection }: { connection: Connection | null }) {
       {(() => {
         if (!defaultVoice) {
           return (
-            <p className="muted" role="status">
+            <StatusMessage state="empty" role="status">
               Nenhuma voz padrão salva. Escolha uma voz abaixo com <strong>USAR COMO PADRÃO</strong> (sem preferência, o piloto local usa a primeira voz local disponível).
-            </p>
+            </StatusMessage>
           );
         }
         const matchedProvider = providers?.find(p => p.id === defaultVoice.provider);
@@ -257,14 +262,14 @@ function NarrationPanel({ connection }: { connection: Connection | null }) {
           ? `${matchedVoice.name} (${matchedProvider.name}) — `
           : '';
         return (
-          <p role="status">
+          <StatusMessage state="success" tone="plain">
             <strong>Voz padrão atual:</strong> {friendly}{defaultVoice.provider} / {defaultVoice.voice_id}
-          </p>
+          </StatusMessage>
         );
       })()}
-      {defaultMessage && <p role="status">{defaultMessage}</p>}
-      {loading && <p role="status">Carregando provedores…</p>}
-      {error && <p className="error" role="alert">{error}</p>}
+      {defaultMessage && <StatusMessage state="success" tone="plain">{defaultMessage}</StatusMessage>}
+      {loading && <StatusMessage state="loading">Carregando provedores…</StatusMessage>}
+      {error && <StatusMessage state="error">{error}</StatusMessage>}
     </section>
     {providers?.map(provider => {
       const status = STATUS[provider.status];
@@ -277,7 +282,7 @@ function NarrationPanel({ connection }: { connection: Connection | null }) {
         {provider.native_word_timestamps && <p className="muted">Este provedor entrega timestamps próprios. Eles são evidência adicional: o alinhamento acústico continua sendo a medição.</p>}
         {provider.requires_authorization && <p className="narration-warning" role="note">Uso pago: cada geração exige autorização explícita com o custo estimado. Prévias não são geradas sem autorização.</p>}
         {provider.id === 'elevenlabs' && <ElevenLabsCredential key={provider.status} connection={connection} status={provider.status} />}
-        {voices.length === 0 ? <p className="muted">Nenhuma voz para o idioma selecionado.</p>
+        {voices.length === 0 ? <StatusMessage state="empty">Nenhuma voz para o idioma selecionado.</StatusMessage>
           : <ul aria-label={`Vozes de ${provider.name}`}>{voices.map(voice => <VoiceRow key={voice.id} connection={connection} provider={provider} voice={voice} text={text}
             isDefault={defaultVoice?.provider === provider.id && defaultVoice.voice_id === voice.id} onDefault={() => void chooseDefault(provider, voice)} />)}</ul>}
       </section>;

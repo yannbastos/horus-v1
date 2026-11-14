@@ -9,8 +9,10 @@ export interface StatusMessageProps {
   eyebrow?: string;
   /** Papel ARIA explícito; usa padrão semântico por estado ('alert' para error, 'status' para loading/success). */
   role?: 'status' | 'alert';
-  /** Tom visual opcional para o estado 'success' ('muted' padrão ou 'good'). */
-  tone?: 'muted' | 'good';
+  /** Política de anúncio dinâmico ARIA ('polite' padrão quando state === 'loading'). */
+  ariaLive?: 'polite' | 'assertive' | 'off';
+  /** Tom visual opcional ('muted' padrão, 'good' para destaque positivo ou 'plain' sem classe de tom). */
+  tone?: 'muted' | 'good' | 'plain';
   /** Estilo inline opcional quando necessário para espaçamento local. */
   style?: CSSProperties;
   /** Identificador de teste opcional. */
@@ -27,6 +29,7 @@ export function StatusMessage({
   state,
   eyebrow,
   role,
+  ariaLive,
   tone = 'muted',
   style,
   testId,
@@ -34,17 +37,7 @@ export function StatusMessage({
 }: StatusMessageProps) {
   const resolvedRole =
     role ?? (state === 'error' ? 'alert' : state === 'loading' || state === 'success' ? 'status' : undefined);
-
-  if (eyebrow) {
-    return (
-      <div className="fact-item" role={resolvedRole} style={style} data-testid={testId}>
-        <p className="eyebrow">{eyebrow}</p>
-        <p className={state === 'error' ? 'error' : state === 'loading' ? 'loading' : tone === 'good' ? 'good' : 'muted'}>
-          {children}
-        </p>
-      </div>
-    );
-  }
+  const resolvedAriaLive = ariaLive ?? (state === 'loading' ? 'polite' : undefined);
 
   const className =
     state === 'error'
@@ -53,10 +46,33 @@ export function StatusMessage({
         ? 'loading'
         : tone === 'good'
           ? 'good'
-          : 'muted';
+          : tone === 'plain'
+            ? undefined
+            : 'muted';
+
+  if (eyebrow) {
+    return (
+      <div
+        className="fact-item"
+        role={resolvedRole}
+        aria-live={resolvedAriaLive}
+        style={style}
+        data-testid={testId}
+      >
+        <p className="eyebrow">{eyebrow}</p>
+        <p className={className}>{children}</p>
+      </div>
+    );
+  }
 
   return (
-    <p className={className} role={resolvedRole} style={style} data-testid={testId}>
+    <p
+      className={className}
+      role={resolvedRole}
+      aria-live={resolvedAriaLive}
+      style={style}
+      data-testid={testId}
+    >
       {children}
     </p>
   );

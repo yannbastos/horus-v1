@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import type { Connection, HermesStatus } from '../services/api';
 import { connectDesktop, nativeDesktop } from '../platform/desktop';
+import { StatusMessage } from '../components/StatusMessage';
 import PrivacySecurity from './PrivacySecurity';
 import NarrationSettings from './narration/NarrationSettings';
 
@@ -68,8 +69,8 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
   return <section className="card" aria-label="Diagnóstico do ambiente"><p className="eyebrow">AMBIENTE LOCAL</p><h2>Ferramentas da operação.</h2>
     <p className="muted">{report?.notice ?? 'Consulta somente a presença das ferramentas no ambiente do backend.'}</p>
     <button className="button" disabled={loading} onClick={() => setRevision(value => value + 1)}>VERIFICAR NOVAMENTE</button>
-    {loading && <p role="status" aria-live="polite">Verificando ferramentas…</p>}
-    {error && <p className="error" role="alert">{error}</p>}
+    {loading && <StatusMessage state="loading" ariaLive="polite">Verificando ferramentas…</StatusMessage>}
+    {error && <StatusMessage state="error">{error}</StatusMessage>}
     {production && (
       <div
         className="card sunken"
@@ -86,7 +87,10 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
             {production.ready ? 'PRONTO PARA PRODUZIR' : `FALTA (${production.missing.length})`}
           </span>
         </div>
-        <p className="muted" data-testid="production-readiness-summary">
+        <StatusMessage
+          state={production.ready ? 'success' : 'empty'}
+          testId="production-readiness-summary"
+        >
           {production.ready
             ? missingNames.length > 0
               ? `Pronto para produzir no piloto local. Item opcional indisponível: ${missingNames.join(', ')}.`
@@ -94,7 +98,7 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
             : missingNames.length > 0
               ? `Falta configurar (${missingNames.length}): ${missingNames.join(', ')}.`
               : 'Falta concluir a configuração das ferramentas obrigatórias para produzir.'}
-        </p>
+        </StatusMessage>
         <ul className="readiness-checks" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}>
           {production.checks.map(check => (
             <li
@@ -202,7 +206,7 @@ export default function Settings({ theme, setTheme, connect, connection, hermes,
         <section className="card"><p className="eyebrow">CONEXÃO LOCAL</p><h2>{connection ? 'Backend disponível.' : 'Conecte seu espaço de trabalho.'}</h2><p className="muted">{nativeDesktop ? 'O aplicativo gerencia o backend local. Credenciais de conexão ficam somente na memória desta sessão.' : 'No navegador, você pode conectar um backend iniciado separadamente. A versão desktop faz essa conexão automaticamente.'}</p>
           {!nativeDesktop && <form onSubmit={event => { event.preventDefault(); void manualConnect(); }}><label>Endereço local<input value={url} onChange={e => setUrl(e.target.value)} autoComplete="off" /></label><label>Token da sessão<input type="password" value={token} onChange={e => setToken(e.target.value)} autoComplete="off" /></label><button className="button primary" type="submit" disabled={token.length < 24}>CONECTAR BACKEND</button></form>}
           {nativeDesktop && <button className="button" disabled={connecting} onClick={() => void reconnect()}>RECONECTAR BACKEND</button>}
-          {message && <p role="status">{message}</p>}
+          {message && <StatusMessage state="success" tone="plain">{message}</StatusMessage>}
         </section>
         <HermesIntegration connection={connection} report={hermes} onStatus={onHermesStatus} />
         {connection && <EnvironmentDiagnostics connection={connection} />}
@@ -236,8 +240,8 @@ function HermesIntegration({ connection, report, onStatus }: {
       {report.features.length > 0 && <p className="muted">API anuncia: {report.features.map(name => ({ run_submission: 'execuções', responses_api: 'respostas', chat_completions: 'chat' }[name] ?? name)).join(', ')}. A orquestração audiovisual ainda será integrada.</p>}
     </>}
     <button className="button primary" disabled={!connection || busy} onClick={() => void verify()}>{busy ? 'VERIFICANDO HERMES…' : 'VERIFICAR CONEXÃO HERMES'}</button>
-    {!connection && <p className="muted">Conecte o backend local primeiro.</p>}
-    {report && !report.configured && <p className="muted">A conexão precisa ser preparada neste computador antes da verificação.</p>}
-    {error && <p className="error" role="alert">{error}</p>}
+    {!connection && <StatusMessage state="empty">Conecte o backend local primeiro.</StatusMessage>}
+    {report && !report.configured && <StatusMessage state="empty">A conexão precisa ser preparada neste computador antes da verificação.</StatusMessage>}
+    {error && <StatusMessage state="error">{error}</StatusMessage>}
   </section>;
 }
