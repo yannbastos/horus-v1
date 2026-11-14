@@ -146,7 +146,8 @@ fn launch_backend(app: &AppHandle) -> Result<OwnedBackend, String> {
         #[cfg(windows)]
         _job: native_job,
     };
-    let line = receiver.recv_timeout(Duration::from_secs(15)).map_err(|_| "O backend não ficou pronto em 15 segundos.")?;
+    // Primeira execução do pacote pode incluir inspeção do antivírus e cache frio.
+    let line = receiver.recv_timeout(Duration::from_secs(45)).map_err(|_| "O backend não ficou pronto em 45 segundos.")?;
     let ready: serde_json::Value = serde_json::from_str(&line).map_err(|_| "Resposta de inicialização inválida.")?;
     if ready["event"] != "ready" { return Err("O backend não confirmou a inicialização.".into()); }
     backend.port = ready["port"].as_u64().filter(|p| *p > 0 && *p <= 65535).ok_or("Porta local inválida.")? as u16;
