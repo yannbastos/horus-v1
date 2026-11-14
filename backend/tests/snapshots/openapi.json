@@ -359,6 +359,39 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HermesScriptRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authorize": {
+            "const": true,
+            "title": "Authorize",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "proposal_artifact_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Proposal Artifact Id",
+            "type": "string"
+          },
+          "source": {
+            "const": "hermes",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize",
+          "expected_revision",
+          "proposal_artifact_id",
+          "source"
+        ],
+        "title": "HermesScriptRequest",
+        "type": "object"
+      },
       "LicenseReviewRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2593,6 +2626,55 @@
         "summary": "Inspect Security"
       }
     },
+    "/v1/security/transmissions": {
+      "get": {
+        "description": "Registro append-only de envios ao Hermes: somente metadados (tamanho/SHA-256), nunca conteúdo.",
+        "operationId": "list_transmissions_v1_security_transmissions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Transmissions"
+      }
+    },
     "/v1/shutdown": {
       "post": {
         "operationId": "stop_v1_shutdown_post",
@@ -3214,6 +3296,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/ManualScriptRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/HermesScriptRequest"
                   }
                 ],
                 "title": "Request"
@@ -3243,6 +3328,54 @@
           }
         },
         "summary": "Generate Script"
+      }
+    },
+    "/v1/workflows/{workflow_id}/scripts/reconcile": {
+      "post": {
+        "description": "Conciliação de roteiro Hermes com desfecho desconhecido; nunca reenvia nem cria nova reserva.",
+        "operationId": "reconcile_script_v1_workflows__workflow_id__scripts_reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Script"
       }
     }
   }
