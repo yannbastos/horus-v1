@@ -3,7 +3,7 @@
 Requer Pillow (sem instalação/download implícito). A fonte OFL é aberta diretamente
 pelo FreeType/Pillow, somente neste processo; não é instalada no sistema.
   python scripts/prototipos/cenas_opcao_a.py
-  python scripts/prototipos/cenas_opcao_a.py --output ../relatorios/PROTOTIPOS-CENAS-2026-11-14
+  python scripts/prototipos/cenas_opcao_a.py --output "C:/00. Projetos/01. HORUS/relatorios/PROTOTIPOS-CENAS-2026-11-14"
 
 Gera seis cenas 1080×1920 (três modelos × dois conteúdos), seis cópias com guias,
 uma visão geral e um manifesto de hashes/proveniência, todos fora do Git do Hórus.
@@ -81,14 +81,13 @@ class Canvas:
         self.draw.rectangle((0, 0, 24, H), fill=rgba('AccentInk'))
         self.draw.ellipse((650, -300, 1430, 480), outline=rgba('LineStrong'), width=2)
         self.draw.line((160, 225, 920, 225), fill=rgba('LineStrong'), width=2)
-        self.text(label, (190, 275, 890, 320), 23, 'AccentInk')
-        self.text(title, (190, 350, 890, 520), 63)
-        self.text(subtitle, (190, 540, 890, 625), 27, 'Muted')
-        self.text('PROTÓTIPO VISUAL • ILUSTRAÇÃO ORIGINAL', (225, 1650, 855, 1690), 19, 'Muted', center=True)
+        # Bloco 380..1080: 69% da área segura 183..1200, acima das legendas.
+        self.text(title, (150, 380, 930, 580), 72)
+        self.text('PROTÓTIPO', (225, 1650, 855, 1695), 24, 'Muted', center=True)
 
     def text(self, value, box, size, color='Ink', center=False):
         x0, y0, x1, y1 = box
-        for current in range(size, 17, -1):
+        for current in range(size, size - 1, -1):
             face = font(current)
             lines = []
             for paragraph in value.split('\n'):
@@ -148,63 +147,65 @@ def pictogram(draw, kind, x, y, color):
 def flow(variant):
     if variant == 'a':
         title, subtitle = 'Da dúvida ao\naprendizado.', 'Um método simples para o cotidiano.'
-        details = ('Olhar com atenção', 'Fazer uma experiência', 'Conferir o que mudou')
+        details = ('Olhar com atenção', 'Experimentar', 'Conferir mudanças')
     else:
-        title, subtitle = 'Antes de escolher,\ncompare.', 'Aplicação: uma decisão de compra.'
-        details = ('Entender a necessidade', 'Comparar alternativas', 'Rever a escolha')
+        title, subtitle = 'Antes de\nescolher.', 'Aplicação: uma decisão de compra.'
+        details = ('Entender o objetivo', 'Comparar opções', 'Rever a escolha')
     scene = Canvas('01 / FLUXO • ' + variant.upper(), title, subtitle)
     for index, (name, detail, kind) in enumerate(zip(('Observar', 'Testar', 'Revisar'), details, ('observe', 'test', 'review'))):
-        y = 665 + index * 140
-        scene.panel((190, y, 890, y + 120))
-        pictogram(scene.draw, kind, 220, y + 25, rgba('AccentInk'))
-        scene.text(name, (325, y + 17, 860, y + 61), 36)
-        scene.text(detail, (325, y + 72, 860, y + 108), 23, 'Muted')
+        y = 610 + index * 160
+        scene.panel((150, y, 930, y + 145))
+        icon = Image.new('RGBA', (90, 90))
+        pictogram(ImageDraw.Draw(icon), kind, 5, 5, rgba('AccentInk'))
+        scene.image.alpha_composite(icon.resize((140, 140), Image.Resampling.LANCZOS), (175, y + 3))
+        scene.text(name, (345, y + 18, 905, y + 78), 44)
+        scene.text(detail, (345, y + 87, 905, y + 133), 32, 'Muted')
         if index < 2:
-            scene.draw.line((540, y + 121, 540, y + 134), fill=rgba('AccentInk'), width=3)
-            scene.draw.polygon(((535, y + 132), (545, y + 132), (540, y + 139)), fill=rgba('AccentInk'))
+            scene.draw.line((540, y + 146, 540, y + 154), fill=rgba('AccentInk'), width=3)
+            scene.draw.polygon(((535, y + 152), (545, y + 152), (540, y + 159)), fill=rgba('AccentInk'))
     return scene
 
 
 def comparison(variant):
     if variant == 'a':
         title, subtitle = 'Palpite ou\nevidência?', 'Comparação qualitativa • sem escala numérica.'
-        names, rows = ('Sem registro', 'Com registro'), (('Palpite', 'Dúvida', 'Repetição'), ('Evidência', 'Contexto', 'Revisão'))
+        names, rows = ('Sem\nregistro', 'Com\nregistro'), (('Palpite', 'Dúvida', 'Repetição'), ('Evidência', 'Contexto', 'Revisão'))
     else:
-        title, subtitle = 'A primeira ideia\npode evoluir.', 'Aplicação: revisão de um trabalho.'
-        names, rows = ('Rascunho', 'Com revisão'), (('Primeiro olhar', 'Uma hipótese', 'Em aberto'), ('Contraste', 'Pergunta clara', 'Outro olhar'))
+        title, subtitle = 'Uma ideia\npode evoluir.', 'Aplicação: revisão de um trabalho.'
+        names, rows = ('Rascunho', 'Com\nrevisão'), (('Ideia inicial', 'Hipótese', 'Em aberto'), ('Contraste', 'Pergunta', 'Outro olhar'))
     scene = Canvas('02 / COMPARAÇÃO • ' + variant.upper(), title, subtitle)
-    for side, x in enumerate((190, 550)):
-        scene.panel((x, 665, x + 340, 1080))
+    for side, x in enumerate((150, 550)):
+        scene.panel((x, 610, x + 380, 1080))
         tone = 'Muted' if side == 0 else 'Good'
-        scene.text(names[side], (x + 25, 691, x + 315, 755), 29, tone, center=True)
+        scene.text(names[side], (x + 20, 635, x + 360, 755), 44, tone, center=True)
         # Dispersão × organização, sem barras que possam sugerir resultados medidos.
-        points = [(x + 57, 810), (x + 128, 845), (x + 233, 789)] if side == 0 else [(x + 67, 816), (x + 168, 816), (x + 269, 816)]
+        points = [(x + 67, 810), (x + 155, 845), (x + 293, 789)] if side == 0 else [(x + 67, 816), (x + 190, 816), (x + 313, 816)]
         if side:
             scene.draw.line(points, fill=rgba(tone), width=3)
         for px, py in points:
-            scene.draw.ellipse((px - 9, py - 9, px + 9, py + 9), fill=rgba(tone))
+            scene.draw.ellipse((px - 15, py - 15, px + 15, py + 15), fill=rgba(tone))
         for index, text in enumerate(rows[side]):
-            scene.text(text, (x + 25, 898 + index * 54, x + 315, 942 + index * 54), 26, center=True)
+            scene.text(text, (x + 15, 898 + index * 56, x + 365, 944 + index * 56), 32, center=True)
     return scene
 
 
 def concept(variant):
     title, subtitle, word, closing = (
-        ('Uma pergunta\nmuda o olhar.', 'Conhecimento começa com curiosidade.', 'EVIDÊNCIA', 'Observar antes de concluir.') if variant == 'a' else
-        ('Um número não\nexplica tudo.', 'Interpretar também é relacionar.', 'CONTEXTO', 'Compare antes de decidir.'))
+        ('Perguntar\nmuda o olhar.', 'Conhecimento começa com curiosidade.', 'EVIDÊNCIA', 'Observar antes de concluir.') if variant == 'a' else
+        ('Números pedem\ncontexto.', 'Interpretar também é relacionar.', 'CONTEXTO', 'Compare antes de decidir.'))
     scene = Canvas('03 / CONCEITO • ' + variant.upper(), title, subtitle)
-    scene.panel((190, 665, 890, 1080))
+    scene.panel((150, 610, 930, 1080))
     if variant == 'a':
         # Lente original ampliada em torno de um ponto: metáfora de observação.
-        scene.draw.ellipse((444, 710, 596, 862), outline=rgba('AccentInk'), width=7)
-        scene.draw.line((574, 840, 630, 896), fill=rgba('AccentInk'), width=11)
-        scene.draw.ellipse((508, 774, 532, 798), fill=rgba('Good'))
+        scene.draw.ellipse((420, 650, 640, 870), outline=rgba('AccentInk'), width=7)
+        scene.draw.line((608, 838, 676, 906), fill=rgba('AccentInk'), width=11)
+        scene.draw.ellipse((512, 742, 548, 778), fill=rgba('Good'))
     else:
-        for index, offset in enumerate((0, 20, 40)):
-            scene.draw.rectangle((434 + offset, 718 + offset, 584 + offset, 826 + offset),
+        for index, offset in enumerate((0, 30, 60)):
+            scene.draw.rectangle((405 + offset, 650 + offset, 615 + offset, 805 + offset),
                                  fill=rgba('Sunken'), outline=rgba('AccentInk'), width=4)
-    scene.text(word, (220, 914, 860, 995), 66, 'AccentInk', center=True)
-    scene.text(closing, (225, 1013, 855, 1055), 25, center=True)
+    scene.text(word, (180, 920, 900, 1018), 72, 'AccentInk', center=True)
+    scene.text(closing, (175, 1024, 905, 1070), 32, center=True)
     return scene
 
 
@@ -233,8 +234,6 @@ def guide(scene):
         draw.text((530, 1405 + index * 77), line, anchor='mt', font=font(58), fill=rgba('InkStrong'))
     draw.text((125, 80), 'CÓPIA DE REVISÃO • NÃO USAR COMO ASSET', font=font(23), fill=rgba('Ink'))
     draw.text((125, 137), 'MOLDURA COMUM: ZOOM 1,15× + PAN 3%', font=font(22), fill=rgba('Warn'))
-    draw.text((125, 1767), 'Visível nas quatro direções do Ken Burns.', font=font(23), fill=rgba('Ink'))
-    draw.text((125, 1815), 'A faixa não reproduz métricas exatas do libass.', font=font(20), fill=rgba('Muted'))
     return Image.alpha_composite(image, layer)
 
 
@@ -245,7 +244,7 @@ def sha(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, default=ROOT.parent / 'relatorios/PROTOTIPOS-CENAS-2026-11-14')
+    parser.add_argument('--output', type=Path, default=Path('C:/00. Projetos/01. HORUS/relatorios/PROTOTIPOS-CENAS-2026-11-14'))
     args = parser.parse_args()
     output = args.output.resolve()
     if output.is_relative_to(ROOT):
