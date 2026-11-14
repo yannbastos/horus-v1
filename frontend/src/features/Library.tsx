@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import type { Connection, Media } from '../services/api';
 import { nativeDesktop, selectDirectory, selectMedia } from '../platform/desktop';
 import { SectionHeader, sections } from '../components/Sections';
+import { StatusMessage } from '../components/StatusMessage';
 
 export default function Library({ connection }: { connection: Connection | null }) {
   const [media, setMedia] = useState<Media[]>([]);
@@ -34,7 +35,7 @@ export default function Library({ connection }: { connection: Connection | null 
       if (blob.current) URL.revokeObjectURL(blob.current);
       blob.current = URL.createObjectURL(file); setPlaying({ name: file.name, url: blob.current }); setError('');
     }} />
-    {error && <p className="error" role="alert">{error}</p>}
+    {error && <StatusMessage state="error">{error}</StatusMessage>}
     {playing && <section className="card player"><div className="row spread"><h3>{playing.name}</h3><button className="button" onClick={() => setPlaying(null)}>FECHAR PRÉVIA</button></div><video key={playing.url} controls preload="metadata" src={playing.url} onError={() => setError('Não foi possível reproduzir este formato. Tente um MP4 H.264/AAC ou WebM compatível.')} /></section>}
     {media.length ? <section className="media-list" aria-label="Arquivos registrados">{media.map(item => <button className="card media-item" key={item.id} onClick={() => { setError(''); setPlaying({ name: item.name, url: connection!.baseUrl + item.stream_path }); }}><strong>{item.name}</strong><span className="muted">{(item.size / 1024 / 1024).toFixed(1)} MB · Abrir prévia</span></button>)}</section>
       : <div className="empty-state"><span className="tag">ARQUIVOS LOCAIS</span><h2>Traga a mídia da sua próxima produção.</h2><p className="muted">Selecione um vídeo para abrir a prévia. No desktop, arquivos registrados ficam disponíveis novamente após reiniciar.</p></div>}

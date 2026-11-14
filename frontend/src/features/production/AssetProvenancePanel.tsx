@@ -5,6 +5,7 @@ import type { NormalizedAssetProvenance } from '../../services/production';
 import { getLicenseReviews } from '../../services/licenseReviews';
 import type { LicenseReview } from '../../services/licenseReviews';
 import { describeLicenseReviewError } from '../../services/licenseReviews';
+import { StatusMessage } from '../../components/StatusMessage';
 import AssetReviewForm from './AssetReviewForm';
 
 export default function AssetProvenancePanel({
@@ -140,12 +141,12 @@ export default function AssetProvenancePanel({
       )}
 
       {assetProvenance.assets.length === 0 ? (
-        <p className="muted">
+        <StatusMessage state="empty">
           Nenhum asset detalhado em <code>asset-provenance.json</code> para esta produção. Sem
           registro de proveniência validado, todos os direitos permanecem como não verificados (
           <code>unverified</code> · <code>commercial_use: unknown</code> ·{' '}
           <code>publishable: false</code>).
-        </p>
+        </StatusMessage>
       ) : (
         <div className="data-table-container" tabIndex={0}>
           <table
@@ -294,21 +295,23 @@ export default function AssetProvenancePanel({
       >
         <span className="eyebrow accent">VERIFICAÇÃO HUMANA POR ASSET</span>
         {loadError && (
-          <p className="error" role="status">
+          <StatusMessage state="error" role="status">
             {loadError}
-          </p>
+          </StatusMessage>
         )}
         {!connection || !productionId ? (
-          <p className="muted">Sem conexão com o backend: a verificação humana não está disponível.</p>
+          <StatusMessage state="empty">
+            Sem conexão com o backend: a verificação humana não está disponível.
+          </StatusMessage>
         ) : loading && !canReview ? (
-          <p className="loading" role="status">
+          <StatusMessage state="loading">
             Carregando proveniência e licenças desta produção…
-          </p>
+          </StatusMessage>
         ) : !canReview ? (
-          <p className="muted">
+          <StatusMessage state="empty">
             A API não devolveu proveniência efetiva para esta produção; sem <code>asset-provenance.json</code>{' '}
             válido não é possível registrar decisões.
-          </p>
+          </StatusMessage>
         ) : (
           assetProvenance.assets.map(asset => (
             <AssetReviewForm

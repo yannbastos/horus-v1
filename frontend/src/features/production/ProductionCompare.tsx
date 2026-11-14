@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { JobStatus } from '../../services/api';
+import { StatusMessage } from '../../components/StatusMessage';
 import type { ProductionMode, ProductionRecord } from '../../services/production';
 import {
   deriveProductionProvenance,
@@ -267,17 +268,17 @@ export default function ProductionCompare({
       </div>
 
       {productions.length === 1 && (
-        <p className="muted" role="status">
+        <StatusMessage state="empty" role="status">
           Apenas uma produção registrada para este roteiro. Execute outra produção para comparar.
-        </p>
+        </StatusMessage>
       )}
 
       {productions.length >= 2 && (
-        <p className="muted" role="status">
+        <StatusMessage state="success" role="status">
           {selectedIds.length === 2
             ? 'Comparando 2 produções selecionadas abaixo (somente leitura).'
             : `Selecione 2 produções na tabela para comparar (${selectedIds.length}/2 selecionada(s)).`}
-        </p>
+        </StatusMessage>
       )}
 
       <div className="data-table-container">

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, observeJob, terminalStatuses } from '../services/api';
 import type { Connection, FactoryPayload, Job, JobEvent } from '../services/api';
 import { nativeDesktop } from '../platform/desktop';
+import { StatusMessage } from '../components/StatusMessage';
 
 // Transcrições e downloads têm tela própria; aqui ficam somente as operações da fábrica.
 type FactoryJob = Job & { payload: FactoryPayload };
@@ -44,12 +45,12 @@ function JobDetails({ job, connection, refresh }: { job: FactoryJob; connection:
   return <article className="card job-details">
     <div className="row spread"><h3>{job.payload.operation === 'factory.profile' ? 'Consulta de perfil' : 'Render de rascunho'}</h3><span className="tag">{statusLabels[job.status]}</span></div>
     <p className="muted">{job.payload.channel_id}{job.payload.video_id ? ` / ${job.payload.video_id}` : ''} · Tentativa {job.attempt}</p>
-    {!terminalStatuses.includes(job.status) && <p className="muted" role="status">{job.status === 'queued' ? 'Aguardando a execução anterior terminar.' : 'Acompanhando a saída real do processo. Sem percentual estimado.'}</p>}
-    {job.error && <p className="error" role="alert">{job.error}</p>}
+    {!terminalStatuses.includes(job.status) && <StatusMessage state="empty" role="status">{job.status === 'queued' ? 'Aguardando a execução anterior terminar.' : 'Acompanhando a saída real do processo. Sem percentual estimado.'}</StatusMessage>}
+    {job.error && <StatusMessage state="error">{job.error}</StatusMessage>}
     <div className="actions">{!terminalStatuses.includes(job.status)
       ? <button className="button" disabled={busy || job.status === 'cancel_requested'} onClick={() => void control('cancel')}>CANCELAR TAREFA</button>
       : job.status !== 'succeeded' && <button className="button" disabled={busy} onClick={() => void control('retry')}>TENTAR NOVAMENTE</button>}</div>
-    {error && <p className="error" role="alert">{error}</p>}
+    {error && <StatusMessage state="error">{error}</StatusMessage>}
     <details open><summary>Histórico e logs</summary><pre ref={logsRef} className="logs" aria-label="Logs da tarefa">{events.map(event => `${event.kind === 'state' ? 'estado' : event.kind}: ${event.message}`).join('\n') || 'Aguardando eventos…'}</pre></details>
     {job.result != null && <details><summary>Resultado</summary><pre className="logs">{JSON.stringify(job.result, null, 2)}</pre></details>}
   </article>;
@@ -87,7 +88,7 @@ export default function JobWorkspace({ connection }: { connection: Connection | 
     <div className="card"><p className="eyebrow accent">OPERAÇÃO LOCAL</p><h2>Uma etapa por vez.</h2><p className="muted">Consulta de perfil e render de rascunho pelo CLI existente. Nenhuma geração de voz ou publicação é acionada aqui.</p>
       <div className="form-row"><label>Canal<input value={channel} onChange={e => setChannel(e.target.value)} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" maxLength={64} /></label><label>Vídeo para rascunho<input value={video} onChange={e => setVideo(e.target.value)} placeholder="Identificador da pasta do vídeo" maxLength={128} /></label></div>
       <div className="actions"><button className="button primary" disabled={!connection || busy || !channel} onClick={() => void submit('factory.profile')}>CONSULTAR PERFIL</button><button className="button" disabled={!connection || busy || !channel || !video} onClick={() => void submit('factory.render.preview')}>RENDERIZAR RASCUNHO</button></div>
-      {!connection && <p className="muted" role="status">{nativeDesktop ? 'Backend local indisponível. Use RECONECTAR BACKEND em Ajustes.' : 'Conecte o backend local em Ajustes para executar operações.'}</p>}{error && <p className="error" role="alert">{error}</p>}
+      {!connection && <StatusMessage state="empty" role="status">{nativeDesktop ? 'Backend local indisponível. Use RECONECTAR BACKEND em Ajustes.' : 'Conecte o backend local em Ajustes para executar operações.'}</StatusMessage>}{error && <StatusMessage state="error">{error}</StatusMessage>}
     </div>
     {jobs.length > 0 && <div className="job-grid"><div className="job-list" aria-label="Histórico de tarefas">{jobs.map(job => <button key={job.id} className={`job-item ${job.id === selected ? 'selected' : ''}`} onClick={() => setSelected(job.id)}><span>{job.payload.operation === 'factory.profile' ? 'Consulta de perfil' : 'Render de rascunho'}</span><small>{job.payload.channel_id} · {statusLabels[job.status]}</small></button>)}</div>{current && connection && <JobDetails job={current} connection={connection} refresh={refresh} />}</div>}
   </section>;

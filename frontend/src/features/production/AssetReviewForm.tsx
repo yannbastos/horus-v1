@@ -15,6 +15,7 @@ import type {
   LicenseReviewRequest,
   ReviewCommercialUse,
 } from '../../services/licenseReviews';
+import { StatusMessage } from '../../components/StatusMessage';
 
 type FormState = {
   licenseId: string;
@@ -208,9 +209,9 @@ export default function AssetReviewForm({
             </ul>
           )}
           {error && (
-            <p className="error" role="alert">
+            <StatusMessage state="error">
               {error}
-            </p>
+            </StatusMessage>
           )}
 
           {pending ? (
@@ -253,7 +254,7 @@ export default function AssetReviewForm({
       <div role="region" aria-label={`Histórico de decisões do asset ${asset.assetId}`}>
         <span className="eyebrow">HISTÓRICO (APPEND-ONLY)</span>
         {mine.length === 0 ? (
-          <p className="muted">Nenhuma decisão humana registrada.</p>
+          <StatusMessage state="empty">Nenhuma decisão humana registrada.</StatusMessage>
         ) : (
           <ul className="blocker-items-list">
             {mine.map(r => (

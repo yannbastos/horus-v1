@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../services/api';
 import type { Connection } from '../../services/api';
+import { StatusMessage } from '../../components/StatusMessage';
 import {
   computeComposedDescriptionLength,
   createProductionExport,
@@ -422,9 +423,9 @@ export default function ProductionExportPanel({
       </p>
 
       {!isApproved ? (
-        <p className="muted" role="status" data-testid="export-requires-approval">
+        <StatusMessage state="empty" role="status" testId="export-requires-approval">
           Disponível somente após aprovação na revisão humana desta produção.
-        </p>
+        </StatusMessage>
       ) : (
         <>
           {/* (1) Thumbnail 1080x1920 */}
@@ -490,9 +491,9 @@ export default function ProductionExportPanel({
             </div>
 
             {thumbnailError && (
-              <p className="error" role="alert" data-testid="thumbnail-error-alert">
+              <StatusMessage state="error" testId="thumbnail-error-alert">
                 {thumbnailError}
-              </p>
+              </StatusMessage>
             )}
 
             {thumbnailResult && (
@@ -600,9 +601,9 @@ export default function ProductionExportPanel({
             </div>
 
             {metadataLoading ? (
-              <p className="muted" data-testid="metadata-loading">
+              <StatusMessage state="empty" testId="metadata-loading">
                 Carregando rascunho de metadados…
-              </p>
+              </StatusMessage>
             ) : (
               <>
                 <label htmlFor={`metadata-title-${production.id}`} style={{ display: 'grid', gap: 4 }}>
@@ -724,9 +725,9 @@ export default function ProductionExportPanel({
                 </div>
 
                 {metadataError && (
-                  <p className="error" role="alert" data-testid="metadata-error-alert">
+                  <StatusMessage state="error" testId="metadata-error-alert">
                     {metadataError}
-                  </p>
+                  </StatusMessage>
                 )}
 
                 <div className="actions">
@@ -784,21 +785,21 @@ export default function ProductionExportPanel({
           </div>
 
           {exportState === 'generating' && (
-            <p className="muted" role="status" aria-live="polite">
+            <StatusMessage state="empty" role="status" ariaLive="polite">
               Gerando pacote de exportação…
-            </p>
+            </StatusMessage>
           )}
           {exportState === 'ready' && (
-            <p className="good" role="status" aria-live="polite" data-testid="export-ready-status">
+            <StatusMessage state="success" tone="good" ariaLive="polite" testId="export-ready-status">
               {lastRepeated
                 ? 'Pacote pronto (mesma chave de idempotência reutilizada, sem duplicar arquivo).'
                 : 'Pacote pronto para download.'}
-            </p>
+            </StatusMessage>
           )}
           {errorMessage && (
-            <p className="error" role="alert" data-testid="export-error-alert">
+            <StatusMessage state="error" testId="export-error-alert">
               {errorMessage}
-            </p>
+            </StatusMessage>
           )}
 
           {loadingList ? (
