@@ -241,7 +241,7 @@ def test_migration_v9_marks_existing_scripts_as_simulated(settings, monkeypatch)
     migrate(path)
     migrate(path)
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
         assert db.execute("SELECT origin FROM scripts").fetchall() == [("simulated",)]
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("UPDATE scripts SET origin='ai'")
