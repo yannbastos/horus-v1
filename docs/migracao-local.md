@@ -70,6 +70,7 @@ Porte da ferramenta Avalonia, com as mesmas regras: fila de até 20 arquivos, um
 
 - Motor: `faster-whisper` (CTranslate2) no extra opcional `transcription`, executado em subprocesso pela fila de tarefas (`horus-backend transcribe`). A API não importa Whisper. Decodifica áudio com PyAV, sem exigir outro FFmpeg para transcrever. `HORUS_WHISPER_DEVICE` aceita `auto` (padrão), `cpu` e `cuda`; a política de fallback está descrita abaixo. CPU usa int8.
 - Modelos são baixados do Hugging Face no primeiro uso para `HORUS_DATA_DIR/models`. Não são os mesmos arquivos ggml do Avalonia (`%LOCALAPPDATA%/Horus/models`); o primeiro uso baixa novamente.
+- Para usar exclusivamente pesos preparados, configure `HORUS_WHISPER_MODELS_DIR` com uma raiz contendo `small/` ou `faster-whisper-small/` (analogamente para os demais modelos), incluindo `model.bin`, `config.json`, `tokenizer.json` e `vocabulary.txt`. Essa seleção usa `local_files_only=True`, não escreve nessa raiz e falha claramente se o modelo não estiver preparado, sem baixar substituto. `HF_HUB_OFFLINE=1` também é propagado ao subprocesso de transcrição; tokens de Hugging Face não são propagados.
 - `av` fixado em `<14.3`: PyAV 15+ removeu um argumento usado pelo faster-whisper 1.2, e 14.3/14.4 não publicam wheel Windows.
 - Download do YouTube: mesmos argumentos e validação de URL do Avalonia (vídeo único, HTTPS, sem credenciais), via módulo `yt_dlp` do extra ou `yt-dlp` no PATH. Com FFmpeg no PATH, baixa vídeo+áudio separados e mescla em MP4; sem ele, usa o melhor MP4 único.
 - Salvar: no desktop, diálogo nativo (`dialog:allow-save`) e gravação atômica pelo backend (`POST /v1/transcriptions/save`, somente `.txt` em pasta existente). No navegador, baixa o `.txt` pelo próprio navegador. Copiar usa a área de transferência do WebView.
@@ -78,7 +79,7 @@ Porte da ferramenta Avalonia, com as mesmas regras: fila de até 20 arquivos, um
 
 Verificado em 2026-11-10: testes do backend com subprocesso simulado (streaming de trechos, cancelamento com texto parcial, falha com motivo, download, salvamento e regra de URL); teste de interface com backend simulado (fila, salvar antes de avançar, edição após salvar, preservação entre telas, validação de URL); e uma transcrição real pela interface no navegador, com backend real e modelo `tiny` em CPU, de um WAV gerado por síntese de voz (~2 s após o modelo baixado). Com idioma automático, o `tiny` identificou incorretamente o idioma da voz sintética; com `en`, o texto saiu correto.
 
-O empacotamento PyInstaller inclui `faster_whisper`, `ctranslate2`, `av`, `tokenizers` e `yt_dlp`; o backend empacotado (277 MB; instalador NSIS 80 MiB) transcreveu o mesmo WAV pelo subcomando `transcribe`.
+Evidência histórica de 2026-11-10: o pacote com extras (277 MB; NSIS 80 MiB) transcreveu o mesmo WAV pelo subcomando `transcribe`. O pacote mínimo atual exclui esses extras; consulte [empacotamento Windows](empacotamento-windows.md).
 
 Não verificado: download real do YouTube, GPU/CUDA, modelos maiores, áudio longo, arquivos de vídeo, diálogos e arrastar no Tauri, e a instalação do NSIS. Rede corporativa com inspeção TLS pode bloquear o download dos modelos.
 
@@ -110,6 +111,50 @@ Modelos Whisper devem ser provisionados explicitamente antes do uso, em `models/
 - Status informa carga e execução em CPU/int8 ou CUDA/float16; a tela inclui o dispositivo na conclusão quando ele foi recebido ao vivo. O log persistido registra a mudança de dispositivo. Modelos continuam carregados somente no subprocesso da tarefa.
 
 Limites: falhas nativas que abortam o processo sem lançar exceção Python não permitem fallback interno; permanecem falhas recuperáveis do job com checkpoints já confirmados. CUDA/cuDNN reais, qualidade de modelos, download externo e decodificação de formatos dependem de ensaios específicos. O fallback simulado não equivale à homologação de hardware.
+
+### Ensaio longo local — HOR-017
+
+`scripts/measure-transcription.py` gera fala SAPI sintética e mídia FFmpeg em
+pasta temporária: WAV de 30 minutos, amostras de 20 segundos em WAV, MP3, M4A,
+OGG/Opus, Opus, FLAC, MP4, MKV e WebM. Exercita o JobManager real, registra
+tempo até o primeiro texto, progresso, pico de RSS da árvore e uso de CPU
+(100% corresponde a um núcleo), além de amostras globais da GPU via nvidia-smi.
+Não compara qualidade de voz humana nem o desempenho de todos os formatos
+com 30 minutos; a matriz curta verifica decodificação e texto não vazio.
+
+```powershell
+$env:HORUS_E2E_TRANSCRIPTION='1'
+$env:HORUS_WHISPER_MODELS_DIR="$env:LOCALAPPDATA/Horus/models/whisper"
+$env:HORUS_FFMPEG='<ffmpeg.exe local previamente preparado>'
+$env:HORUS_TRANSCRIPTION_REPORT='<pasta de evidências>/hardware.json'
+# Opcional, somente se CUDA/cuBLAS/cuDNN compatíveis já estiverem preparados:
+# $env:PATH='<pasta local das DLLs>;'+$env:PATH
+& backend/.venv/Scripts/python.exe -m pytest backend/tests/test_transcription_hardware.py -q
+```
+
+Requer os extras `test`, `measure` e `transcription` já instalados. Sem opt-in,
+o teste é ignorado. Usa exclusivamente o modelo `small` preparado nessa raiz,
+com rede Hugging Face desabilitada e sem gravar nos pesos. Completa um WAV
+longo, cancela outro em 50% e interrompe um terceiro em 5%, preservando texto
+parcial e verificando o checkpoint após reiniciar o executor. A retomada é de
+leitura do resultado persistido: inferência a partir de um timestamp ainda
+não é implementada; retry direto continua recusado para evitar duplicação.
+O ensaio não instala CUDA: sem DLLs compatíveis, registra a alternativa CPU
+existente. A amostragem global da GPU pode não capturar picos de clipes curtos.
+
+Medição local de 14/11/2026, i7-13620H / RTX 3050 Laptop 6 GB, `small` local:
+os nove formatos curtos concluíram em 7,27–13,61 s no fallback CPU int8 e
+2,44–3,17 s em CUDA float16 com DLLs locais preparadas no PATH do teste.
+O WAV sintético de 1800 s concluiu em CUDA em 301,48 s, primeiro texto em
+7,23 s, RSS máximo da árvore 1198,90 MiB, GPU global até 100% / 2003 MiB,
+progresso de 0 a 100 e checkpoint recuperado após reiniciar o executor.
+Os tempos CPU incluem a tentativa CUDA inicial sem cuBLAS; o host era
+compartilhado e as mídias contêm fala sintética intercalada com silêncio.
+No mesmo WAV, cancelamento em 50% terminou em 0,688 s e preservou 3844
+caracteres; interrupção em 5% terminou em 0,672 s e preservou 496 caracteres.
+Ambos recuperaram o resultado após restart, sem retry e sem worker órfão.
+O pico de RSS observado nesses cenários foi 1640,58 MiB; são medições
+separadas da execução completa. O teste opt-in passou em 459,67 s.
 
 Validação das etapas 1/2 em 2026-11-11: **125 testes backend aprovados em 72,37 s**, incluindo os 101 anteriores e 24 casos novos; **29 testes Playwright aprovados em 50,8 s**, incluindo os 23 anteriores e seis casos agrupados de paridade; build TypeScript/Vite e `git diff --check` aprovados. Primeiro ensaio dos testes novos de interface precisou de esperas pelo término do diálogo/salvamento; a suíte completa passou após corrigir essas esperas. O backend recebeu nova execução completa depois de incluir o cancelamento com retorno de sucesso. Nenhum modelo, driver, ferramenta ou vídeo externo foi baixado; executores, dados e IPC desktop são simulados e os bancos/diretórios são temporários. Não houve build/instalação NSIS, inferência real, alteração do banco operacional, Avalonia, Hermes ou fábrica, commit ou push.
 
@@ -179,7 +224,7 @@ npm --prefix frontend run build
 npm --prefix frontend test
 & backend/.venv/Scripts/python.exe -m pytest backend/tests -q
 & backend/.venv/Scripts/python.exe backend/smoke.py
-node frontend/scripts/bundle-backend.mjs
+powershell -NoProfile -File scripts/build-backend.ps1
 & backend/.venv/Scripts/python.exe backend/smoke.py --packaged
 ```
 

@@ -400,14 +400,14 @@ def _wav_facts(wav: Path) -> tuple[str, float]:
         return digest.hexdigest(), audio.getnframes() / audio.getframerate()
 
 
-def resolve_model_path(model_dir: Path, model_name: str) -> Path | None:
+def resolve_model_path(model_dir: Path, model_name: str, *, required_files: tuple[str, ...] = ('model.bin',)) -> Path | None:
     """Modelo provisionado ou cache Hub já existente; nunca consulta a rede."""
     if model_name not in MODEL_NAMES:
         return None
     owner = 'mobiuslabsgmbh' if model_name == 'large-v3-turbo' else 'Systran'
     for root in (Path(model_dir), Path(model_dir) / 'whisper'):
         for candidate in (root / model_name, root / f"faster-whisper-{model_name}"):
-            if (candidate / "model.bin").is_file():
+            if all((candidate / name).is_file() for name in required_files):
                 return candidate
         # Preserva caches criados pelo download_root do faster-whisper anterior.
         cache = root / f'models--{owner}--faster-whisper-{model_name}'
@@ -417,7 +417,7 @@ def resolve_model_path(model_dir: Path, model_name: str) -> Path | None:
             continue
         if re.fullmatch(r'[a-f0-9]{40,64}', revision):
             candidate = cache / 'snapshots' / revision
-            if (candidate / 'model.bin').is_file():
+            if all((candidate / name).is_file() for name in required_files):
                 return candidate
     return None
 
@@ -458,7 +458,7 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
     except (OSError, NotImplementedError) as error:
         return _not_run(f"não foi possível iniciar o ASR ({type(error).__name__})")
     try:
-        out, err = await asyncio.wait_for(owned.process.communicate(), timeout=timeout)
+        out, err = await owned.communicate(timeout=timeout)
     except TimeoutError:
         return _not_run(f"timeout de {timeout:.0f}s no reconhecimento")
     finally:

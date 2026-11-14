@@ -6,6 +6,8 @@ GPU detectada não comprova DLLs utilizáveis: a carga pode funcionar e a primei
 
 ## Reprodução offline
 
+Após a integração com HOR-017, `HORUS_WHISPER_MODELS_DIR` tem precedência sobre a pasta de modelos do job e usa o mesmo resolvedor local; exige `model.bin`, `config.json`, `tokenizer.json` e `vocabulary.txt`. Raiz explícita ausente/incompleta gera erro sem procurar substituto na pasta do job. Sem a variável, os modelos locais e caches anteriores continuam disponíveis, sempre com `local_files_only=True` e sem download automático.
+
 Use um WAV sintético com roteiro conhecido e um modelo CTranslate2 já instalado. Configure `HORUS_TEST_CUDA=1`, `HORUS_TEST_MODEL_PATH` (pasta contendo `model.bin`), `HORUS_TEST_WAV` e `HORUS_TEST_SCRIPT` (texto exato). Execute `python -m pytest backend/tests/test_cuda_validation.py -q -s`; sem a flag, os três casos de hardware são ignorados. Cada caso usa subprocesso separado e timeout de 180 s; os dados de teste ficam em diretório temporário. Para executar só CPU, acrescente `-k cpu-int8`.
 
 As bibliotecas CUDA/cuDNN compatíveis com o CTranslate2 devem estar provisionadas no PATH do processo; o app não instala drivers/DLLs. O teste cobre CUDA float16, CUDA int8 e CPU int8, imprime tempo de carga + inferência + alinhamento, e mede VRAM total da GPU via `nvidia-smi` a cada aproximadamente 100 ms (inclui outros processos, não representa alocação exclusiva do modelo). Reserve a GPU antes de comparar. Os modos adicionais `alignment`/`transcription` exercitam o código do aplicativo em processos independentes.

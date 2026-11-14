@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Protocol
-from ..processes import failure_detail
+from ..processes import failure_detail, run_sync
 
 # Registro de origens dos motores locais; novos adaptadores declaram aqui sua origem.
 PRODUCTION_ORIGINS = {'windows_sapi': 'system_voice', 'piper': 'local_tts_model', 'kokoro': 'local_tts_model'}
@@ -40,8 +40,7 @@ def run(command, payload=None, text=None):
     env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
     started = time.monotonic()
     try:
-        return subprocess.run(command, input=json.dumps(payload) if payload else text,
-                              capture_output=True, text=True, encoding='utf-8', env=env, timeout=60, check=True).stdout
+        return run_sync(command, timeout=60, env=env, input_text=json.dumps(payload) if payload else text).decode('utf-8', 'replace')
     except (OSError, subprocess.SubprocessError) as error:
         private = [text] if text else []
         if payload:

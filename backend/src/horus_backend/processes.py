@@ -6,6 +6,8 @@ import ctypes
 import os
 import signal
 import re
+import subprocess
+import tempfile
 import time
 
 
@@ -94,6 +96,35 @@ class WindowsJob:
             self.handle = None
 
 
+# Ambiente mínimo padrão (allowlist) quando quem chama não define `env`: nunca herdar o ambiente inteiro do backend.
+SAFE_ENV_KEYS = {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP'}
+OUTPUT_LIMIT = 16 * 1024 * 1024
+
+
+# Telemetria desligada em todo subprocesso (HOR-117): bibliotecas e ferramentas que respeitam estas convenções não enviam nada.
+TELEMETRY_OFF = {'HF_HUB_DISABLE_TELEMETRY': '1', 'DO_NOT_TRACK': '1', 'NEXT_TELEMETRY_DISABLED': '1',
+                 'STORYBOOK_DISABLE_TELEMETRY': '1', 'NO_UPDATE_NOTIFIER': '1', 'NPM_CONFIG_UPDATE_NOTIFIER': 'false',
+                 'SCARF_ANALYTICS': 'false'}
+
+
+def with_telemetry_off(env: dict[str, str]) -> dict[str, str]:
+    return {**TELEMETRY_OFF, **env}
+
+
+def minimal_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k.upper() in SAFE_ENV_KEYS}
+
+
+async def _drain(stream, limit: int) -> bytes:
+    """Lê até o fim, guardando no máximo `limit` bytes (o excedente é descartado, o processo nunca bloqueia no pipe)."""
+    kept, size = [], 0
+    while chunk := await stream.read(65536):
+        if size < limit:
+            kept.append(chunk[:limit - size])
+        size += len(chunk)
+    return b''.join(kept)
+
+
 class OwnedProcess:
     def __init__(self, process: asyncio.subprocess.Process, job: WindowsJob | None):
         self.process, self.job = process, job
@@ -101,6 +132,7 @@ class OwnedProcess:
     @classmethod
     async def start(cls, command: list[str], **kwargs):
         options = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
+        kwargs["env"] = with_telemetry_off(kwargs.get("env") if kwargs.get("env") is not None else minimal_env())
         process = await asyncio.create_subprocess_exec(
             *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024, **options, **kwargs)
@@ -111,6 +143,14 @@ class OwnedProcess:
                 process.kill()
             await process.wait()
             raise
+
+    async def communicate(self, timeout: float | None = None, limit: int = OUTPUT_LIMIT):
+        """(stdout, stderr) limitados a `limit` bytes cada; `TimeoutError` no prazo (o chamador encerra a árvore)."""
+        async def collect():
+            out, err, _ = await asyncio.gather(_drain(self.process.stdout, limit), _drain(self.process.stderr, limit),
+                                               self.process.wait())
+            return out, err
+        return await asyncio.wait_for(collect(), timeout=timeout)
 
     async def stop(self):
         if self.job:
@@ -141,3 +181,45 @@ class OwnedProcess:
     def close(self):
         if self.job:
             self.job.close()
+
+
+def run_sync(command: list[str], *, timeout: float, input_text: str | None = None, env: dict[str, str] | None = None,
+             limit: int = OUTPUT_LIMIT, cwd=None) -> bytes:
+    """`subprocess.run` seguro para código síncrono: sem shell, stdin fechado (ou texto), ambiente mínimo, saída em
+    arquivo temporário limitada a `limit` bytes e árvore encerrada no prazo (Job Object no Windows).
+
+    Levanta as mesmas exceções de `subprocess.run(check=True)`: `TimeoutExpired`, `CalledProcessError`, `OSError`.
+    """
+    options = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                                   stdout=out, stderr=err, env=with_telemetry_off(env if env is not None else minimal_env()), cwd=cwd, **options)
+        job = None
+        try:
+            job = WindowsJob(process.pid) if os.name == "nt" else None
+            process.communicate(input_text.encode("utf-8") if input_text is not None else None, timeout=timeout)
+        except BaseException:
+            _kill_tree(process, job)
+            raise
+        finally:
+            if job:
+                job.close()
+        out.seek(0)
+        stdout = out.read(limit)
+        if process.returncode:
+            err.seek(0)
+            raise subprocess.CalledProcessError(process.returncode, command[0], output=stdout, stderr=err.read(limit))
+        return stdout
+
+
+def _kill_tree(process: subprocess.Popen, job: WindowsJob | None) -> None:
+    if job:
+        job.close()
+    elif os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if process.poll() is None:
+        process.kill()
+    process.wait()

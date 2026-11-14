@@ -56,7 +56,7 @@ export default function App() {
   const { activeCount: activeProductions, notice: productionNotice, dismissNotice } = useProductionObserver(connection);
   return <div className="horus" data-theme={effectiveTheme}>
     <a className="skip-link" href="#main">Ir para o conteúdo</a>
-    <aside className="sidebar"><div className="brand"><div className="brand-name"><EyeMark /><span>HORUS</span></div><p className="eyebrow">INTELIGÊNCIA AUDIOVISUAL</p></div>
+    <aside className="sidebar" aria-label="Navegação lateral"><div className="brand"><div className="brand-name"><EyeMark /><span>HORUS</span></div><p className="eyebrow">INTELIGÊNCIA AUDIOVISUAL</p></div>
       <nav aria-label="Navegação principal"><p className="eyebrow navigation-label">ESPAÇO DE TRABALHO</p>{navigation.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => setPage(item.id)}>{item.id === 'production' && activeProductions > 0 ? `${item.title} (${activeProductions})` : item.title}</button>)}<button aria-current={page === 'production-center' ? 'page' : undefined} onClick={() => setPage('production-center')}>Central de Produção</button><p className="eyebrow navigation-label tools-label">FERRAMENTAS</p><button aria-current={page === 'transcription' ? 'page' : undefined} onClick={() => setPage('transcription')}>Transcrição</button></nav>
       <div className="sidebar-bottom"><div className="integration"><p className="eyebrow">HERMES AGENT</p><p className="muted"><span className="status-dot" />{hermes?.connected ? 'API verificada' : hermes?.cli_available ? 'CLI localizado' : 'Integração pendente'}</p></div><button className="settings-navigation" aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}>Ajustes</button><p className="eyebrow signature">SEU ESPAÇO DE CRIAÇÃO</p></div>
     </aside>
@@ -104,7 +104,7 @@ export default function App() {
         </div>
       )}
       <main id="main" tabIndex={-1}><Suspense fallback={<p className="loading" role="status">Abrindo seu espaço…</p>}>
-        {page === 'overview' ? <Overview navigate={setPage} />
+        {page === 'overview' ? <Overview navigate={setPage} connection={connection} />
           : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} />
           : page === 'library' ? <Library connection={connection} />
           : page === 'transcription' ? null

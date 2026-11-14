@@ -76,7 +76,7 @@ async def _run(command: list[str], timeout: float, binary: bool = False):
     except (OSError, NotImplementedError) as error:
         return None, b"" if binary else "", f"não foi possível iniciar o processo ({type(error).__name__})"
     try:
-        out, err = await asyncio.wait_for(owned.process.communicate(), timeout=timeout)
+        out, err = await owned.communicate(timeout=timeout)
         return owned.process.returncode, (out if binary else out.decode("utf-8", "replace")), err.decode("utf-8", "replace")
     except TimeoutError:
         return None, b"" if binary else "", f"timeout de {timeout:.0f}s"

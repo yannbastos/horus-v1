@@ -115,11 +115,11 @@ def test_ffmpeg_runs_without_shell_stdin_secrets_or_unbounded_time(production, m
     def fake_subprocess(command, **kwargs):
         seen.append((command, kwargs))
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-    monkeypatch.setattr(publishing_module.subprocess, "run", fake_subprocess)
+    monkeypatch.setattr(publishing_module, "run_sync", fake_subprocess)
     assert thumbnail(client, record["id"]).status_code == 409
     command, kwargs = seen[0]
-    assert isinstance(command, list) and not kwargs.get("shell") and kwargs["stdin"] == subprocess.DEVNULL
-    assert kwargs["timeout"] and kwargs["check"] is True
+    assert isinstance(command, list) and not kwargs.get("shell")
+    assert kwargs["timeout"]
     assert not {"HORUS_API_TOKEN", "AWS_SECRET_ACCESS_KEY"} & set(kwargs["env"])
     assert {k.upper() for k in kwargs["env"]} <= {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"}
 

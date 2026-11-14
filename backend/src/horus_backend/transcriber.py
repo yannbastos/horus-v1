@@ -78,16 +78,24 @@ def transcribe(path: Path, model_name: str, language: str, models_dir: Path):
 
     device = choose_device(ctranslate2)
     from .speech_alignment import resolve_model_path
-    model_path = resolve_model_path(models_dir, model_name)
-    if model_path is None:
-        raise FileNotFoundError(f'Modelo Whisper {model_name!r} não instalado em {models_dir}. Instale-o explicitamente antes de transcrever.')
+    local_root = os.environ.get('HORUS_WHISPER_MODELS_DIR')
+    if local_root:
+        root = Path(local_root).expanduser()
+        model_path = resolve_model_path(root, model_name, required_files=(
+            'model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'))
+        if model_path is None:
+            raise ValueError(f'Modelo {model_name} não preparado em HORUS_WHISPER_MODELS_DIR; modo local não permite download.')
+    else:
+        model_path = resolve_model_path(models_dir, model_name)
+        if model_path is None:
+            raise FileNotFoundError(f'Modelo Whisper {model_name!r} não instalado em {models_dir}. Instale-o explicitamente antes de transcrever.')
     emitted = False
     while True:
         model = segments = None
         try:
             compute = 'float16' if device == 'cuda' else 'int8'
             emit('status', f'Carregando modelo local {model_name} em {device.upper()} ({compute}).')
-            model = WhisperModel(str(model_path), device=device, compute_type=compute, local_files_only=True)
+            model = WhisperModel(str(model_path.resolve()), device=device, compute_type=compute, local_files_only=True)
             emit('status', f'Transcrevendo em {device.upper()} ({compute}).')
             segments, info = model.transcribe(str(path), language=None if language == 'auto' else language)
             last = -1
