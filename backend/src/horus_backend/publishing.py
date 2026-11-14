@@ -14,7 +14,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .license_reviews import LicenseReviewService
-from .media_contracts import UNSAFE_TEXT, apply_license_reviews
+from .media_contracts import UNSAFE_TEXT, ProvenanceAsset, apply_license_reviews, commercial_use_permitted
 from .local_pilot import registered_json
 from .production import confined, inspect_artifact
 from .storage import now
@@ -25,6 +25,14 @@ FAILED_MARKER = 'failed.json'
 LICENSES_PENDING = 'Licenças pendentes: confira os direitos de todos os assets antes de publicar.'
 LICENSES_REVIEWED = 'Licenças revisadas: a publicação manual continua sob responsabilidade humana.'
 DISCLOSURE_MARKER = chr(10) * 2 + 'Divulgações obrigatórias:' + chr(10)
+
+
+def licenses_pending(effective) -> bool:
+    """Pendente até todo asset estar verificado por humano *e* com uso comercial `allowed` (HOR-097).
+
+    `verified` com `restricted`/`unknown` registra a leitura da licença, mas não libera uso comercial: segue pendente.
+    """
+    return effective is None or not all(commercial_use_permitted(ProvenanceAsset.model_validate(a)) for a in effective['assets'])
 
 
 class MetadataTextError(ValueError):
@@ -254,7 +262,7 @@ class PublishingService:
         licenses = LicenseReviewService(self.store, self.settings.data_dir)
         provenance = licenses._provenance(db, row['id'])
         effective = apply_license_reviews(provenance, licenses._history(db, row['id'])) if provenance is not None else None
-        pending = effective is None or any(a['status'] != 'verified' for a in effective['assets'])
+        pending = licenses_pending(effective)
         result = self.store.job(db.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone())['result'] or {}
         narration = result.get('narration_disclosure') or 'Narração sintética/voz local: confira a voz selecionada e seus termos de uso.'
         disclosures = [narration,
