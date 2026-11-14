@@ -14,6 +14,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .license_reviews import LicenseReviewService
+from .processes import run_sync
 from .media_contracts import UNSAFE_TEXT, ProvenanceAsset, apply_license_reviews, commercial_use_permitted
 from .local_pilot import registered_json
 from .production import confined, inspect_artifact
@@ -165,8 +166,7 @@ class PublishingService:
     def _run(self, command, timeout):
         environment = {k: v for k, v in os.environ.items() if k.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP'}}
         try:
-            return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                  env=environment, timeout=timeout, check=True).stdout
+            return run_sync(command, timeout=timeout, env=environment)
         except (OSError, subprocess.SubprocessError):
             raise WorkflowConflict('FFmpeg/ffprobe não conseguiu preparar a thumbnail; confira as ferramentas locais e o vídeo aprovado.') from None
 

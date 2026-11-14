@@ -48,3 +48,10 @@ def test_identifier_fields_reject_paths_and_keys(value):
 def test_free_text_rejects_local_paths_and_credentials(path, value):
     with pytest.raises(ValidationError):
         RunEnvelope.model_validate(build(path, value))
+
+
+def test_urls_in_free_text_are_not_mistaken_for_drive_paths():
+    data = build(("objective",), "Analisar https://example.org/video e http://localhost:8080/x")
+    RunEnvelope.model_validate(data)
+    with pytest.raises(ValidationError):
+        RunEnvelope.model_validate(build(("objective",), "ver D:/dados/x"))

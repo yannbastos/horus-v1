@@ -54,7 +54,7 @@ async def synthesize(input_path):
     try:
         owned = await OwnedProcess.start(command, env=env, cwd=input_path.parent)
         # Limite explícito de geração, nunca cortar texto para caber em estimativa.
-        stdout, stderr = await asyncio.wait_for(owned.process.communicate(), timeout=1200)
+        stdout, stderr = await owned.communicate(timeout=1200)
         if owned.process.returncode:
             error_path = input_path.with_suffix('.error.json')
             if error_path.is_file():
@@ -195,7 +195,7 @@ async def owned_tool(command, *, cwd, timeout=1800):
     started = time.monotonic()
     try:
         owned = await OwnedProcess.start([str(arg) for arg in command], cwd=cwd, env=env)
-        stdout, stderr = await asyncio.wait_for(owned.process.communicate(), timeout=timeout)
+        stdout, stderr = await owned.communicate(timeout=timeout)
         if owned.process.returncode:
             raise ProductionFailure('local_tool_failed', 'render',
                 'FFmpeg/ferramenta local falhou; confira a instalação e o diagnóstico antes de criar nova produção.',
