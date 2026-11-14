@@ -49,8 +49,9 @@ def emit(kind: str, message: str):
     print(json.dumps({"type": kind, "message": message}, ensure_ascii=False), flush=True)
 
 
-def choose_device(runtime) -> str:
-    requested = os.environ.get('HORUS_WHISPER_DEVICE', 'auto').strip().lower()
+def choose_device(runtime, *, report=None, default='auto') -> str:
+    report = report or emit
+    requested = os.environ.get('HORUS_WHISPER_DEVICE', default).strip().lower()
     if requested not in {'auto', 'cpu', 'cuda'}:
         raise ValueError('HORUS_WHISPER_DEVICE inválido. Use auto, cpu ou cuda.')
     if requested == 'cpu':
@@ -58,10 +59,10 @@ def choose_device(runtime) -> str:
     try:
         available = runtime.get_cuda_device_count() > 0
     except (RuntimeError, OSError) as error:
-        emit('status', f'Não foi possível consultar CUDA ({type(error).__name__}). Usando CPU int8.')
+        report('status', f'Não foi possível consultar CUDA ({type(error).__name__}). Usando CPU int8.')
         return 'cpu'
     if not available and requested == 'cuda':
-        emit('status', 'CUDA solicitada, mas nenhuma GPU utilizável foi detectada. Usando CPU int8.')
+        report('status', 'CUDA solicitada, mas nenhuma GPU utilizável foi detectada. Usando CPU int8.')
     return 'cuda' if available else 'cpu'
 
 
@@ -76,26 +77,25 @@ def transcribe(path: Path, model_name: str, language: str, models_dir: Path):
     from faster_whisper import WhisperModel
 
     device = choose_device(ctranslate2)
+    from .speech_alignment import resolve_model_path
     local_root = os.environ.get('HORUS_WHISPER_MODELS_DIR')
-    source = model_name
     if local_root:
         root = Path(local_root).expanduser()
-        candidate = next((p for p in (root / model_name, root / f'faster-whisper-{model_name}')
-                          if all((p / f).is_file() for f in ('model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'))), None)
-        if candidate is None:
+        model_path = resolve_model_path(root, model_name, required_files=(
+            'model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'))
+        if model_path is None:
             raise ValueError(f'Modelo {model_name} não preparado em HORUS_WHISPER_MODELS_DIR; modo local não permite download.')
-        source = str(candidate.resolve())
     else:
-        models_dir.mkdir(parents=True, exist_ok=True)
+        model_path = resolve_model_path(models_dir, model_name)
+        if model_path is None:
+            raise FileNotFoundError(f'Modelo Whisper {model_name!r} não instalado em {models_dir}. Instale-o explicitamente antes de transcrever.')
     emitted = False
     while True:
         model = segments = None
         try:
             compute = 'float16' if device == 'cuda' else 'int8'
-            mode = 'modelo local, sem download' if local_root else 'o primeiro uso pode baixar o modelo'
-            emit('status', f'Carregando modelo {model_name} em {device.upper()} ({compute}); {mode}...')
-            model = WhisperModel(source, device=device, compute_type=compute, download_root=str(models_dir),
-                                 local_files_only=bool(local_root) or os.environ.get('HF_HUB_OFFLINE') == '1')
+            emit('status', f'Carregando modelo local {model_name} em {device.upper()} ({compute}).')
+            model = WhisperModel(str(model_path.resolve()), device=device, compute_type=compute, local_files_only=True)
             emit('status', f'Transcrevendo em {device.upper()} ({compute}).')
             segments, info = model.transcribe(str(path), language=None if language == 'auto' else language)
             last = -1

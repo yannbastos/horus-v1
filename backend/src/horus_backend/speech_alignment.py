@@ -1,6 +1,6 @@
 """Alinhamento acústico local da narração (HOR-054): `word-timings.json` com `source=forced_alignment`.
 
-Método: o faster-whisper (CPU, offline, `word_timestamps=True`) reconhece a fala do WAV; as palavras reconhecidas são
+Método: o faster-whisper (offline, `word_timestamps=True`; CPU por padrão) reconhece a fala do WAV; as palavras reconhecidas são
 alinhadas ao texto do roteiro por programação dinâmica (subsequência comum de maior pontuação), tolerante a
 pontuação, caixa, acentos, hifens e números por extenso. Cada palavra do roteiro casada recebe o tempo medido pelo ASR.
 Palavras sem correspondência recebem tempo **interpolado** entre âncoras medidas e são declaradas
@@ -400,18 +400,32 @@ def _wav_facts(wav: Path) -> tuple[str, float]:
         return digest.hexdigest(), audio.getnframes() / audio.getframerate()
 
 
-def resolve_model_path(model_dir: Path, model_name: str) -> Path | None:
-    """Pasta CTranslate2 local (com `model.bin`) em `model_dir/<nome>` ou `model_dir/faster-whisper-<nome>`."""
-    for candidate in (Path(model_dir) / model_name, Path(model_dir) / f"faster-whisper-{model_name}"):
-        if (candidate / "model.bin").is_file():
-            return candidate
+def resolve_model_path(model_dir: Path, model_name: str, *, required_files: tuple[str, ...] = ('model.bin',)) -> Path | None:
+    """Modelo provisionado ou cache Hub já existente; nunca consulta a rede."""
+    if model_name not in MODEL_NAMES:
+        return None
+    owner = 'mobiuslabsgmbh' if model_name == 'large-v3-turbo' else 'Systran'
+    for root in (Path(model_dir), Path(model_dir) / 'whisper'):
+        for candidate in (root / model_name, root / f"faster-whisper-{model_name}"):
+            if all((candidate / name).is_file() for name in required_files):
+                return candidate
+        # Preserva caches criados pelo download_root do faster-whisper anterior.
+        cache = root / f'models--{owner}--faster-whisper-{model_name}'
+        try:
+            revision = (cache / 'refs' / 'main').read_text(encoding='utf-8').strip()
+        except OSError:
+            continue
+        if re.fullmatch(r'[a-f0-9]{40,64}', revision):
+            candidate = cache / 'snapshots' / revision
+            if all((candidate / name).is_file() for name in required_files):
+                return candidate
     return None
 
 
 async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence[Mapping], engine: Mapping[str, str],
                               model_dir: Path, model_name: str = "small", language: str = "pt",
                               timeout: float = RUN_TIMEOUT_SECONDS, environment: Mapping[str, str] | None = None) -> dict:
-    """Executa o ASR em subprocesso possuído (CPU, offline) e alinha ao roteiro.
+    """Executa o ASR em subprocesso possuído (offline) e alinha ao roteiro.
 
     Devolve `{executed, reason, document, report, asr_seconds}`. `executed=False` (com `reason`) se o extra
     `transcription`, o modelo local ou o WAV estão ausentes, se o ASR falha ou estoura o tempo. Cancelar a tarefa
@@ -456,7 +470,7 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
         return _not_run(f"ASR falhou (código {owned.process.returncode}): {tail[0][:300]}", asr_seconds=elapsed)
     try:
         payload = json.loads(out.decode("utf-8"))
-        asr_engine = f"faster-whisper {model_name} (CPU int8, offline)"
+        asr_engine = f"faster-whisper {model_name} ({payload.get('device', 'cpu').upper()} {payload.get('compute_type', 'int8')}, offline)"
         document, report = align_with_report(
             script_text, payload["words"], sections=sections, narration_sha256=sha, duration_seconds=duration,
             engine=engine, asr_engine=asr_engine)
@@ -482,6 +496,38 @@ def run_alignment(wav: Path, script_text: str, *, sections: Sequence[Mapping], e
 
 # ------------------------------------------------------------------------------ processo do ASR
 
+def _recognize_words(wav: Path, model_path: Path, language: str) -> dict:
+    """ASR offline; não publica palavras antes de completar o gerador."""
+    import gc
+    import ctranslate2
+    from faster_whisper import WhisperModel
+    from .transcriber import choose_device, is_gpu_failure
+
+    report = lambda kind, message: print(message, file=sys.stderr, flush=True)
+    device = choose_device(ctranslate2, report=report, default='cpu')
+    while True:
+        model = segments = None
+        words = []
+        try:
+            compute = 'float16' if device == 'cuda' else 'int8'
+            model = WhisperModel(str(model_path), device=device, compute_type=compute, local_files_only=True)
+            segments, info = model.transcribe(str(wav), language=language, word_timestamps=True)
+            for segment in segments:
+                words.extend({"word": w.word, "start": w.start, "end": w.end} for w in (segment.words or []))
+            return {"words": words, "duration": info.duration, "language": info.language,
+                    "device": device, "compute_type": compute}
+        except (RuntimeError, OSError) as error:
+            if device != 'cuda' or words or not is_gpu_failure(error):
+                raise
+            report('status', 'Falha CUDA antes das palavras; alinhamento alternando uma vez para CPU int8.')
+            device = 'cpu'
+        finally:
+            if segments is not None and hasattr(segments, 'close'):
+                segments.close()
+            del segments, model
+            gc.collect()
+
+
 def _asr_main(argv: list[str]) -> int:
     import argparse
 
@@ -494,15 +540,11 @@ def _asr_main(argv: list[str]) -> int:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
     try:
-        from faster_whisper import WhisperModel
-
-        model = WhisperModel(str(args.model_path), device="cpu", compute_type="int8", local_files_only=True)
-        segments, info = model.transcribe(str(args.wav), language=args.language, word_timestamps=True)
-        words = [{"word": w.word, "start": w.start, "end": w.end} for segment in segments for w in (segment.words or [])]
+        payload = _recognize_words(args.wav, args.model_path, args.language)
     except Exception as error:  # noqa: BLE001 - o motivo segue para quem chamou
         print(f"{type(error).__name__}: {error}", file=sys.stderr, flush=True)
         return 1
-    print(json.dumps({"words": words, "duration": info.duration, "language": info.language}, ensure_ascii=False))
+    print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 

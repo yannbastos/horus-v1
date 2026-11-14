@@ -32,14 +32,25 @@ def test_prepared_local_model_is_read_only_and_offline(tmp_path, monkeypatch):
     assert not cache.exists()
 
 
-def test_missing_explicit_local_model_never_reaches_loader(tmp_path, monkeypatch):
+@pytest.mark.parametrize('missing_file', [None, 'config.json', 'tokenizer.json', 'vocabulary.txt'])
+def test_missing_explicit_local_model_never_reaches_loader(tmp_path, monkeypatch, missing_file):
+    cache = tmp_path / 'cache'
+    cached_model = cache / 'small'
+    cached_model.mkdir(parents=True)
+    (cached_model / 'model.bin').touch()
+    if missing_file:
+        partial = tmp_path / 'small'
+        partial.mkdir()
+        for name in ('model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'):
+            if name != missing_file:
+                (partial / name).touch()
     monkeypatch.setenv('HORUS_WHISPER_MODELS_DIR', str(tmp_path))
     monkeypatch.setenv('HORUS_WHISPER_DEVICE', 'cpu')
     monkeypatch.setitem(sys.modules, 'ctranslate2', SimpleNamespace())
     monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(
         WhisperModel=lambda *a, **k: pytest.fail('Não pode baixar modelo ausente')))
     with pytest.raises(ValueError, match='modo local não permite download'):
-        transcriber.transcribe(tmp_path / 'audio.wav', 'small', 'pt', tmp_path / 'cache')
+        transcriber.transcribe(tmp_path / 'audio.wav', 'small', 'pt', cache)
 
 
 def test_offline_configuration_only_reaches_transcription(tmp_path, monkeypatch):
