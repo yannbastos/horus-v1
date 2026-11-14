@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { observeJob, terminalStatuses } from '../services/api';
+import { StatusMessage } from '../components/StatusMessage';
 import type { Connection, JobEvent, JobStatus } from '../services/api';
 import type { ScriptRecord } from '../services/scripts';
 import type {
@@ -1132,11 +1133,7 @@ export default function ProductionRun({
         forjar marcador de aprovação da fábrica.
       </p>
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <StatusMessage state="error">{error}</StatusMessage>}
 
       {!isLatestScriptApproved && (
         <div className="fact-item" role="note" aria-label="Pré-requisito de produção técnica">
@@ -1245,9 +1242,9 @@ export default function ProductionRun({
       )}
 
       {loading && (
-        <p className="loading" role="status" style={{ padding: '12px 0' }}>
+        <StatusMessage state="loading" style={{ padding: '12px 0' }}>
           Carregando execuções de produção…
-        </p>
+        </StatusMessage>
       )}
 
       {activeProduction && provenance && (
@@ -1610,11 +1607,7 @@ export default function ProductionRun({
 
           <details open>
             <summary>Logs e eventos reais do job ({activeProduction.job_id})</summary>
-            {jobError && (
-              <p className="error" role="alert">
-                {jobError}
-              </p>
-            )}
+            {jobError && <StatusMessage state="error">{jobError}</StatusMessage>}
             <pre ref={logsRef} className="logs" aria-label="Logs da produção">
               {jobEvents.length > 0
                 ? jobEvents
@@ -1750,7 +1743,7 @@ export default function ProductionRun({
             )}
 
             {activeProduction.artifacts.length === 0 ? (
-              <p className="muted">Nenhum artefato registrado até o momento para esta execução.</p>
+              <StatusMessage state="empty">Nenhum artefato registrado até o momento para esta execução.</StatusMessage>
             ) : (
               <div className="data-table-container">
                 <table className="data-table" aria-label="Tabela de artefatos da produção">
@@ -1818,16 +1811,12 @@ export default function ProductionRun({
             )}
 
             {previewLoading && (
-              <p role="status" className="muted">
+              <StatusMessage state="empty" role="status">
                 Carregando artefato autenticado…
-              </p>
+              </StatusMessage>
             )}
 
-            {previewError && (
-              <p className="error" role="alert">
-                {previewError}
-              </p>
-            )}
+            {previewError && <StatusMessage state="error">{previewError}</StatusMessage>}
 
             {previewTarget && (
               <div
@@ -2264,9 +2253,9 @@ export default function ProductionRun({
                 }
                 if (reasons.length === 0) return null;
                 return (
-                  <p className="muted" role="status" aria-label="Motivo do bloqueio de aprovação">
+                  <StatusMessage state="empty" role="status" ariaLabel="Motivo do bloqueio de aprovação">
                     <strong>Aprovação bloqueada:</strong> {reasons.join(' ')}
-                  </p>
+                  </StatusMessage>
                 );
               })()}
             </div>

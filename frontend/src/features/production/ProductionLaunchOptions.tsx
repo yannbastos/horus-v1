@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Connection } from '../../services/api';
+import { StatusMessage } from '../../components/StatusMessage';
 import { getDefaultVoice, getProviders } from '../../services/narration';
 import type { CommercialUse, NarrationProvider, NarrationVoice } from '../../services/narration';
 import type { ProductionNarrationSelection, RenderQuality } from '../../services/production';
@@ -122,20 +123,20 @@ export default function ProductionLaunchOptions({
       <span className="eyebrow">VOZ E QUALIDADE DO PILOTO LOCAL</span>
 
       {state === 'loading' && (
-        <p className="loading" role="status">
+        <StatusMessage state="loading">
           Carregando vozes disponíveis…
-        </p>
+        </StatusMessage>
       )}
       {state === 'error' && (
-        <p className="error" role="status">
+        <StatusMessage state="error" role="status">
           Não foi possível carregar as vozes ({error}). A produção usará a voz padrão do backend.
-        </p>
+        </StatusMessage>
       )}
       {state === 'ready' && !providers.some(isSelectableProvider) && (
-        <p className="muted" role="status">
+        <StatusMessage state="empty" role="status">
           Nenhuma voz local disponível. A produção usará a voz padrão do backend; se ele não tiver
           motor de voz, a execução ficará bloqueada.
-        </p>
+        </StatusMessage>
       )}
 
       {state === 'ready' && providers.length > 0 && (

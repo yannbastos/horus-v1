@@ -7,6 +7,7 @@ import type {
   TimecodeSubtitleNavItem,
 } from '../../services/production';
 import { formatTimecode } from '../../services/production';
+import { StatusMessage } from '../../components/StatusMessage';
 import WordTimeline from './WordTimeline';
 
 export default function TimecodeReviewWorkspace({
@@ -340,9 +341,9 @@ export default function TimecodeReviewWorkspace({
           </div>
 
           {noteValidationError && (
-            <p className="error" role="alert">
+            <StatusMessage state="error">
               {noteValidationError}
-            </p>
+            </StatusMessage>
           )}
 
           <div
