@@ -49,6 +49,7 @@ Cada incremento tem objetivo específico, escopo limitado, critérios de aceite,
 - Mudanças críticas (segurança, autenticação, persistência, migrações, integração estrutural): todas as suítes relevantes, integridade de dados, testes negativos.
 - Periodicamente, e antes de release: validação completa da `main`.
 - Nunca reduzir cobertura, remover testes, ignorar falhas ou mudar critérios de aceite para obter resultado positivo.
+- Contrato da API: `backend/tests/test_api_contract_snapshot.py` compara o OpenAPI com `backend/tests/snapshots/openapi.json` e falha com diff legível (quebra ou mudança aditiva); mudança intencional: `HORUS_UPDATE_API_SNAPSHOT=1` no mesmo teste e commit do snapshot revisado.
 
 ## Fluxo Git
 
