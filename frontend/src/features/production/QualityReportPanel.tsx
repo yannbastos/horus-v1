@@ -141,9 +141,8 @@ export default function QualityReportPanel({
                       </div>
                       {item.timecode && (
                         <button
-                          className="button"
+                          className="button sm"
                           type="button"
-                          style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                           aria-label={`Ir para timecode do erro ${item.id} (${formatTimecode(
                             item.timecode.start
                           )}) — Timecode ${formatTimecode(item.timecode.start)} → ${formatTimecode(
@@ -198,9 +197,8 @@ export default function QualityReportPanel({
                       </div>
                       {item.timecode && (
                         <button
-                          className="button"
+                          className="button sm"
                           type="button"
-                          style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                           aria-label={`Ir para timecode do aviso ${item.id} (${formatTimecode(
                             item.timecode.start
                           )}) — Timecode ${formatTimecode(item.timecode.start)} → ${formatTimecode(

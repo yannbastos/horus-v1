@@ -339,8 +339,7 @@ export default function ProductionCompare({
                   <td>
                     <button
                       type="button"
-                      className={`button ${isSelected ? 'active' : ''}`}
-                      style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
+                      className={`button sm ${isSelected ? 'active' : ''}`}
                       onClick={() => onOpenProduction(item)}
                     >
                       {isSelected ? 'Exibindo' : 'Inspecionar'}
@@ -358,7 +357,7 @@ export default function ProductionCompare({
           className="card sunken"
           role="region"
           aria-label="Comparação entre duas produções"
-          style={{ gap: '12px' }}
+          style={{ gap: 'var(--Space5)' }}
         >
           <div className="row spread">
             <div>

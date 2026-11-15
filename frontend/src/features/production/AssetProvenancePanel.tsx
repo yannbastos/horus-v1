@@ -184,15 +184,15 @@ export default function AssetProvenancePanel({
                   <tr key={asset.assetId}>
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <strong style={{ fontFamily: 'Geist, monospace', fontSize: '11px' }}>
+                        <strong className="mono-code">
                           {asset.assetId}
                         </strong>
                         <span className="tag">{asset.kindLabel}</span>
                         <small
                           className="muted"
                           style={{
-                            fontFamily: 'Geist, monospace',
-                            fontSize: '10px',
+                            fontFamily: 'var(--FontMono)',
+                            fontSize: 'var(--TextSm)',
                             overflowWrap: 'anywhere',
                           }}
                         >
@@ -201,8 +201,8 @@ export default function AssetProvenancePanel({
                         <small
                           className="muted"
                           style={{
-                            fontFamily: 'Geist, monospace',
-                            fontSize: '10px',
+                            fontFamily: 'var(--FontMono)',
+                            fontSize: 'var(--TextSm)',
                             overflowWrap: 'anywhere',
                           }}
                         >

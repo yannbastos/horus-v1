@@ -126,9 +126,9 @@ export default function AssetReviewForm({
       : null;
 
   return (
-    <div className="fact-item" role="group" aria-label={`Verificação humana do asset ${asset.assetId}`} style={{ gap: '8px' }}>
+    <div className="fact-item" role="group" aria-label={`Verificação humana do asset ${asset.assetId}`} style={{ gap: 'var(--Space3)' }}>
       <div className="row spread" style={{ flexWrap: 'wrap' }}>
-        <strong style={{ fontFamily: 'Geist, monospace', fontSize: '11px' }}>{asset.assetId}</strong>
+        <strong className="mono-code">{asset.assetId}</strong>
         <span className={`tag ${asset.status === 'verified' ? 'good' : asset.status === 'rejected' ? 'bad' : 'warn'}`}>
           {asset.statusLabel}
         </span>
