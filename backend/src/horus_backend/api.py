@@ -36,6 +36,7 @@ from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
+from .notifications import NotificationService
 from .storage import Store
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
@@ -47,6 +48,14 @@ STREAM_KEEPALIVE_SECONDS = 10
 class MediaRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1, max_length=4096)
+
+
+class NotificationReadState(BaseModel):
+    """Marca notificações como lidas/não lidas: `ids` (até 200) OU `all: true`."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ids: list[str] | None = Field(default=None, max_length=200)
+    all: bool = False
+    read: bool
 
 
 class TranscriptSave(BaseModel):
@@ -119,6 +128,29 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    notifications = NotificationService(store, settings.data_dir)
+
+    @app.get("/v1/notifications")
+    def list_notifications(limit: int = Query(50, ge=1, le=200), after: str | None = Query(None, max_length=300),
+                           unread: bool | None = None, kind: str | None = Query(None, max_length=60)):
+        try:
+            return notifications.page(limit, after, unread, kind)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/v1/notifications/unread-count")
+    def notifications_unread_count():
+        return {"unread_count": notifications.unread_count()}
+
+    @app.post("/v1/notifications/read-state")
+    def notifications_read_state(request: NotificationReadState):
+        try:
+            return notifications.set_read(ids=request.ids, all=request.all, read=request.read)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except OSError:
+            raise HTTPException(500, "Não foi possível salvar o estado de leitura.") from None
 
     @app.get("/health")
     async def health():
