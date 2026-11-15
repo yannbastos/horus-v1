@@ -4,6 +4,8 @@ import type { Connection, Job, JobEvent } from '../services/api';
 import { nativeDesktop, onFileDrop, selectDirectory, selectMediaFiles, selectSavePath, transcriptionExtensions } from '../platform/desktop';
 import { inspectAttachment, InvalidReceiptError, ReceiptStorageError, saveAttachment } from '../services/transcriptionRecovery';
 import type { Attachment, MediaPayload } from '../services/transcriptionRecovery';
+import { fetchWhisperModels } from '../services/transcriptionModels';
+import type { WhisperModelInfo } from '../services/transcriptionModels';
 import { StatusMessage } from '../components/StatusMessage';
 
 export const maxQueue = 20;
@@ -43,7 +45,9 @@ export function isYouTubeUrl(value: string) {
  * Fila de até 20 arquivos, processados um por vez. Ao concluir, a fila pausa: só depois de salvar
  * a versão atual do texto é possível avançar. O componente permanece montado para preservar a fila.
  */
-export default function Transcription({ connection, hidden }: { connection: Connection | null; hidden: boolean }) {
+export default function Transcription({ connection, hidden, onOpenSettings }: {
+  connection: Connection | null; hidden: boolean; onOpenSettings?: () => void;
+}) {
   const [initialReceipt] = useState(inspectAttachment);
   const [queue, setQueue] = useState<string[]>(() => {
     const pending = initialReceipt.attachment;
@@ -76,6 +80,7 @@ export default function Transcription({ connection, hidden }: { connection: Conn
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[] | null>(null);
   const revision = useRef(0);
   const unmounted = useRef(new AbortController());
   const busy = active !== null || saving || invalidReceipt !== null || unreadableReceipt;
@@ -99,6 +104,21 @@ export default function Transcription({ connection, hidden }: { connection: Conn
     setCapabilities(null);
     if (connection) void api<Capabilities>(connection, '/v1/transcription').then(setCapabilities).catch(() => undefined);
   }, [connection]);
+  useEffect(() => {
+    if (!connection || hidden) {
+      if (!connection) setWhisperModels(null);
+      return;
+    }
+    const controller = new AbortController();
+    void fetchWhisperModels(connection, controller.signal)
+      .then(items => {
+        if (!controller.signal.aborted) setWhisperModels(items.length > 0 ? items : null);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setWhisperModels(null);
+      });
+    return () => controller.abort();
+  }, [connection, hidden]);
 
   function enqueue(files: string[]) {
     const currentQueue = queueRef.current;
@@ -396,6 +416,8 @@ export default function Transcription({ connection, hidden }: { connection: Conn
 
   const warning = !connection ? connectionHelp
     : capabilities && !capabilities.engine ? 'Dependências de transcrição indisponíveis. Consulte o diagnóstico em Ajustes e prepare o extra transcription.' : '';
+  const selectedModelInfo = whisperModels?.find(item => item.model === model) ?? null;
+  const missingSelectedModel = Boolean(selectedModelInfo && !selectedModelInfo.installed);
   return <div className="transcription" hidden={hidden}>
     <aside className="transcription-sources" aria-label="Origens da transcrição">
       <div className="stack"><p className="eyebrow accent">01 / TRANSCRIÇÃO</p><h1>Áudio e vídeo<br />em texto.</h1>
@@ -466,6 +488,23 @@ export default function Transcription({ connection, hidden }: { connection: Conn
         </div>
       </div>
       {warning && <StatusMessage state="error">{warning}</StatusMessage>}
+      {missingSelectedModel && (
+        <div className="row spread" style={{ flexWrap: 'wrap', gap: 10 }} data-testid="transcription-missing-model-warning">
+          <StatusMessage state="error">
+            {`O modelo "${model}" não está instalado localmente. Importe-o antes de transcrever.`}
+          </StatusMessage>
+          {onOpenSettings && (
+            <button
+              type="button"
+              className="button"
+              onClick={onOpenSettings}
+              data-testid="transcription-manage-models-shortcut"
+            >
+              GERENCIAR MODELOS
+            </button>
+          )}
+        </div>
+      )}
       {storageError && <StatusMessage state="error">{storageError}</StatusMessage>}
       {invalidReceipt && <StatusMessage state="error">{invalidReceipt}</StatusMessage>}
       {(invalidReceipt || unreadableReceipt) && <button className="button" disabled={following} onClick={discardReceipt}>DESCARTAR RECIBO INVÁLIDO</button>}
