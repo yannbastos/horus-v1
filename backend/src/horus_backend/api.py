@@ -37,6 +37,7 @@ from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import HermesScriptRequest, ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
 from .storage import Store
+from . import egress
 from .file_access import PathNotAllowed, client_path
 from .transmissions import TransmissionLog
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
@@ -67,6 +68,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     radar_state = RadarState(settings.data_dir / "radar" / "radar-youtube.sqlite3")
     manager = JobManager(store, settings)
     transmissions = TransmissionLog(store)
+    egress.configure(egress.build_gateway(audit=transmissions))  # ponto único de saída HTTP (HOR-111)
     hermes = HermesConnector(settings, transmissions)
     scripts = ScriptService(store, settings)
     license_reviews = LicenseReviewService(store, settings.data_dir)
