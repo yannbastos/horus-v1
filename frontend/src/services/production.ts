@@ -2414,3 +2414,161 @@ export async function fetchProductionArtifactBlob(
     signal?.removeEventListener('abort', abort);
   }
 }
+
+export type ReviewCommentStatus = 'open' | 'resolved';
+
+export type ReviewCommentTrailAction = 'created' | 'resolved' | 'reopened';
+
+export interface ReviewCommentTrailEvent {
+  action: ReviewCommentTrailAction;
+  author: string;
+  at: string;
+  note?: string;
+}
+
+export interface ReviewComment {
+  id: string;
+  production_id: string;
+  artifact_sha256: string;
+  at_seconds: number;
+  text: string;
+  author: string;
+  author_kind: 'human';
+  status: ReviewCommentStatus;
+  created_at: string;
+  trail: ReviewCommentTrailEvent[];
+}
+
+export interface ReviewCommentsPage {
+  items: ReviewComment[];
+  counts: {
+    open: number;
+    resolved: number;
+  };
+  next_after: string | null;
+}
+
+export interface ListProductionCommentsParams {
+  status?: ReviewCommentStatus;
+  artifact_sha256?: string;
+  limit?: number;
+  after?: string;
+}
+
+export interface CreateReviewCommentPayload {
+  artifact_sha256: string;
+  at_seconds: number;
+  text: string;
+  author: string;
+}
+
+export interface ReviewCommentDecisionPayload {
+  author: string;
+  note?: string;
+}
+
+export async function listProductionComments(
+  connection: Connection,
+  productionId: string,
+  params: ListProductionCommentsParams = {},
+  signal?: AbortSignal
+): Promise<ReviewCommentsPage> {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.artifact_sha256) search.set('artifact_sha256', params.artifact_sha256);
+  if (typeof params.limit === 'number') search.set('limit', String(params.limit));
+  if (params.after) search.set('after', params.after);
+  const query = search.toString();
+  const path = `/v1/productions/${encodeURIComponent(productionId)}/comments${query ? `?${query}` : ''}`;
+  return api<ReviewCommentsPage>(connection, path, { signal });
+}
+
+export async function createProductionComment(
+  connection: Connection,
+  productionId: string,
+  payload: CreateReviewCommentPayload,
+  idempotencyKey: string = crypto.randomUUID(),
+  signal?: AbortSignal
+): Promise<ReviewComment> {
+  return api<ReviewComment>(
+    connection,
+    `/v1/productions/${encodeURIComponent(productionId)}/comments`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({
+        artifact_sha256: payload.artifact_sha256,
+        at_seconds: Math.round(Number(payload.at_seconds) * 1000) / 1000,
+        text: payload.text,
+        author: payload.author.trim(),
+      }),
+      signal,
+    }
+  );
+}
+
+async function decideProductionComment(
+  connection: Connection,
+  productionId: string,
+  commentId: string,
+  action: 'resolve' | 'reopen',
+  payload: ReviewCommentDecisionPayload,
+  idempotencyKey: string = crypto.randomUUID(),
+  signal?: AbortSignal
+): Promise<ReviewComment> {
+  const body: Record<string, string> = {
+    author: payload.author.trim(),
+  };
+  const trimmedNote = payload.note?.trim();
+  if (trimmedNote) {
+    body.note = trimmedNote;
+  }
+  return api<ReviewComment>(
+    connection,
+    `/v1/productions/${encodeURIComponent(productionId)}/comments/${encodeURIComponent(commentId)}/${action}`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(body),
+      signal,
+    }
+  );
+}
+
+export async function resolveProductionComment(
+  connection: Connection,
+  productionId: string,
+  commentId: string,
+  payload: ReviewCommentDecisionPayload,
+  idempotencyKey?: string,
+  signal?: AbortSignal
+): Promise<ReviewComment> {
+  return decideProductionComment(
+    connection,
+    productionId,
+    commentId,
+    'resolve',
+    payload,
+    idempotencyKey,
+    signal
+  );
+}
+
+export async function reopenProductionComment(
+  connection: Connection,
+  productionId: string,
+  commentId: string,
+  payload: ReviewCommentDecisionPayload,
+  idempotencyKey?: string,
+  signal?: AbortSignal
+): Promise<ReviewComment> {
+  return decideProductionComment(
+    connection,
+    productionId,
+    commentId,
+    'reopen',
+    payload,
+    idempotencyKey,
+    signal
+  );
+}

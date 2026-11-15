@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { Connection } from '../../services/api';
 import type {
   NormalizedQualityCheck,
   NormalizedWordTimings,
@@ -8,9 +9,13 @@ import type {
 } from '../../services/production';
 import { formatTimecode } from '../../services/production';
 import { StatusMessage } from '../../components/StatusMessage';
+import ReviewCommentsPanel from './ReviewCommentsPanel';
 import WordTimeline from './WordTimeline';
 
 export default function TimecodeReviewWorkspace({
+  connection,
+  productionId,
+  videoArtifactSha256,
   currentTimeSeconds,
   scenes,
   subtitles,
@@ -25,6 +30,9 @@ export default function TimecodeReviewWorkspace({
   onUpdateNote,
   onRemoveNote,
 }: {
+  connection?: Connection | null;
+  productionId?: string;
+  videoArtifactSha256?: string | null;
   currentTimeSeconds: number;
   scenes: TimecodeSceneNavItem[];
   subtitles: TimecodeSubtitleNavItem[];
@@ -425,6 +433,17 @@ export default function TimecodeReviewWorkspace({
             )}
           </div>
         </div>
+      )}
+
+      {connection && productionId && videoArtifactSha256 && (
+        <ReviewCommentsPanel
+          connection={connection}
+          productionId={productionId}
+          currentVersionSha256={videoArtifactSha256}
+          currentTimeSeconds={currentTimeSeconds}
+          onSeekTimecode={onSeekTimecode}
+          onCaptureCurrentVideoTime={onCaptureCurrentVideoTime}
+        />
       )}
     </div>
   );
