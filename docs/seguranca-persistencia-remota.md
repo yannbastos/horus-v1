@@ -1,5 +1,7 @@
 # Segurança da persistência remota (Supabase) — revisão independente, Fase A (HOR-137)
 
+**Atualização da Fase B (15/11/2026):** o [registro de implementação e evidências](persistencia-fase-b.md) distingue o schema/RLS já ensaiado no horus-dev dos controles ainda pendentes do futuro serviço, sessão e pooler. A análise original abaixo e R1–R13 são preservados; sua redação de estado refere-se à Fase A.
+
 **Estado: análise e requisitos. Nada foi implementado, migrado ou enviado à nuvem.** Escopo: o que a implementação futura (Fases B–E) precisa cumprir para não criar um risco novo. O inventário do SQLite e a divisão local/remota são do trabalho paralelo do Codex e não são repetidos aqui; o que esta análise precisa dele está em "Dependências". Premissas dadas: projeto de desenvolvimento `horus-dev` (plano Free), **Data API desativada**, exposição automática de tabelas desativada, RLS automático ligado. Nenhum segredo, senha, string de conexão ou token entra neste documento; afirmações sobre o comportamento do Supabase marcadas *(verificar)* devem ser conferidas na documentação/painel antes da Fase B.
 
 ## 1. Modelo de ameaça do backend FastAPI local
