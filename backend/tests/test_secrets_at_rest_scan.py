@@ -16,7 +16,6 @@ from pathlib import Path
 
 import keyring
 import pytest
-from keyring.backend import KeyringBackend
 
 from test_exports import production, approve, export  # noqa: F401
 from test_workflows import client_for, settings  # noqa: F401
@@ -25,22 +24,6 @@ from horus_backend.processes import sanitized_tail
 
 ELEVEN = 'xi-sintetica-' + secrets.token_hex(16)
 HERMES = 'hermes-sintetico-' + secrets.token_hex(16)
-
-
-class MemoryKeyring(KeyringBackend):
-    priority = 1
-
-    def __init__(self):
-        self.values = {}
-
-    def get_password(self, service, username):
-        return self.values.get((service, username))
-
-    def set_password(self, service, username, password):
-        self.values[service, username] = password
-
-    def delete_password(self, service, username):
-        self.values.pop((service, username), None)
 
 
 def needles(*values):
@@ -98,14 +81,11 @@ def test_scanner_detects_planted_secrets_in_every_surface(tmp_path):
     assert not [f for f in scan_tree(tree, values) if f.startswith('integrations')]   # o local esperado é ignorado só nele
 
 
-def test_no_plaintext_secret_in_data_dir_database_logs_responses_exports_and_packages(production, tmp_path, request, caplog, capfd):
+def test_no_plaintext_secret_in_data_dir_database_logs_responses_exports_and_packages(production, tmp_path, isolated_keyring, caplog, capfd):
     client, record, root, settings = production
     (root / 'private.env').unlink()                     # a fixture planta um .env só para provar a exclusão do export
-    keyring_store = MemoryKeyring()
-    previous = keyring.get_keyring()
-    keyring.set_keyring(keyring_store)               # `monkeypatch.setattr(keyring, 'get_keyring')` NÃO isola: usaria o cofre real do SO
-    request.addfinalizer(lambda: keyring.set_keyring(previous))
-    assert keyring.get_keyring() is keyring_store    # nunca chamar a API de credencial sem o cofre em memória
+    keyring_store = isolated_keyring                 # conftest.py: cofre em memória (o real do SO é proibido nos testes)
+    assert keyring.get_keyring() is keyring_store
     caplog.set_level('DEBUG')
     hermes_file = settings.hermes_config            # fora do diretório de dados (caminho do fixture)
     hermes_file.write_text(json.dumps({'base_url': 'http://127.0.0.1:8643', 'token': HERMES}), encoding='utf-8')

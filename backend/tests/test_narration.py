@@ -9,19 +9,10 @@ from types import SimpleNamespace
 
 import keyring
 import pytest
-from keyring.backend import KeyringBackend
 from fastapi.testclient import TestClient
 from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.narration.providers import ElevenLabs, NarrationError, WindowsSapi, Piper, voice
-
-
-class MemoryKeyring(KeyringBackend):
-    priority = 1
-    def __init__(self): self.values = {}
-    def get_password(self, service, username): return self.values.get((service, username))
-    def set_password(self, service, username, password): self.values[service, username] = password
-    def delete_password(self, service, username): self.values.pop((service, username), None)
 
 
 @pytest.fixture(autouse=True)
@@ -40,8 +31,6 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, 'connect', guarded_connect)
     monkeypatch.setattr(socket, 'create_connection', blocked)
     monkeypatch.setattr(socket, 'getaddrinfo', blocked)
-    monkeypatch.setattr(keyring, 'get_keyring', lambda: memory)
-    memory = MemoryKeyring()
 
 
 @pytest.fixture
