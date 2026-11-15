@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 import os
+import re
 import time
 from pathlib import Path
 from typing import Annotated, Literal
@@ -13,12 +14,12 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from .config import Settings
-from .file_access import client_path
+from .file_access import client_path, PathNotAllowed
 from .radar_youtube.state import RadarState
 from .retention import run_retention
 from .processes import OwnedProcess, failure_detail, sanitized_tail
 from .storage import Store
-from .transcriber import FILE_MARKER, LANGUAGES, MODELS, is_youtube_url
+from .transcriber import FILE_MARKER, LANGUAGES, MODELS, is_youtube_url, download_error
 from .worker_lock import WorkerLock
 from .workflows import WorkflowService
 from .production import ProductionService
@@ -65,8 +66,8 @@ class DownloadRequest(BaseModel):
 
 JobRequest = Annotated[FactoryRequest | TranscriptionRequest | DownloadRequest, Field(discriminator="operation")]
 _parse_request = TypeAdapter(JobRequest).validate_python
-# Sem limite fixo para tarefas longas de mídia; o operador pode cancelar.
-TIMEOUTS = {"factory.profile": 30, "factory.render.preview": 3600}
+# Transcrição longa não tem limite fixo; download e fábrica têm prazos explícitos.
+TIMEOUTS = {"factory.profile": 30, "factory.render.preview": 3600, "youtube.download": 3600}
 
 
 # Ambiente mínimo por operação (S-2): nenhuma credencial do operador chega aos subprocessos.
@@ -259,6 +260,30 @@ class JobManager:
                 "--composicao", "short", "--rascunho"]
 
     async def _line(self, job_id: str, kind: str, line: str, notes: dict | None, failures: list[str] | None = None):
+        if notes is not None and notes.get('download'):
+            # yt-dlp pode imprimir proxy autenticado, caminhos e títulos hostis em ambos os streams.
+            # Só marcadores internos e mensagens reconstruídas atravessam a fronteira persistida.
+            if kind == 'stdout' and line.startswith(FILE_MARKER):
+                candidate = line[len(FILE_MARKER):].strip()
+                notes['file'] = candidate if len(candidate) <= 4096 else None
+                return
+            if line.lstrip().startswith('WARNING:'):
+                return
+            if kind == 'stderr' or line.lstrip().startswith('ERROR:'):
+                message = download_error(line)
+                if notes.get('download_error') is None or message != download_error(''):
+                    notes['download_error'] = message
+                kind = 'status'
+            else:
+                progress = re.search(r'^\[download\]\s+(\d+(?:\.\d+)?)%', line)
+                if not progress:
+                    return
+                kind, message = 'progress', str(int(min(99, float(progress[1]))))
+            seen = notes.setdefault('download_messages', set())
+            if (kind, message) not in seen:
+                seen.add((kind, message))
+                await self.emit(job_id, kind, message)
+            return
         if notes is None:
             line = sanitized_tail(line)
         # O CLI da fábrica escreve recusas `ERRO:` em stdout; stderr também é diagnóstico.
@@ -286,7 +311,7 @@ class JobManager:
         pending, total = "", 0
         while chunk := await reader.read(4096):
             text = decoder.decode(chunk)
-            if kind == "stdout" and total < 1_048_576:
+            if kind == "stdout" and not (notes and notes.get('download')) and total < 1_048_576:
                 captured.append(text[:1_048_576 - total])
                 total += len(text)
             pending += text.replace("\r", "\n")
@@ -296,7 +321,10 @@ class JobManager:
                 if line.strip():
                     await self._line(job_id, kind, line, notes, failures)
             if len(pending) > 4000:
-                await self.emit(job_id, kind, sanitized_tail(pending, limit=2000) if notes is None else pending[:2000])
+                if notes and notes.get('download'):
+                    await self._line(job_id, kind, pending[:2000], notes, failures)
+                else:
+                    await self.emit(job_id, kind, sanitized_tail(pending, limit=2000) if notes is None else pending[:2000])
                 pending = ""
         pending += decoder.decode(b"", final=True)
         if pending.strip():
@@ -338,12 +366,15 @@ class JobManager:
             output: list[str] = []
             failures: list[str] = []
             notes = None if factory else {"segments": [], "file": None}
+            if isinstance(request, DownloadRequest):
+                notes['download'] = True
             process = self.active_process.process
             readers = asyncio.gather(self._read(process.stdout, job_id, "stdout", output, notes, failures),
                                      self._read(process.stderr, job_id, "stderr", [], notes, failures))
             try:
-                await asyncio.wait_for(process.wait(), timeout=TIMEOUTS.get(request.operation))
-                await readers
+                async with asyncio.timeout(TIMEOUTS.get('youtube.download') if isinstance(request, DownloadRequest) else None):
+                    await asyncio.wait_for(process.wait(), timeout=TIMEOUTS.get(request.operation))
+                    await readers
             except BaseException:
                 await self.active_process.stop()
                 readers.cancel()
@@ -360,7 +391,8 @@ class JobManager:
                 diagnostic = {'failure':failure_detail('factory_command_failed', 'render' if request.operation == 'factory.render.preview' else 'prepare',
                     started=started, exit_code=process.returncode, stderr='\n'.join(failures))} if factory else partial
                 self.store.update(job_id, "failed", result=diagnostic,
-                                  error=f"O comando encerrou com código {process.returncode}. {detail}")
+                                  error=(notes.get('download_error') or download_error('') if isinstance(request, DownloadRequest)
+                                         else f"O comando encerrou com código {process.returncode}. {detail}"))
             else:
                 self.store.update(job_id, "succeeded", result=self._result(request, output, notes))
         except asyncio.CancelledError:
@@ -371,15 +403,19 @@ class JobManager:
             raise
         except ValueError as error:
             self.store.update(job_id, "blocked" if not self.active_process else "failed",
-                              result=self.store.get_job(job_id)["result"], error=str(error))
+                              result=self.store.get_job(job_id)["result"],
+                              error=(download_error(error) if job['payload'].get('operation') == 'youtube.download'
+                                     and not isinstance(error, PathNotAllowed) else str(error)))
         except TimeoutError:
             self.store.update(job_id, "failed", result=self.store.get_job(job_id)["result"],
-                              error="Tempo limite da operação excedido.")
+                              error=('Tempo limite do download excedido. Verifique a rede e tente novamente no mesmo destino para retomar o parcial compatível.'
+                                     if job['payload'].get('operation') == 'youtube.download' else "Tempo limite da operação excedido."))
         except Exception as error:
             factory_job = job['payload'].get('operation', '').startswith('factory.')
             self.store.update(job_id, "failed", result=self.store.get_job(job_id)["result"],
                               error=(f'Falha na execução da fábrica ({type(error).__name__}); confira as dependências locais antes de tentar novamente.'
-                                     if factory_job else f"Falha na execução: {type(error).__name__}: {error}"))
+                                     if factory_job else download_error(error) if job['payload'].get('operation') == 'youtube.download'
+                                     else f"Falha na execução: {type(error).__name__}: {error}"))
         finally:
             current = self.store.get_job(job_id)
             if job['payload'].get('operation', '').startswith('factory.') and current['status'] in {'failed','blocked','interrupted'}:
@@ -403,9 +439,10 @@ class JobManager:
             return {"message": "Render de rascunho concluído."}
         if request.operation == "transcription.run":
             return {"text": transcript(notes["segments"])}
-        file = Path(notes["file"]) if notes["file"] else None
-        if not file or not file.is_file():
-            raise ValueError("yt-dlp não retornou um arquivo de vídeo válido.")
+        file = client_path(notes["file"]) if notes["file"] else None
+        if (not file or not file.is_file() or not file.resolve().is_relative_to(client_path(request.directory).resolve())
+                or file.suffix.lower() in {'.part', '.ytdl'}):
+            raise ValueError("O download não retornou um arquivo de vídeo válido e concluído no destino escolhido. Tente novamente para retomar o parcial compatível.")
         return {"path": str(file.resolve())}
 
     async def close(self):

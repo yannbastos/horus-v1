@@ -6,6 +6,7 @@ estruturadas saem no stdout como NDJSON ({"type": ..., "message": ...}).
 from __future__ import annotations
 
 import argparse
+import errno
 import gc
 import json
 import os
@@ -136,9 +137,9 @@ def download(url: str, directory: Path) -> int:
     # "no-certifi": valida TLS pelo repositório de certificados do sistema, que inclui CAs corporativas
     # (inspeção TLS). A verificação continua ativa; o certifi embutido recusaria essas redes.
     args = ["--ignore-config", "--compat-options", "no-certifi",
-            "--js-runtimes", f"node:{node}" if node else "node", "--no-playlist", "--no-overwrites", "--newline",
+            "--js-runtimes", f"node:{node}" if node else "node", "--no-playlist", "--no-overwrites", "--continue", "--part", "--newline",
             "--progress", "--progress-delta", "1", "--no-colors", "--socket-timeout", "20", "--retries", "3",
-            "--windows-filenames", "--trim-filenames", "150", "-P", str(directory),
+            "--windows-filenames", "--no-write-info-json", "--trim-filenames", "150", "-P", str(directory),
             "-o", "%(title).150B [%(id)s].%(ext)s",
             "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b" if ffmpeg else "best[ext=mp4]/best",
             "--merge-output-format", "mp4", "--print", f"after_move:{FILE_MARKER}%(filepath)s"]
@@ -159,6 +160,33 @@ def download(url: str, directory: Path) -> int:
         raise RuntimeError("yt-dlp não encontrado. Instale o extra transcription do backend ou o yt-dlp no PATH.")
     import subprocess
     return subprocess.call([executable, *args])
+
+
+def download_error(error: object) -> str:
+    """Classifica diagnóstico sem devolver caminhos, URLs ou credenciais do motor."""
+    detail = str(error).lower()
+    number = getattr(error, 'errno', None)
+    if 'arquivo de vídeo válido' in detail:
+        return 'O download não retornou um arquivo de vídeo válido e concluído no destino escolhido. Tente novamente para retomar o parcial compatível.'
+    if 'pasta de destino não encontrada' in detail:
+        return 'Pasta de destino não encontrada. Escolha uma pasta existente e tente novamente.'
+    if 'yt-dlp não encontrado' in detail or 'ferramenta de download indisponível' in detail:
+        return 'Ferramenta de download indisponível. Prepare o extra transcription do backend ou configure o yt-dlp antes de tentar novamente.'
+    if number == errno.ENOSPC or any(s in detail for s in ('no space left', 'disk full', 'not enough space', 'errno 28', 'winerror 112', 'espaço em disco insuficiente')):
+        return 'Espaço em disco insuficiente. Libere espaço no destino e tente novamente; o parcial foi mantido quando disponível.'
+    if number in {errno.EACCES, errno.EPERM} or any(s in detail for s in ('permission denied', 'access is denied', 'errno 13', 'winerror 5', 'sem permissão para gravar')):
+        return 'Sem permissão para gravar no destino. Escolha uma pasta gravável e tente novamente.'
+    if any(s in detail for s in ('private video', 'video is private', 'vídeo é privado')):
+        return 'Este vídeo é privado. Escolha um vídeo público; o Hórus não usa credenciais para liberar acesso.'
+    if any(s in detail for s in ('age-restricted', 'confirm your age', 'age restricted', 'restrição de idade')):
+        return 'Vídeo com restrição de idade. Escolha um vídeo público sem essa restrição.'
+    if any(s in detail for s in ('available in your country', 'not available in your region', 'geo restricted', 'geo-restricted', 'geographic restriction', 'indisponível nesta região')):
+        return 'Vídeo indisponível nesta região. Escolha outro vídeo disponível localmente.'
+    if any(s in detail for s in ('removed', 'has been deleted', 'video unavailable', 'not available anymore', 'vídeo removido')):
+        return 'Vídeo removido ou indisponível. Confira o link ou escolha outro vídeo.'
+    if any(s in detail for s in ('timed out', 'timeout', 'connection', 'network', 'temporary failure', 'http error 5', 'http error 429', 'conexão falhou')):
+        return 'A conexão falhou ou o servidor não respondeu. Verifique a rede e tente novamente; o mesmo destino permite retomar o parcial compatível.'
+    return 'Não foi possível concluir o download. Confira o link, a conexão e a pasta de destino antes de tentar novamente.'
 
 
 def main(argv: list[str]):
@@ -183,5 +211,5 @@ def main(argv: list[str]):
             return 0
         return download(args.url, args.directory)
     except Exception as error:  # noqa: BLE001 - o motivo segue para o log da tarefa
-        print(f"{type(error).__name__}: {error}", file=sys.stderr, flush=True)
+        print(download_error(error) if args.command == 'download' else f"{type(error).__name__}: {error}", file=sys.stderr, flush=True)
         return 1
