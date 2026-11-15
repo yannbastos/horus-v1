@@ -8,17 +8,16 @@ import sys
 import threading
 from pathlib import Path
 
-import uvicorn
-
-from .api import create_app
-from .config import Settings, default_data_dir
-
-
 def main():
+    from .worker_runtime import dispatch
+    dispatch()
     if len(sys.argv) > 1 and sys.argv[1] in {"transcribe", "download"}:
         # Subprocesso de tarefa; também funciona no executável empacotado, onde não há "-m".
         from .transcriber import main as worker
         sys.exit(worker(sys.argv[1:]))
+    import uvicorn
+    from .api import create_app
+    from .config import Settings, default_data_dir
     parser = argparse.ArgumentParser(description="API local do Hórus, independente do desktop.")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()

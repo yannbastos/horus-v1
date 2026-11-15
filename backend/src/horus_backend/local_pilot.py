@@ -48,6 +48,9 @@ async def synthesize(input_path):
         command = [sys.executable, '-m', 'horus_backend.narration.production_worker', str(input_path)]
     else:
         command = [sys.executable, str(Path(__file__).with_name('local_pilot_windows.py')), str(input_path)]
+    from .worker_runtime import worker_command
+    name = "narration-worker" if request.get("narration") else "pilot-windows-worker"
+    command = worker_command(name, input_path, development=command[1:-1])
     started = time.monotonic()
     owned = None
     private = [s['text'] for s in request.get('sections', [])]

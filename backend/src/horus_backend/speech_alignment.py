@@ -478,6 +478,8 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
            "HF_HUB_DISABLE_SYMLINKS_WARNING": "1", "PYTHONIOENCODING": "utf-8"}
     command = [sys.executable, "-I", "-m", "horus_backend.speech_alignment", "--wav", str(wav),
                "--model-path", str(model_path), "--language", language]
+    from .worker_runtime import worker_command
+    command = worker_command("alignment-worker", *command[4:], development=command[1:4])
     started = time.monotonic()
     try:
         owned = await OwnedProcess.start(command, env=env)

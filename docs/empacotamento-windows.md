@@ -61,7 +61,8 @@ o motor; não é um modelo Whisper. Para atualizar deliberadamente o lock:
 uv pip compile backend/pyproject.toml --extra bundle --extra transcription --python-version 3.12 --python-platform windows --generate-hashes --output-file scripts/backend-bundle-transcription-requirements.txt
 ```
 
-O pacote também inclui `narration/kokoro_worker.py` como arquivo de recurso:
+O pacote também inclui as fontes Python de `horus_backend` como recursos do bridge,
+incluindo `production_worker.py`, seus auxiliares e `narration/kokoro_worker.py`:
 o Python externo configurado em `HORUS_KOKORO_PYTHON` não consegue executar um
 módulo armazenado somente no PYZ do PyInstaller. Pesos e ambiente Kokoro continuam
 externos; essa inclusão não instala Kokoro, não baixa modelos e não habilita
@@ -86,20 +87,49 @@ produção draft `local_pilot`, QC, revisão por hash e exportação. Aprovaçõ
 licenças são exclusivamente fixtures de teste, sem autorização de publicação.
 Ao falhar, registra a etapa/erro e preserva os dados temporários para investigação;
 fecha a árvore e desinstala, aguardando também a remoção assíncrona da entrada HKCU.
-Esse roteiro é uma verificação, não uma declaração de homologação: a guarda do
-worker de produção congelado ainda pode bloquear o fluxo e não é contornada pelo
-teste. Nenhum passo usa o banco operacional ou altera configuração global.
+O roteiro exige `production_worker.available` e `production.ready` após importar
+o modelo. Nenhum passo usa o banco operacional ou altera configuração global.
 
-**Resultado do ensaio instalado de 14/11/2026:** importação local, reconhecimento
+### Workers no executável instalado
+
+O backend despacha uma lista fixa de comandos internos: `production-worker`,
+`narration-worker`, `sapi-worker`, `pilot-windows-worker` e `alignment-worker`.
+No pacote, cada subprocesso usa o próprio executável com esse comando, sem
+`python -m` nem execução de um `.py` pelo executável congelado. Em desenvolvimento,
+os comandos anteriores são preservados. A API só é importada no processo servidor.
+
+O render continua no Python independente da fábrica, executando o bridge `.py`
+empacotado e seus auxiliares; Node, Remotion, navegador, FFmpeg e modelos permanecem
+externos, previamente preparados, sem downloads no job. Os processos continuam
+sob posse e cancelamento existentes e recebem o ambiente mínimo da produção.
+
+`production.ready` também exige que o executável responda ao `production-check`
+com o protocolo esperado: o processo importa os workers e valida os recursos do
+bridge. Erro, resposta inválida ou timeout tornam o check `production_worker`
+indisponível e impedem iniciar produção. Isso comprova despacho/importação, sem
+executar mídia ou carregar modelos no diagnóstico; não certifica qualidade de
+voz, licenciamento ou sucesso de todo render em qualquer configuração externa.
+
+**Baseline anterior ao suporte dos workers congelados (14/11/2026):** importação local, reconhecimento
 de small para alinhamento, preferência e prévia Kokoro funcionaram no pacote
 corrigido. A produção `local_pilot` foi recusada em `prepare` com “Worker de
 produção requer backend Python preparado; empacotamento ainda não homologado.”
 Logo, revisão/QC/exportação do primeiro vídeo **não foram alcançados no instalado**.
-A guarda foi preservada: os comandos dos workers internos e o bridge executado
-pelo Python da fábrica ainda exigem adaptação e validação no modo congelado.
-O diagnóstico de dependências pode retornar `production.ready=true` sem validar
-essa capacidade; não deve ser interpretado como homologação do fluxo completo.
+Naquele baseline, a guarda foi preservada e o diagnóstico podia retornar
+`production.ready=true` sem verificar essa capacidade; o comportamento acima
+substitui essa limitação.
 O ensaio confirmou desinstalação e ausência de processos órfãos.
+
+**Validação do suporte congelado em 14/11/2026:** o harness passou no NSIS com
+transcrição, usando apenas recursos locais preparados e dados temporários:
+bridge ausente tornou o check indisponível; restaurado o recurso e importado
+small, `production.ready=true`; Kokoro → ASR → Remotion/fábrica → QC → revisão
+fictícia por hash → ZIP concluíram no backend filho do Tauri instalado.
+MP4 de 540×960, 30 fps e 21,013 s, `speech_aligned=true`; QC com 16 checks
+aprovados, um aviso de proveniência/licença e nenhum erro bloqueante.
+Exportação permaneceu `publishable=false`. Desinstalação concluída, nenhum
+órfão e diretório temporário removido. Isso não substitui revisão audiovisual
+humana nem valida atualização/rollback ou instalação em máquina limpa.
 
 No Windows, a transcrição usa CPU int8 por padrão quando não há runtime
 explicitamente selecionado. Para usar um runtime existente, inicie o desktop

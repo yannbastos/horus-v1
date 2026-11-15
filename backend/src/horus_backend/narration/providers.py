@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+from ..worker_runtime import worker_command
 import subprocess
 import sys
 import time
@@ -76,13 +77,13 @@ class WindowsSapi(LocalProvider):
     def voices(self):
         if sys.platform != 'win32': return []
         try:
-            items = json.loads(run([sys.executable, '-m', 'horus_backend.narration.sapi_worker'], {'action': 'voices'}))
+            items = json.loads(run(worker_command('sapi-worker', development=['-m', 'horus_backend.narration.sapi_worker']), {'action': 'voices'}))
             return [voice(v['id'], v['name'], v['language']) for v in items]
         except (ValueError, KeyError, TypeError):
             raise NarrationError('local_narration_failed') from None
     def synthesize(self, text, voice_id, output, authorization=None):
         if voice_id not in {v['id'] for v in self.voices()}: raise NarrationError('voice_not_found', 422)
-        run([sys.executable, '-m', 'horus_backend.narration.sapi_worker'],
+        run(worker_command('sapi-worker', development=['-m', 'horus_backend.narration.sapi_worker']),
             {'action': 'synthesize', 'text': text, 'voice_id': voice_id, 'output': str(output)})
         return {'speech_aligned': False, 'publishable': False, 'demo_only': True}
 

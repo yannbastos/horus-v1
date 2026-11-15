@@ -86,6 +86,9 @@ def journey(api, args, report):
     report['diagnostics_after_import'] = api.call('/v1/diagnostics')
     assert next(c for c in report['diagnostics_after_import']['production']['checks']
                 if c['id'] == 'alignment_model')['available'], 'Modelo importado não disponível para alinhamento.'
+    assert next(c for c in report['diagnostics_after_import']['production']['checks']
+                if c['id'] == 'production_worker')['available'], 'Worker instalado não respondeu à verificação de capacidade.'
+    assert report['diagnostics_after_import']['production']['ready'], 'Produção instalada não está pronta.'
     report['narration_providers'] = api.call('/v1/narration/providers')
     report['preference'] = api.call('/v1/narration/preference', dict(provider='kokoro', voice_id='pf_dora'), 'PUT')
     preview = api.call('/v1/narration/preview', dict(provider='kokoro', voice_id='pf_dora',
@@ -171,6 +174,18 @@ def main(args):
             time.sleep(.2)
         else:
             raise TimeoutError('Backend instalado não iniciou.')
+        # Prova negativa no próprio pacote descartável, antes de qualquer produção.
+        bridge = Path(backend.exe()).parent / '_internal/horus_backend/production_worker.py'
+        unavailable = bridge.with_suffix('.unavailable')
+        bridge.rename(unavailable)
+        try:
+            report['diagnostics_missing_bridge'] = api.call('/v1/diagnostics')
+            check = next(c for c in report['diagnostics_missing_bridge']['production']['checks']
+                         if c['id'] == 'production_worker')
+            assert not check['available'], 'Diagnóstico aceitou pacote sem bridge.'
+            assert not report['diagnostics_missing_bridge']['production']['ready']
+        finally:
+            unavailable.rename(bridge)
         journey(api, args, report)
     except Exception as error:
         report['error'] = str(error)

@@ -18,6 +18,9 @@ def production_diagnostics(settings: Settings):
                            detail=('Presença local verificada. ' if available else 'Indisponível. ') + instruction,
                            required_for=list(required_for)))
 
+    from .worker_runtime import production_worker_available
+    add("production_worker", "Worker de produção", production_worker_available(),
+        "Despacho do worker e recursos do bridge verificados no executável instalado; repare o aplicativo se indisponível.")
     source = settings.factory_root
     files = ['scripts/.venv/' + ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'),
              'remotion/package.json', 'remotion/package-lock.json', 'remotion/tsconfig.json']
