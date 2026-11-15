@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from .dependencies import find_tool
+from . import cuda_runtime
 
 MODELS = ("tiny", "base", "small", "medium", "large-v3-turbo")
 LANGUAGES = ("auto", "pt", "en", "es")
@@ -50,12 +51,12 @@ def emit(kind: str, message: str):
     print(json.dumps({"type": kind, "message": message}, ensure_ascii=False), flush=True)
 
 
-def choose_device(runtime, *, report=None, default='auto') -> str:
+def choose_device(runtime, *, report=None, default='auto', cuda_ready=True) -> str:
     report = report or emit
     requested = os.environ.get('HORUS_WHISPER_DEVICE', default).strip().lower()
     if requested not in {'auto', 'cpu', 'cuda'}:
         raise ValueError('HORUS_WHISPER_DEVICE inválido. Use auto, cpu ou cuda.')
-    if requested == 'cpu':
+    if requested == 'cpu' or not cuda_ready:
         return 'cpu'
     try:
         available = runtime.get_cuda_device_count() > 0
@@ -74,10 +75,15 @@ def is_gpu_failure(error: Exception) -> bool:
 
 
 def transcribe(path: Path, model_name: str, language: str, models_dir: Path):
+    with cuda_runtime.session(emit) as cuda_ready:
+        return _transcribe(path, model_name, language, models_dir, cuda_ready)
+
+
+def _transcribe(path: Path, model_name: str, language: str, models_dir: Path, cuda_ready: bool):
     import ctranslate2
     from faster_whisper import WhisperModel
 
-    device = choose_device(ctranslate2)
+    device = choose_device(ctranslate2, cuda_ready=cuda_ready)
     from .speech_alignment import resolve_model_path
     local_root = os.environ.get('HORUS_WHISPER_MODELS_DIR')
     if local_root:

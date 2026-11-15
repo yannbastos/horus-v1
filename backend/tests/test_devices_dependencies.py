@@ -1,4 +1,5 @@
 import builtins
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import sys
@@ -18,6 +19,8 @@ def clean_configuration(monkeypatch):
 
 
 def fake_engine(monkeypatch, factory, count=0):
+    # Estes testes simulam GPU/motor; descoberta/registro real tem suíte própria.
+    monkeypatch.setattr(transcriber.cuda_runtime, 'session', lambda report: nullcontext(True))
     from horus_backend import speech_alignment
     monkeypatch.setattr(speech_alignment, 'resolve_model_path', lambda folder, name: folder / name)
     monkeypatch.setitem(sys.modules, 'ctranslate2', SimpleNamespace(get_cuda_device_count=lambda: count))

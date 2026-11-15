@@ -27,6 +27,7 @@ def planted(monkeypatch):
     monkeypatch.setenv("HORUS_YTDLP", "ytdlp-path")
     monkeypatch.setenv("HORUS_WHISPER_DEVICE", "cpu")
     monkeypatch.setenv("HORUS_WHISPER_MODELS_DIR", "local-models-root")
+    monkeypatch.setenv("HORUS_CUDA_RUNTIME_DIR", "explicit-runtime-root")
     for name in ("HF_HUB_OFFLINE", "HF_HUB_DISABLE_TELEMETRY", "TRANSFORMERS_OFFLINE"):
         monkeypatch.setenv(name, "1")
     monkeypatch.setenv("HORUS_NODE", "node-path")
@@ -46,7 +47,7 @@ REQUESTS = {
     "factory.render.preview": FactoryRequest(operation="factory.render.preview", video_id="v1"),
 }
 EXTRA = {
-    "transcription.run": {"HORUS_FFMPEG", "HORUS_WHISPER_DEVICE", "HORUS_WHISPER_MODELS_DIR",
+    "transcription.run": {"HORUS_FFMPEG", "HORUS_WHISPER_DEVICE", "HORUS_WHISPER_MODELS_DIR", "HORUS_CUDA_RUNTIME_DIR",
                           "HF_HUB_OFFLINE", "HF_HUB_DISABLE_TELEMETRY", "TRANSFORMERS_OFFLINE"},
     "youtube.download": {"HORUS_FFMPEG", "HORUS_YTDLP", "HTTPS_PROXY"},
     "factory.profile": {"HORUS_NODE"},
@@ -77,6 +78,9 @@ def test_factory_receives_factory_home_and_pythonpath(planted, tmp_path):
 def test_unrelated_tool_variables_do_not_leak(planted, tmp_path):
     names = {k.upper() for k in job_environment(REQUESTS["transcription.run"], settings(tmp_path))}
     assert not {"HORUS_YTDLP", "HORUS_NODE", "HTTPS_PROXY"} & names
+    assert "HORUS_CUDA_RUNTIME_DIR" in names
+    for operation in ('youtube.download', 'factory.profile', 'factory.render.preview'):
+        assert 'HORUS_CUDA_RUNTIME_DIR' not in job_environment(REQUESTS[operation], settings(tmp_path))
 
 
 def test_subprocess_really_receives_minimal_environment(planted, tmp_path):

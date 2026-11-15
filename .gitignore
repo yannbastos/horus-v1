@@ -36,6 +36,7 @@ installer-test-artifacts/
 backend/.cache/
 .venv/
 .venv-bundle/
+.venv-bundle-transcription/
 __pycache__/
 *.py[cod]
 *.egg-info/

@@ -39,7 +39,92 @@ uv pip compile backend/pyproject.toml --extra bundle --python-version 3.12 --pyt
 
 ## Limites do pacote
 
-Não inclui faster-whisper/CTranslate2/PyAV, Kokoro, yt-dlp, FFmpeg, Node,
+### Perfil opcional de transcrição e runtime CUDA explícito
+
+O pacote mínimo continua sendo o padrão. Para incluir faster-whisper,
+CTranslate2, PyAV e tokenizers (sem pesos Whisper ou runtime CUDA completo), gere explicitamente:
+
+```powershell
+npm --prefix frontend run tauri build -- --config ../scripts/tauri-transcription.json
+# Somente backend desse perfil:
+powershell -NoProfile -File scripts/build-backend.ps1 -IncludeTranscription
+```
+
+Esse perfil usa `backend/.venv-bundle-transcription` e o lock separado com hashes
+`scripts/backend-bundle-transcription-requirements.txt`; o ambiente mínimo não
+recebe os extras. O wheel CTranslate2 fornece um pequeno dispatcher `cudnn64_9.dll`,
+mantido para importar o motor inclusive em CPU; cuBLAS e os componentes cuDNN
+externos não são incluídos. O asset Silero VAD do faster-whisper também acompanha
+o motor; não é um modelo Whisper. Para atualizar deliberadamente o lock:
+
+```powershell
+uv pip compile backend/pyproject.toml --extra bundle --extra transcription --python-version 3.12 --python-platform windows --generate-hashes --output-file scripts/backend-bundle-transcription-requirements.txt
+```
+
+No Windows, a transcrição usa CPU int8 por padrão quando não há runtime
+explicitamente selecionado. Para usar um runtime existente, inicie o desktop
+com a configuração local (nenhuma alteração de PATH global ou instalação):
+
+```powershell
+$env:HORUS_CUDA_RUNTIME_DIR = '<pasta local absoluta confiável>'
+$env:HORUS_WHISPER_MODELS_DIR = '<raiz dos modelos locais já preparados>'
+$env:HORUS_WHISPER_DEVICE = 'cuda' # auto também permite GPU após seleção do runtime
+& '<pasta instalada>/horus-desktop.exe'
+```
+
+Alternativamente, `HORUS_CUDA_RUNTIME_DIR=system` autoriza descoberta explícita
+por `CUDA_PATH`, `CUDA_PATH_V<major>_<minor>` e cuDNN em Program Files/NVIDIA/CUDNN/v9*.
+Não há busca arbitrária no PATH. A pasta escolhida pode conter as DLLs
+diretamente, em `bin/`, `bin/x64/`, ou no layout `nvidia/{cublas,cudnn,cuda_nvrtc}/bin`
+(nesse caso selecione a raiz `nvidia`). Caminhos relativos, UNC/dispositivos,
+pastas inexistentes e escapes recusados por `file_access.client_path` não são usados.
+
+`GET /v1/diagnostics` acrescenta o check e objeto `cuda_runtime`, preservando os
+campos anteriores. A inspeção só lê arquivos: PE/DLL x64, nomes ABI cuBLAS 12 e
+componentes cuDNN 9, FileVersion cuDNN quando presente e CTranslate2 >=4.5,<5
+quando instalado; não importa motores nem carrega DLLs NVIDIA. FileVersion
+cuBLAS pode usar numeração de driver 6.14 e não é confundido com sua ABI 12;
+alguns componentes cuDNN não possuem recurso de versão. Presença estática não
+certifica driver, GPU, autenticidade ou compatibilidade completa; use somente
+DLLs NVIDIA confiáveis já provisionadas pelo operador.
+
+Somente no subprocesso de transcrição, antes de importar os motores, o backend
+registra as pastas com `os.add_dll_directory`, pré-carrega por caminho absoluto
+e mantém referências/handles até terminar; consulta `cublasGetProperty` e
+`cudnnGetVersion` para conferir as versões nativas. A configuração passa pela
+allowlist exclusiva de `transcription.run`. Runtime ausente/inválido, carga
+recusada ou GPU indisponível usam CPU int8; falha CUDA antes do primeiro trecho
+permite uma tentativa CPU, e texto parcial nunca é repetido automaticamente.
+Não há download de runtime/modelos durante a execução. O pacote mínimo informa
+motor ausente: runtime sozinho não habilita transcrição nem fallback executável.
+
+Ensaio instalado com áudio **sintético**, modelos já preparados e dados temporários:
+
+```powershell
+powershell -NoProfile -File scripts/test-windows-installer.ps1 `
+  -Installer '<NSIS do perfil de transcrição>' -WithTranscription `
+  -CudaRuntimeDir '<runtime local existente>' -ModelDir '<raiz dos modelos locais>' `
+  -Audio '<WAV sintético descartável>'
+```
+
+O teste instala em pasta exclusiva, verifica diagnóstico, executa transcrições
+solicitando CUDA sem runtime, com pasta inexistente e com UNC (espera CPU), e
+com pasta válida e descoberta `system` (espera CUDA), conferindo o dispositivo efetivo nos eventos
+persistidos; fecha o desktop, exige ausência de órfãos e desinstala ao fim.
+
+Evidência local de 14/11/2026, base `8c7eb95`, RTX 3050 Laptop 6 GB/driver
+621.24: NSIS desse perfil com **76.445.050 bytes (72,90 MiB)**, sem pesos Whisper
+ou runtime NVIDIA completo. O ensaio acima passou com sete smokes instalados e
+cinco jobs reais sobre WAV sintético e modelo small local: CPU int8 com runtime
+ausente (9,394 s), pasta inexistente (4,396 s) e UNC (4,189 s); CUDA float16 com
+pasta escolhida (2,610 s) e descoberta `system` (2,555 s). O dispositivo foi
+conferido nos eventos persistidos. PATH do desktop limitado a System32,
+`HORUS_DATA_DIR` temporário, sem download de modelos/DLLs ou mudança global.
+Seis fechamentos normais e uma queda sem backend/descendentes órfãos;
+desinstalação em 4,455 s com executável e registro HKCU removidos.
+É evidência nessa máquina, não homologação de todos os drivers/GPUs ou VM limpa.
+
+O pacote mínimo não inclui faster-whisper/CTranslate2/PyAV, Kokoro, yt-dlp, FFmpeg, Node,
 fábrica externa ou modelos. A API e a interface iniciam sem essas dependências;
 `/v1/diagnostics` informa o que falta. Produção/transcrição dependem da preparação
 externa correspondente: este pacote não certifica o primeiro vídeo. O pacote

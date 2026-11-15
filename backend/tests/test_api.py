@@ -92,6 +92,8 @@ def test_diagnostics_reports_presence_without_running_tools(client, monkeypatch)
     assert checks["ffmpeg"]["available"] is False
     assert checks["hermes"]["available"] is False
     assert report["hermes_connected"] is False
+    assert report['cuda_runtime']['available'] == checks['cuda_runtime']['available']
+    assert {'configured', 'source', 'detail', 'missing', 'cuda_major', 'cudnn_major'} <= report['cuda_runtime'].keys()
     assert "/private" not in response.text
     assert TOKEN not in response.text
     assert client.get("/v1/diagnostics", headers={"Authorization": "Bearer wrong"}).status_code == 401
