@@ -15,6 +15,8 @@ Política vigente desde 13/11/2026, definida pelo usuário (idealizador e respon
 
 Codex, Claude Sonnet e Antigravity são os programadores preferenciais; as preferências não são limites rígidos e a distribuição pode mudar conforme a disponibilidade e os limites de uso de cada um. O Maestro redistribui por dependência, disponibilidade e limite de uso, não deixa agente ocioso quando há tarefa independente autorizada e não inicia tarefas simultâneas nos mesmos arquivos sem coordenação explícita (cada tarefa declara os arquivos de que é dona).
 
+**Distribuição automática (regra permanente):** tarefa enviada sem agente indicado é distribuída pelo Maestro a Codex, Claude Sonnet ou Antigravity/Gemini conforme competência, disponibilidade, cotas e dependências, em paralelo quando independentes e sem arquivos em comum. Agente indicado pelo usuário é respeitado. O Maestro (Opus) coordena, delega, acompanha, revisa e integra; só executa pessoalmente quando houver necessidade técnica justificada (ex.: correção trivial bloqueando uma integração).
+
 ## Ações autorizadas sem aprovação individual
 
 - Criar e administrar branches e worktrees; selecionar e delegar Issues.
