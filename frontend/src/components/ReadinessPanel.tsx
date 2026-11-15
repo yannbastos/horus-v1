@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api } from '../services/api';
+import { api, readDiskEncryption } from '../services/api';
 import type { Connection } from '../services/api';
 import { nativeDesktop, selectLocalPath } from '../platform/desktop';
 import { StatusMessage } from './StatusMessage';
@@ -9,6 +9,7 @@ type ProductionDiagnosticCheck = DiagnosticCheck & { required_for?: string[] };
 type DiagnosticsResponse = {
   checks?: DiagnosticCheck[];
   notice?: string;
+  disk_encryption?: unknown;
   production?: {
     ready: boolean;
     missing: string[];
@@ -157,6 +158,7 @@ export function ReadinessPanel({
 
   const missingItems = items.filter(item => !item.available);
   const availableItems = items.filter(item => item.available);
+  const diskEncryption = readDiskEncryption(report?.disk_encryption);
 
   async function handlePickPath(spec: OptionalComponentSpec) {
     if (nativeDesktop) {
@@ -270,6 +272,12 @@ export function ReadinessPanel({
                 : `${missingItems.length} de ${COMPONENTS.length} componentes opcionais ainda não instalados (${missingItems.map(i => i.spec.title.split(' ')[0]).join(', ')}). Nenhum download automático é executado; siga as instruções abaixo para instalar localmente.`}
             </StatusMessage>
           </div>
+
+          {diskEncryption?.status === 'not_encrypted' && (
+            <StatusMessage state="empty" role="status" testId="readiness-disk-encryption-notice">
+              Aviso opcional: {diskEncryption.volume ? `o volume ${diskEncryption.volume}` : 'o volume dos dados'} está sem criptografia de disco (BitLocker ou Criptografia de dispositivo). Isso não bloqueia nenhuma produção; veja como ativar em Ajustes → Privacidade e Segurança.
+            </StatusMessage>
+          )}
 
           <div className="readiness-components-grid" style={{ display: 'grid', gap: 'var(--Space5)' }}>
             {items.map(({ spec, available }) => {

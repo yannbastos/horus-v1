@@ -1,12 +1,14 @@
 import { useEffect, useId, useState } from 'react';
 import type {
   Connection,
+  DiskEncryptionDiagnostics,
   SecurityBlocker,
   SecurityCredentialItem,
   SecurityExternalConnection,
   SecurityStatusResponse,
 } from '../services/api';
-import { ApiError, getSecurityStatus } from '../services/api';
+import { ApiError, api, getSecurityStatus, readDiskEncryption } from '../services/api';
+import { DiskEncryptionCard } from '../components/DiskEncryptionCard';
 import {
   AvailabilityBadge,
   BlockerList,
@@ -131,6 +133,7 @@ function describeFailure(reason: unknown): LoadFailure {
 
 export default function PrivacySecurity({ connection }: { connection: Connection | null }) {
   const [status, setStatus] = useState<SecurityStatusResponse | null>(null);
+  const [diskEncryption, setDiskEncryption] = useState<DiskEncryptionDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<LoadFailure | null>(null);
   const [revision, setRevision] = useState(0);
@@ -139,6 +142,7 @@ export default function PrivacySecurity({ connection }: { connection: Connection
   useEffect(() => {
     if (!connection) {
       setStatus(null);
+      setDiskEncryption(null);
       setLoading(false);
       setFailure(null);
       setAnnounce('');
@@ -150,20 +154,31 @@ export default function PrivacySecurity({ connection }: { connection: Connection
     setFailure(null);
     setAnnounce('');
 
-    void getSecurityStatus(connection, controller.signal)
-      .then(res => {
+    const diagnosticsPromise = api<{ disk_encryption?: unknown }>(connection, '/v1/diagnostics', {
+      signal: controller.signal,
+    })
+      .then(diag => readDiskEncryption(diag?.disk_encryption))
+      .catch(() => null);
+
+    void Promise.all([
+      getSecurityStatus(connection, controller.signal),
+      diagnosticsPromise,
+    ])
+      .then(([res, diskEnc]) => {
         if (controller.signal.aborted) return;
         const safeStatus =
           res && typeof res === 'object' && !Array.isArray(res)
             ? res
             : ({} as SecurityStatusResponse);
         setStatus(safeStatus);
+        setDiskEncryption(diskEnc);
         setAnnounce('Diagnóstico de segurança atualizado.');
       })
       .catch(reason => {
         if (controller.signal.aborted) return;
         // Sem dados antigos: um diagnóstico obsoleto não pode sugerir proteção atual.
         setStatus(null);
+        setDiskEncryption(null);
         setFailure(describeFailure(reason));
       })
       .finally(() => {
@@ -252,6 +267,8 @@ export default function PrivacySecurity({ connection }: { connection: Connection
           />
 
           <PrivacyStateSection processing={status.processing ?? null} />
+
+          <DiskEncryptionCard diskEncryption={diskEncryption} />
 
           <HermesPermissionsSection
             hermes={status.hermes ?? null}

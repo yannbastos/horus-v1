@@ -632,3 +632,33 @@ export async function getSecurityStatus(
   return api<SecurityStatusResponse>(connection, '/v1/security/status', { signal });
 }
 
+export type DiskEncryptionStatusValue = 'encrypted' | 'not_encrypted' | 'unverified';
+
+export type DiskEncryptionDiagnostics = {
+  status: DiskEncryptionStatusValue;
+  protection: string | null;
+  method: string | null;
+  volume: string | null;
+  detail: string;
+  guidance: string;
+};
+
+export function readDiskEncryption(raw: unknown): DiskEncryptionDiagnostics | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (typeof record.status !== 'string') return null;
+  const status: DiskEncryptionStatusValue =
+    record.status === 'encrypted' || record.status === 'not_encrypted' || record.status === 'unverified'
+      ? record.status
+      : 'unverified';
+  return {
+    status,
+    protection: typeof record.protection === 'string' ? record.protection : null,
+    method: typeof record.method === 'string' ? record.method : null,
+    volume: typeof record.volume === 'string' && record.volume.trim() !== '' ? record.volume.trim() : null,
+    detail: typeof record.detail === 'string' ? record.detail : '',
+    guidance: typeof record.guidance === 'string' ? record.guidance : '',
+  };
+}
+
+
