@@ -609,7 +609,37 @@ export type SecurityCredentials = {
 export type SecurityFeatureAvailability = {
   available: boolean | null;
   enabled?: boolean | null;
-  reason: string | null;
+  reason?: string | null;
+  endpoint?: string | null;
+  append_only?: boolean | null;
+  content_stored?: boolean | null;
+};
+
+export type SecurityTransmissionItem = {
+  seq: number;
+  id: string;
+  at: string | null;
+  kind: string | null;
+  stage: string | null;
+  workflow_id: string | null;
+  job_id: string | null;
+  attempt_id: string | null;
+  run_id: string | null;
+  destination: string | null;
+  provider: string | null;
+  model: string | null;
+  envelope_bytes: number | null;
+  envelope_sha256: string | null;
+  authorization_id: string | null;
+  result: string | null;
+  detail: string | null;
+  tokens_total: number | null;
+  cost_usd: string | null;
+};
+
+export type SecurityTransmissionsResponse = {
+  items: SecurityTransmissionItem[];
+  next_after: number | null;
 };
 
 export type SecurityStatusResponse = {
@@ -630,5 +660,21 @@ export async function getSecurityStatus(
   signal?: AbortSignal
 ): Promise<SecurityStatusResponse> {
   return api<SecurityStatusResponse>(connection, '/v1/security/status', { signal });
+}
+
+export async function getSecurityTransmissions(
+  connection: Connection,
+  params?: { limit?: number; after?: number },
+  signal?: AbortSignal
+): Promise<SecurityTransmissionsResponse> {
+  const query = new URLSearchParams();
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.after !== undefined) query.set('after', String(params.after));
+  const qs = query.toString();
+  return api<SecurityTransmissionsResponse>(
+    connection,
+    `/v1/security/transmissions${qs ? `?${qs}` : ''}`,
+    { signal }
+  );
 }
 
