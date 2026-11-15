@@ -74,6 +74,7 @@ Fonte oficial de estado: [Project](https://github.com/users/yannbastos/projects/
 - Ao concluir: confirmar critérios de aceite, Status Concluído e fechar a Issue só com todos os critérios atendidos. Recurso parcial mantém a Issue aberta.
 - Ao bloquear: motivo, Status Bloqueado e a autorização ou dependência exata.
 - Verificar por leitura que a gravação no Project foi aplicada. Não criar Issues duplicadas.
+- **Integridade:** nenhuma entrega é administrativamente concluída sem Issue, Status e evidências iguais ao resultado real. Falha de gravação: registrar e tentar de novo quando seguro. Verificação incremental a cada entrega e reconciliação periódica delegada (não a cada commit).
 
 ## Prioridade por valor
 
@@ -112,6 +113,8 @@ Maximizar progresso real por unidade de consumo, sem reduzir qualidade ou segura
 ## Continuidade
 
 Ao concluir um incremento: atualizar Issue + Status do Project + evidências (obrigatório em toda transição), revisar, testar, integrar e fazer push quando os critérios forem atendidos, atualizar o Project e delegar a próxima tarefa independente enquanto houver capacidade e autorização. Agente bloqueado ou no limite de uso: registrar e redistribuir. Não prometer execução futura sem mecanismo ativo; registrar o ponto de retomada na Issue.
+
+**Delegação contínua:** a fila de trabalho são as Issues do Project. Quando um agente termina: receber resultado e evidências; encaminhar revisão/integração se preciso; escolher na fila a próxima tarefa prioritária, independente e autorizada; delegar já ao agente livre, sem esperar os demais; atualizar Issue e Status. Não delegar quando a tarefa depender de código não integrado, sobrepuser arquivos em andamento, exigir autorização ainda não dada ou o agente estiver sem cota; não criar tarefas artificiais.
 
 ## Retomada em outro computador ou nova sessão
 
