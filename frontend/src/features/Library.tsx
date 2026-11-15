@@ -17,7 +17,15 @@ import type { LoadedMediaMetadata, PlayingMedia } from '../components/MediaPlaye
 type MediaTypeFilter = 'all' | 'video' | 'audio';
 type MediaSortOrder = 'name_asc' | 'size_desc' | 'size_asc';
 
-export default function Library({ connection }: { connection: Connection | null }) {
+export default function Library({
+  connection,
+  searchFocusNonce = 0,
+  searchShortcutBinding,
+}: {
+  connection: Connection | null;
+  searchFocusNonce?: number;
+  searchShortcutBinding?: string;
+}) {
   const [media, setMedia] = useState<Media[]>([]);
   const [playing, setPlaying] = useState<PlayingMedia | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,7 +36,17 @@ export default function Library({ connection }: { connection: Connection | null 
   const [metadataByKey, setMetadataByKey] = useState<Record<string, LoadedMediaMetadata>>({});
 
   const input = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const blob = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (searchFocusNonce <= 0) return;
+    const frame = requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [searchFocusNonce, media.length]);
 
   const loadMedia = useCallback(async (conn: Connection) => {
     setLoading(true);
@@ -214,8 +232,10 @@ export default function Library({ connection }: { connection: Connection | null 
             <label className="library-search-label">
               Buscar por nome ou formato
               <input
+                ref={searchInputRef}
                 type="search"
                 aria-label="Buscar mídia por nome"
+                aria-keyshortcuts={searchShortcutBinding || undefined}
                 placeholder="Ex.: entrevista, .mp4, .wav…"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}

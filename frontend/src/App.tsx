@@ -3,12 +3,20 @@ import { EyeMark } from './components/Identity';
 import { NotificationBellButton, NotificationsPanel } from './components/NotificationsCenter';
 import { navigation, Overview, Preview, SectionHeader, sections } from './components/Sections';
 import type { Page } from './components/Sections';
+import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
 import { connectDesktop, nativeDesktop } from './platform/desktop';
 import { api } from './services/api';
 import type { Connection, HermesStatus } from './services/api';
 import { useNotificationsBell } from './services/notifications';
 import type { NotificationItem } from './services/notifications';
 import { useProductionObserver } from './services/productionNotices';
+import {
+  isEditableTarget,
+  loadShortcutPreferences,
+  matchesShortcut,
+  saveShortcutPreferences,
+} from './services/shortcuts';
+import type { ShortcutId, ShortcutPreferences } from './services/shortcuts';
 import type { EditorialFocusTarget } from './features/EditorialWorkflows';
 import type { Theme } from './features/Settings';
 
@@ -67,8 +75,18 @@ export default function App() {
   const [notificationsHiddenBy404, setNotificationsHiddenBy404] = useState(false);
   const [bellAnnouncement, setBellAnnouncement] = useState('');
   const [notificationFocusTarget, setNotificationFocusTarget] = useState<EditorialFocusTarget | null>(null);
+  const [shortcutPrefs, setShortcutPrefs] = useState<ShortcutPreferences>(loadShortcutPreferences);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const [librarySearchNonce, setLibrarySearchNonce] = useState(0);
+  const [navAnnouncement, setNavAnnouncement] = useState('');
   const bellButtonRef = useRef<HTMLButtonElement | null>(null);
+  const shortcutsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const prevUnreadRef = useRef(0);
+
+  const handleShortcutPrefsChange = useCallback((next: ShortcutPreferences) => {
+    saveShortcutPreferences(next);
+    setShortcutPrefs(next);
+  }, []);
 
   useEffect(() => {
     setNotificationsHiddenBy404(false);
@@ -114,12 +132,74 @@ export default function App() {
     [dismissNotice, productionNotice],
   );
 
+  useEffect(() => {
+    if (!shortcutPrefs.enabled) return;
+
+    const NAV_TARGETS: { id: ShortcutId; page: Page | 'production-center'; label: string }[] = [
+      { id: 'nav.overview', page: 'overview', label: 'Visão geral' },
+      { id: 'nav.radar', page: 'radar', label: 'Radar' },
+      { id: 'nav.library', page: 'library', label: 'Biblioteca' },
+      { id: 'nav.production', page: 'production', label: 'Produção' },
+      { id: 'nav.production-center', page: 'production-center', label: 'Central de Produção' },
+      { id: 'nav.channels', page: 'channels', label: 'Canais' },
+      { id: 'nav.history', page: 'history', label: 'Histórico operacional' },
+      { id: 'nav.transcription', page: 'transcription', label: 'Transcrição' },
+      { id: 'nav.settings', page: 'settings', label: 'Ajustes' },
+    ];
+
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing) return;
+
+      const editable = isEditableTarget(event.target);
+
+      if (!editable && matchesShortcut(event, shortcutPrefs.bindings['help.open'])) {
+        event.preventDefault();
+        setShortcutsHelpOpen(prev => !prev);
+        return;
+      }
+
+      if (shortcutsHelpOpen) return;
+
+      if (showNotificationsBell && matchesShortcut(event, shortcutPrefs.bindings['notifications.toggle'])) {
+        event.preventDefault();
+        setNotificationsOpen(prev => !prev);
+        return;
+      }
+
+      if (notificationsOpen) return;
+
+      if (matchesShortcut(event, shortcutPrefs.bindings['library.search'])) {
+        event.preventDefault();
+        setPage('library');
+        setLibrarySearchNonce(value => value + 1);
+        setNavAnnouncement('Biblioteca: busca focada.');
+        return;
+      }
+
+      for (const target of NAV_TARGETS) {
+        if (matchesShortcut(event, shortcutPrefs.bindings[target.id])) {
+          event.preventDefault();
+          setPage(target.page);
+          setNavAnnouncement(`Navegou para ${target.label}.`);
+          requestAnimationFrame(() => {
+            document.getElementById('main')?.focus();
+          });
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [notificationsOpen, shortcutPrefs, shortcutsHelpOpen, showNotificationsBell]);
+
   return <div className="horus" data-theme={effectiveTheme}>
     <a className="skip-link" href="#main">Ir para o conteúdo</a>
     <aside className="sidebar" aria-label="Navegação lateral"><div className="brand"><div className="brand-name"><EyeMark /><span>HORUS</span></div><p className="eyebrow">INTELIGÊNCIA AUDIOVISUAL</p></div>
       <nav aria-label="Navegação principal"><p className="eyebrow navigation-label">ESPAÇO DE TRABALHO</p>{navigation.map(item => <button key={item.id} aria-current={page === item.id ? 'page' : undefined} onClick={() => setPage(item.id)}>{item.id === 'production' && activeProductions > 0 ? `${item.title} (${activeProductions})` : item.title}</button>)}<button aria-current={page === 'production-center' ? 'page' : undefined} onClick={() => setPage('production-center')}>Central de Produção</button><p className="eyebrow navigation-label tools-label">FERRAMENTAS</p><button aria-current={page === 'transcription' ? 'page' : undefined} onClick={() => setPage('transcription')}>Transcrição</button>{showNotificationsBell && <NotificationBellButton buttonRef={bellButtonRef} unreadCount={unreadCount} open={notificationsOpen} onToggle={() => setNotificationsOpen(prev => !prev)} />}</nav>
       <div className="sr-only" aria-live="polite" aria-atomic="true">{bellAnnouncement}</div>
-      <div className="sidebar-bottom"><div className="integration"><p className="eyebrow">HERMES AGENT</p><p className="muted"><span className="status-dot" />{hermes?.connected ? 'API verificada' : hermes?.cli_available ? 'CLI localizado' : 'Integração pendente'}</p></div><button className="settings-navigation" aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}>Ajustes</button><p className="eyebrow signature">SEU ESPAÇO DE CRIAÇÃO</p></div>
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{navAnnouncement}</div>
+      <div className="sidebar-bottom"><div className="integration"><p className="eyebrow">HERMES AGENT</p><p className="muted"><span className="status-dot" />{hermes?.connected ? 'API verificada' : hermes?.cli_available ? 'CLI localizado' : 'Integração pendente'}</p></div><button ref={shortcutsTriggerRef} type="button" className="shortcuts-help-trigger" data-testid="shortcuts-help-button" aria-keyshortcuts={shortcutPrefs.enabled ? shortcutPrefs.bindings['help.open'] || undefined : undefined} onClick={() => setShortcutsHelpOpen(true)}>Atalhos ({shortcutPrefs.bindings['help.open'] || '?'})</button><button className="settings-navigation" aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}>Ajustes</button><p className="eyebrow signature">SEU ESPAÇO DE CRIAÇÃO</p></div>
     </aside>
     <div className="workspace-shell"><header className="topbar"><div className="row"><span className="eyebrow accent">HORUS</span><span className="muted">/</span><span className="eyebrow">CENTRAL AUDIOVISUAL</span></div><span className="tag">APLICATIVO EM DESENVOLVIMENTO</span></header>
       {productionNotice && (
@@ -166,8 +246,8 @@ export default function App() {
       )}
       <main id="main" tabIndex={-1}><Suspense fallback={<p className="loading" role="status">Abrindo seu espaço…</p>}>
         {page === 'overview' ? <Overview navigate={setPage} connection={connection} />
-          : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} />
-          : page === 'library' ? <Library connection={connection} />
+          : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} shortcutPrefs={shortcutPrefs} onChangeShortcutPrefs={handleShortcutPrefsChange} />
+          : page === 'library' ? <Library connection={connection} searchFocusNonce={librarySearchNonce} searchShortcutBinding={shortcutPrefs.enabled ? shortcutPrefs.bindings['library.search'] : undefined} />
           : page === 'transcription' ? null
           : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={() => setPage('production')} onOpenSettings={() => setPage('settings')} /></div>
           : page === 'radar' ? <div className="page"><SectionHeader section={sections.radar} /><Radar connection={connection} onOpenProduction={() => setPage('production')} /></div>
@@ -176,6 +256,8 @@ export default function App() {
           <Transcription
             connection={connection}
             hidden={page !== 'transcription'}
+            shortcutsEnabled={shortcutPrefs.enabled}
+            saveShortcutBinding={shortcutPrefs.bindings['transcription.save']}
             onOpenSettings={() => {
               setPage('settings');
               requestAnimationFrame(() => {
@@ -199,5 +281,13 @@ export default function App() {
         triggerRef={bellButtonRef}
       />
     )}
+    <ShortcutsHelpModal
+      open={shortcutsHelpOpen}
+      enabled={shortcutPrefs.enabled}
+      bindings={shortcutPrefs.bindings}
+      onClose={() => setShortcutsHelpOpen(false)}
+      onOpenSettings={() => setPage('settings')}
+      triggerRef={shortcutsTriggerRef}
+    />
   </div>;
 }
