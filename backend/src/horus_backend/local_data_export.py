@@ -64,6 +64,8 @@ def _candidates(data_dir: Path):
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", folder.name):
                 continue
             for item in sorted(folder.glob("*.json")):
+                if _is_link(item) or not item.is_file():   # link para fora da produção nunca é exportado
+                    continue
                 yield f"productions/{folder.name}/{item.name}", item
 
 
@@ -96,6 +98,8 @@ def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None
                 excluded.append({"path": name, "reason": "grande demais para manifesto"})
                 continue
             raw = source.read_bytes()
+            copy = scratch / f"manifest-{len(staged)}.json"
+            copy.write_bytes(raw)   # hash e pacote usam esta cópia: o arquivo vivo pode mudar depois
             try:
                 json.loads(raw)
             except ValueError:
@@ -104,7 +108,7 @@ def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None
             if SECRET_SHAPE.search(raw.decode("utf-8", "replace")):
                 excluded.append({"path": name, "reason": "formato de credencial"})
                 continue
-            staged.append((name, source))
+            staged.append((name, copy))
         created = (now or datetime.now(timezone.utc)).isoformat()
         for area in EXCLUDED_AREAS:
             if (data_dir / area.rstrip("/")).exists():
@@ -114,10 +118,14 @@ def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None
         manifest = {"schema_version": SCHEMA, "created_at": created, "files": files, "excluded": excluded,
                     "databases": {k: {"user_version": v["user_version"], "tables": v["tables"]} for k, v in info.items()},
                     "contains_private_data": True}
-        with destination.open("xb") as handle, zipfile.ZipFile(handle, "w", zipfile.ZIP_DEFLATED) as package:
-            for name, source in staged:
-                package.write(source, name)
-            package.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+        try:
+            with destination.open("xb") as handle, zipfile.ZipFile(handle, "w", zipfile.ZIP_DEFLATED) as package:
+                for name, source in staged:
+                    package.write(source, name)
+                package.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+        except BaseException:
+            destination.unlink(missing_ok=True)   # nunca deixa um pacote incompleto que pareça válido
+            raise
     return {"ok": True, "files": len(files), "excluded": excluded, "sha256": _sha(destination)}
 
 
@@ -145,13 +153,29 @@ def verify_export(package: Path) -> dict:
                 for name, item in declared.items():
                     if name not in names:
                         continue
-                    data = archive.read(name)
-                    if len(data) != item["size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
+                    declared_size = item["size"]
+                    if type(declared_size) is not int or declared_size < 0 or archive.getinfo(name).file_size != declared_size:
+                        errors.append(f"tamanho divergente: {name}")
+                        continue
+                    digest, total = hashlib.sha256(), 0
+                    copy = Path(scratch) / name.replace("/", "_") if name.startswith("database/") else None
+                    sink = copy.open("wb") if copy else None
+                    try:
+                        with archive.open(name) as stream:
+                            while chunk := stream.read(1024 * 1024):
+                                total += len(chunk)
+                                if total > declared_size:      # o conteúdo real excede o declarado: para de ler
+                                    break
+                                digest.update(chunk)
+                                if sink:
+                                    sink.write(chunk)
+                    finally:
+                        if sink:
+                            sink.close()
+                    if total != declared_size or digest.hexdigest() != item["sha256"]:
                         errors.append(f"hash divergente: {name}")
                         continue
-                    if name.startswith("database/"):
-                        copy = Path(scratch) / name.replace("/", "_")
-                        copy.write_bytes(data)
+                    if copy:
                         with closing(sqlite3.connect(copy)) as db:
                             if not _inspect(db)["ok"]:
                                 errors.append(f"banco sem integridade: {name}")
