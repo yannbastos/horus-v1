@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+from typing import Literal
 import sqlite3
 import tempfile
 import time
@@ -38,6 +39,7 @@ from .scripts import HermesScriptRequest, ManualScriptRequest, ScriptRequest, Sc
 from .body_limit import BodyLimitMiddleware
 from .storage import Store
 from . import egress
+from .human_checkpoints import ACTIONS as CHECKPOINT_ACTIONS, CheckpointService
 from .file_access import PathNotAllowed, client_path
 from .transmissions import TransmissionLog
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
@@ -49,6 +51,18 @@ STREAM_KEEPALIVE_SECONDS = 10
 class MediaRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1, max_length=4096)
+
+
+class CheckpointRequest(BaseModel):
+    """Aprovação humana prévia para gastar (narração paga) ou publicar. Execução cognitiva do Hermes nasce em /authorize."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["paid_narration", "publish"]
+    subject: str = Field(pattern=r"^[a-f0-9]{64}$")
+    description: str = Field(min_length=1, max_length=200)
+    limit_amount: str | None = Field(default=None, pattern=r"^[0-9]{1,12}(?:\.[0-9]{1,8})?$")
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    ttl_seconds: int = Field(default=900, ge=30, le=3600)
+    approved_by: Literal["human"]
 
 
 class TranscriptSave(BaseModel):
@@ -123,6 +137,19 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    checkpoints = CheckpointService(store, transmissions)
+
+    @app.post("/v1/checkpoints", status_code=201)
+    def create_checkpoint(request: CheckpointRequest, idempotency_key: str = Header(min_length=1, max_length=128)):
+        try:
+            return checkpoints.grant(**request.model_dump(), key=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/v1/checkpoints")
+    def list_checkpoints(limit: int = 50, after: int = 0):
+        return checkpoints.page(limit, after)
 
     @app.get("/health")
     async def health():

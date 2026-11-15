@@ -383,7 +383,7 @@ def test_v10_upgrade_from_populated_legacy_db(tmp_path, monkeypatch, old):
     assert sqlite3.connect(backups[0]).execute("PRAGMA user_version").fetchone()[0] == old
     assert sqlite3.connect(backups[0]).execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 1
     with sqlite3.connect(db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert db.execute("PRAGMA user_version").fetchone()[0] == migrations.SCHEMA_VERSION
         assert db.execute("SELECT generator FROM scripts").fetchone()[0] is None
         assert db.execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 1
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []

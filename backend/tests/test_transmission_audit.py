@@ -223,7 +223,7 @@ def test_v11_upgrade_is_additive_and_idempotent(tmp_path, monkeypatch, old):
     migrate(path)
     assert len(list(cfg.data_dir.glob(f"horus.backup-v{old}-*.sqlite3"))) == 1
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert db.execute("PRAGMA user_version").fetchone()[0] == migrations.SCHEMA_VERSION
         assert {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='transmissions'")} == {
             "transmissions_no_update", "transmissions_no_delete"}
         assert db.execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 1
