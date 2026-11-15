@@ -395,4 +395,10 @@ main::-webkit-scrollbar-track,
 .transmissions-cell-sub { margin-top: 2px; }
 .transmissions-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
 .transmissions-error-box { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 60; background: color-mix(in srgb, var(--InkStrong) 55%, transparent); display: grid; place-items: center; padding: 20px; overflow-y: auto; }
+.modal-dialog { width: min(560px, 100%); max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; background: var(--Background); border: 1px solid var(--Line); }
+.checkpoint-summary-list { margin: 0; display: grid; gap: 8px; }
+.checkpoint-summary-list dd { margin: 0; color: var(--Ink); }
+.checkpoint-confirm-check { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--Line); background: var(--Sunken); cursor: pointer; font-size: 13px; color: var(--Ink); }
+.checkpoint-confirm-check input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; accent-color: var(--AccentInk); cursor: pointer; }
 @media(prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

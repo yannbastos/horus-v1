@@ -319,7 +319,14 @@ export type ReviewResponse = {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  code?: string;
+  detail?: unknown;
+  constructor(message: string, status: number, code?: string, detail?: unknown) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.detail = detail;
+  }
 }
 
 export async function api<T>(connection: Connection, path: string, options: RequestInit = {}): Promise<T> {
@@ -335,7 +342,18 @@ export async function api<T>(connection: Connection, path: string, options: Requ
     });
     if (!response.ok) {
       const body = await response.json().catch(() => null);
-      throw new ApiError(typeof body?.detail === 'string' ? body.detail : `Não foi possível concluir a operação (${response.status}).`, response.status);
+      const rawDetail = body?.detail;
+      const detailCode =
+        rawDetail && typeof rawDetail === 'object' && typeof rawDetail.code === 'string'
+          ? rawDetail.code
+          : undefined;
+      const detailMessage =
+        typeof rawDetail === 'string'
+          ? rawDetail
+          : rawDetail && typeof rawDetail === 'object' && typeof rawDetail.message === 'string'
+            ? rawDetail.message
+            : `Não foi possível concluir a operação (${response.status}).`;
+      throw new ApiError(detailMessage, response.status, detailCode, rawDetail);
     }
     return await response.json() as T;
   } finally {
