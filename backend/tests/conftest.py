@@ -54,3 +54,11 @@ def isolated_keyring(monkeypatch):
         assert keyring.get_keyring() is memory, 'O backend de credenciais foi trocado durante o teste.'
     finally:
         keyring.set_keyring(previous)
+
+
+@pytest.fixture(autouse=True)
+def no_disk_encryption_query(monkeypatch):
+    """O diagnóstico não deve abrir PowerShell nos testes; a consulta real é exercitada com `runner` simulado."""
+    from horus_backend import disk_encryption
+    monkeypatch.setattr(disk_encryption, '_query', lambda letter: 'none')
+    disk_encryption._cache.clear()

@@ -8,6 +8,7 @@ from .narration.providers import WindowsSapi, NarrationError
 from .speech_alignment import resolve_model_path
 from .cuda_runtime import inspect_runtime
 from .disk_space import disk_space_check
+from .disk_encryption import disk_encryption_status
 
 
 def production_diagnostics(settings: Settings):
@@ -107,4 +108,5 @@ def diagnose(settings: Settings):
     checks.append({"id": "hermes", "name": "Hermes CLI", "available": settings.hermes_executable is not None,
                    "detail": "A presença do CLI não confirma conexão com a API. Use a verificação Hermes em Ajustes."})
     return {"checks": checks, "cuda_runtime": cuda, "hermes_connected": False, "production": production_diagnostics(settings),
+            "disk_encryption": disk_encryption_status(settings.data_dir),
             "notice": "Verificação de presença apenas. Não executa comandos, testa credenciais ou certifica prontidão para renderizar."}
