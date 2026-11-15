@@ -338,6 +338,7 @@ export function MediaPlayer({
       <video
         ref={videoRef}
         key={item.url}
+        className={kind === 'audio' ? 'player-audio-element' : undefined}
         controls
         preload="metadata"
         src={item.url}
