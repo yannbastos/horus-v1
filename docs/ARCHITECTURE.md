@@ -39,6 +39,8 @@ As etapas 1/2 de paridade acrescentam descoberta centralizada em `dependencies.p
 
 Detalhes operacionais, comandos, variáveis de ambiente, formatos e limitações pertencem ao [guia de migração](migracao-local.md). Evidências de ensaios pertencem ao [relatório local](validacao-local-2026-11-10.md), sem equivaler à validação integral do produto.
 
+O [download explícito de modelos Whisper](download-modelos-whisper.md) (HOR-138) usa o executor sequencial existente: catálogo local com revisões e hashes fixados, confirmação humana, HTTPS com allowlist, progresso/cancelamento e publicação atômica pela importação local. A descoberta e a transcrição continuam offline; nenhum motor é carregado pela API. A validação desta entrega usa somente servidor local e conteúdo sintético; não comprova download dos pesos reais nem o instalador final.
+
 ## Estrutura e repositórios
 
 ~~~text

@@ -224,6 +224,8 @@ class JobManager:
             raise ValueError("Produção com efeitos possíveis exige conciliação; crie nova produção explicitamente.")
         if job.get("workflow_id"):
             raise ValueError("Retome o workflow pela operação editorial, não uma etapa isolada.")
+        if job["payload"].get("operation") == "whisper.model.download":
+            raise ValueError("Confirme um novo download pela prévia do modelo; parciais não são reutilizados.")
         if job["payload"].get("operation") == "transcription.run":
             raise ValueError("Retry direto de transcrição indisponível: preserve o resultado e inicie outra transcrição explicitamente pela tela.")
         if job["status"] not in {"failed", "interrupted", "blocked", "cancelled"}:
@@ -341,6 +343,9 @@ class JobManager:
                 if job and job["status"] == "queued":
                     if job["payload"].get("operation") == "production.run":
                         await self.productions.run(job)
+                    elif job["payload"].get("operation") == "whisper.model.download":
+                        from .whisper_download import run
+                        await run(self, job)
                     elif job.get("workflow_id"):
                         self.active_id = job_id
                         try:

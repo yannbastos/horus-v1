@@ -44,6 +44,7 @@ from .project_import import ImportRefused, ImportService
 from .storage import Store
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
+from .whisper_download import ConfirmDownload as ConfirmWhisperDownload, DownloadStarted as WhisperDownloadStarted, DownloadCatalog
 from .whisper_models import ImportModelRequest, InstalledModel, ModelCatalog, ModelConflict, ModelName, RemovedModel, WhisperModels
 
 STREAM_KEEPALIVE_SECONDS = 10
@@ -690,6 +691,38 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             return await asyncio.to_thread(whisper_models.list)
         except (OSError, ValueError):
             raise HTTPException(409, 'Não foi possível consultar o armazenamento local de modelos.') from None
+
+    @app.get('/v1/transcription/models/catalog', response_model=DownloadCatalog)
+    async def whisper_download_catalog():
+        from .whisper_download import catalog
+        return catalog()
+
+    @app.post('/v1/transcription/models/{model}/download', status_code=202, response_model=WhisperDownloadStarted)
+    async def download_whisper_model(model: ModelName, request: ConfirmWhisperDownload,
+                                    idempotency_key: str = Header(min_length=1, max_length=128)):
+        from .whisper_download import CATALOG
+        if model not in CATALOG:
+            raise HTTPException(404, 'Modelo indisponível no catálogo de download verificado.')
+        async with model_mutation:
+            key = 'whisper-download:' + idempotency_key
+            payload = {'operation': 'whisper.model.download', 'model': model}
+            with store.connect() as db:
+                previous = db.execute('SELECT id,payload FROM jobs WHERE idempotency_key=?', (key,)).fetchone()
+                if previous:
+                    if json.loads(previous['payload']) != payload:
+                        raise HTTPException(409, 'Chave de idempotência já usada para outro modelo.')
+                    return {'job_id': previous['id']}
+                active = any(json.loads(row['payload']).get('operation') == 'whisper.model.download'
+                             for row in db.execute("SELECT payload FROM jobs WHERE status IN ('queued','running','cancel_requested')"))
+            if active:
+                raise HTTPException(409, 'Aguarde ou cancele o download em andamento.')
+            if any(item['model'] == model and item['installed'] for item in whisper_models.list()['models']):
+                raise HTTPException(409, 'Este modelo já está instalado.')
+            job, created = store.create_job(payload, key)
+            if created:
+                await manager.emit(job['id'], 'state', 'queued')
+                manager.queue.put_nowait(job['id'])
+            return {'job_id': job['id']}
 
     @app.post('/v1/transcription/models/import', status_code=201, response_model=InstalledModel)
     async def import_whisper_model(request: ImportModelRequest):
