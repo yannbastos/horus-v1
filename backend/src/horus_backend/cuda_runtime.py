@@ -125,7 +125,8 @@ def inspect_runtime():
         report['detail'] = ('DLLs PE x64 com nomes ABI CUDA 12/cuDNN 9 verificadas; FileVersion cuDNN quando presente; versão nativa, driver/GPU e carga só ao transcrever. '
                             + ('Motor CTranslate2 ausente; runtime sozinho não habilita transcrição.' if not engine_version else 'Fallback CPU antes do primeiro trecho.'))
     except (ValueError, OSError) as error:
-        report['detail'] = f'Runtime CUDA recusado: {error}; usando CPU int8.'
+        from .local_diagnostics import safe_error
+        report['detail'] = f'Runtime CUDA recusado: {safe_error(error)}; usando CPU int8.'
     return report
 
 

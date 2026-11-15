@@ -43,6 +43,7 @@ def test_missing_model_never_invokes_downloader(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('failure', ['driver', 'oom', 'lazy', 'partial', 'media', 'cpu'])
 def test_alignment_fallback_is_bounded_and_atomic(monkeypatch, tmp_path, failure):
+    (tmp_path / 'model.bin').touch()
     monkeypatch.setenv('HORUS_WHISPER_DEVICE', 'cuda')
     calls = []
 

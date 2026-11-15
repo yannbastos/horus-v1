@@ -25,11 +25,13 @@ import sys
 import time
 import unicodedata
 import wave
+import stat
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from . import media_contracts as mc
+from .local_diagnostics import safe_error
 
 MATCH_WINDOW_SECONDS = 0.5      # palavra ASR só casa com token de uma seção se o ponto médio cair na seção ± isto
 MIN_INTERPOLATED_WORD = 0.02    # largura mínima de palavra interpolada (s)
@@ -388,7 +390,7 @@ def _report(verdict: dict, words: list[dict], bounds, asr_count: int, clamped: i
 # ------------------------------------------------------------------------------ runner isolado
 
 def _not_run(reason: str, **extra) -> dict:
-    return {"executed": False, "reason": reason, "document": None, "report": None, **extra}
+    return {"executed": False, "reason": safe_error(reason), "document": None, "report": None, **extra}
 
 
 def _wav_facts(wav: Path) -> tuple[str, float]:
@@ -400,6 +402,28 @@ def _wav_facts(wav: Path) -> tuple[str, float]:
         return digest.hexdigest(), audio.getnframes() / audio.getframerate()
 
 
+def model_directory(path: Path) -> bool:
+    """lstat em toda a cadeia: não consulta o destino de symlink/junction."""
+    try:
+        for item in (Path(path), *Path(path).parents):
+            info = item.lstat()
+            if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def model_file(path: Path) -> bool:
+    if not model_directory(Path(path).parent):
+        return False
+    try:
+        info = Path(path).lstat()
+        return stat.S_ISREG(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400
+    except OSError:
+        return False
+
+
 def resolve_model_path(model_dir: Path, model_name: str, *, required_files: tuple[str, ...] = ('model.bin',)) -> Path | None:
     """Modelo provisionado ou cache Hub já existente; nunca consulta a rede."""
     if model_name not in MODEL_NAMES:
@@ -407,17 +431,19 @@ def resolve_model_path(model_dir: Path, model_name: str, *, required_files: tupl
     owner = 'mobiuslabsgmbh' if model_name == 'large-v3-turbo' else 'Systran'
     for root in (Path(model_dir), Path(model_dir) / 'whisper'):
         for candidate in (root / model_name, root / f"faster-whisper-{model_name}"):
-            if all((candidate / name).is_file() for name in required_files):
+            if model_directory(candidate) and all(model_file(candidate / name) for name in required_files):
                 return candidate
         # Preserva caches criados pelo download_root do faster-whisper anterior.
         cache = root / f'models--{owner}--faster-whisper-{model_name}'
+        if not model_file(cache / 'refs' / 'main'):
+            continue
         try:
             revision = (cache / 'refs' / 'main').read_text(encoding='utf-8').strip()
         except OSError:
             continue
         if re.fullmatch(r'[a-f0-9]{40,64}', revision):
             candidate = cache / 'snapshots' / revision
-            if all((candidate / name).is_file() for name in required_files):
+            if model_directory(candidate) and all(model_file(candidate / name) for name in required_files):
                 return candidate
     return None
 
@@ -442,7 +468,7 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
         return _not_run("extra 'transcription' (faster-whisper) não instalado neste ambiente")
     model_path = resolve_model_path(model_dir, model_name)
     if model_path is None:
-        return _not_run(f"modelo Whisper '{model_name}' não encontrado em {Path(model_dir)}")
+        return _not_run(f"modelo Whisper '{model_name}' não encontrado na pasta de modelos selecionada")
     wav = Path(wav)
     try:
         sha, duration = await asyncio.to_thread(_wav_facts, wav)
@@ -467,7 +493,7 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
     elapsed = round(time.monotonic() - started, 2)
     if owned.process.returncode != 0:
         tail = err.decode("utf-8", "replace").strip().splitlines()[-1:] or ["sem detalhe"]
-        return _not_run(f"ASR falhou (código {owned.process.returncode}): {tail[0][:300]}", asr_seconds=elapsed)
+        return _not_run(f"ASR falhou (código {owned.process.returncode}): {safe_error(tail[0])[:300]}", asr_seconds=elapsed)
     try:
         payload = json.loads(out.decode("utf-8"))
         asr_engine = f"faster-whisper {model_name} ({payload.get('device', 'cpu').upper()} {payload.get('compute_type', 'int8')}, offline)"
@@ -475,7 +501,7 @@ async def run_alignment_async(wav: Path, script_text: str, *, sections: Sequence
             script_text, payload["words"], sections=sections, narration_sha256=sha, duration_seconds=duration,
             engine=engine, asr_engine=asr_engine)
     except (ValueError, KeyError, TypeError, RuntimeError) as error:
-        return _not_run(f"alinhamento não concluído: {type(error).__name__}: {error}", asr_seconds=elapsed)
+        return _not_run(safe_error(f"alinhamento não concluído: {type(error).__name__}: {error}"), asr_seconds=elapsed)
     return {"executed": True, "reason": None, "document": document, "report": report, "asr_seconds": elapsed}
 
 
@@ -502,6 +528,9 @@ def _recognize_words(wav: Path, model_path: Path, language: str) -> dict:
     import ctranslate2
     from faster_whisper import WhisperModel
     from .transcriber import choose_device, is_gpu_failure
+
+    if not model_directory(model_path) or not model_file(model_path / 'model.bin'):
+        raise ValueError('Modelo local ausente ou com links; selecione uma pasta de modelo completa sem links.')
 
     report = lambda kind, message: print(message, file=sys.stderr, flush=True)
     device = choose_device(ctranslate2, report=report, default='cpu')
@@ -542,7 +571,7 @@ def _asr_main(argv: list[str]) -> int:
     try:
         payload = _recognize_words(args.wav, args.model_path, args.language)
     except Exception as error:  # noqa: BLE001 - o motivo segue para quem chamou
-        print(f"{type(error).__name__}: {error}", file=sys.stderr, flush=True)
+        print(safe_error(f"{type(error).__name__}: {error}"), file=sys.stderr, flush=True)
         return 1
     print(json.dumps(payload, ensure_ascii=False))
     return 0

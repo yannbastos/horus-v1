@@ -21,6 +21,7 @@ from .processes import OwnedProcess, failure_detail, sanitized_tail
 from .storage import Store
 from .transcriber import FILE_MARKER, LANGUAGES, MODELS, is_youtube_url, download_error
 from .worker_lock import WorkerLock
+from .local_diagnostics import safe_error
 from .workflows import WorkflowService
 from .production import ProductionService
 
@@ -289,7 +290,7 @@ class JobManager:
         # O CLI da fábrica escreve recusas `ERRO:` em stdout; stderr também é diagnóstico.
         # Manter somente um resumo limitado, além do histórico completo de eventos.
         if failures is not None and (kind == 'stderr' or line.lstrip().startswith('ERRO:')):
-            failures[:] = [*failures[-2:], line.strip()[:1000]]
+            failures[:] = [*failures[-2:], (safe_error(line) if notes is not None else line).strip()[:1000]]
         # Subprocessos do Hórus enviam NDJSON; demais linhas seguem como log bruto.
         if notes is not None:
             if kind == "stdout" and line.startswith("{"):
@@ -301,7 +302,7 @@ class JobManager:
                             notes["segments"].append(line)
             elif kind == "stdout" and line.startswith(FILE_MARKER):
                 notes["file"] = line[len(FILE_MARKER):].strip()
-        await self.emit(job_id, kind, line)
+        await self.emit(job_id, kind, safe_error(line) if notes is not None and kind != 'segment' else line)
 
     async def _read(self, reader, job_id: str, kind: str, captured: list[str], notes: dict | None = None,
                     failures: list[str] | None = None):
@@ -324,7 +325,7 @@ class JobManager:
                 if notes and notes.get('download'):
                     await self._line(job_id, kind, pending[:2000], notes, failures)
                 else:
-                    await self.emit(job_id, kind, sanitized_tail(pending, limit=2000) if notes is None else pending[:2000])
+                    await self.emit(job_id, kind, sanitized_tail(pending, limit=2000) if notes is None else safe_error(pending)[:2000])
                 pending = ""
         pending += decoder.decode(b"", final=True)
         if pending.strip():
@@ -405,7 +406,7 @@ class JobManager:
             self.store.update(job_id, "blocked" if not self.active_process else "failed",
                               result=self.store.get_job(job_id)["result"],
                               error=(download_error(error) if job['payload'].get('operation') == 'youtube.download'
-                                     and not isinstance(error, PathNotAllowed) else str(error)))
+                                     and not isinstance(error, PathNotAllowed) else safe_error(error) if job['payload'].get('operation') == 'transcription.run' else str(error)))
         except TimeoutError:
             self.store.update(job_id, "failed", result=self.store.get_job(job_id)["result"],
                               error=('Tempo limite do download excedido. Verifique a rede e tente novamente no mesmo destino para retomar o parcial compatível.'
@@ -415,7 +416,7 @@ class JobManager:
             self.store.update(job_id, "failed", result=self.store.get_job(job_id)["result"],
                               error=(f'Falha na execução da fábrica ({type(error).__name__}); confira as dependências locais antes de tentar novamente.'
                                      if factory_job else download_error(error) if job['payload'].get('operation') == 'youtube.download'
-                                     else f"Falha na execução: {type(error).__name__}: {error}"))
+                                     else safe_error(f"Falha na execução: {type(error).__name__}: {error}")))
         finally:
             current = self.store.get_job(job_id)
             if job['payload'].get('operation', '').startswith('factory.') and current['status'] in {'failed','blocked','interrupted'}:
