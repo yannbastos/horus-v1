@@ -9,6 +9,7 @@ from horus_backend import egress
 from horus_backend.egress import DEFAULT_RULES, EgressBlocked, EgressGateway, Rule, parse_rules
 from horus_backend.migrations import migrate
 from horus_backend.storage import Store
+from horus_backend.transcriber import is_youtube_url
 from horus_backend.transmissions import TransmissionLog
 
 PUBLIC = "93.184.216.34"
@@ -57,7 +58,7 @@ def rows(log):
 def test_default_policy_lists_only_the_known_product_destinations():
     allowed = {(r.purpose, r.host) for r in DEFAULT_RULES}
     assert allowed == {("youtube_download", "www.youtube.com"), ("youtube_download", "youtube.com"),
-                       ("youtube_download", "m.youtube.com"), ("youtube_download", "youtu.be"), ("radar_youtube", "www.googleapis.com")}
+                       ("youtube_download", "m.youtube.com"), ("youtube_download", "music.youtube.com"), ("youtube_download", "youtu.be"), ("radar_youtube", "www.googleapis.com")}
 
 
 @pytest.mark.parametrize("purpose,url", [
@@ -381,3 +382,30 @@ def test_authorized_hermes_calls_do_not_duplicate_the_hermes_ledger_but_refusals
         g.authorize("hermes", "GET", "http://10.0.0.5:8642/v1/runs/x")
     assert [(r["stage"], r["result"], r["detail"]) for r in rows(log)] == [
         ("egress:youtube_download", "attempted", "authorized"), ("egress:hermes", "policy_violation", "destination_not_allowed")]
+
+
+# --- paridade com o validador de URL do download ---------------------------------------------------------------
+
+CANDIDATE_HOSTS = ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "gaming.youtube.com",
+                   "studio.youtube.com", "tv.youtube.com", "kids.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com",
+                   "evil-youtube.com", "youtube.com.evil.net", "googlevideo.com"]
+
+
+def sample_url(host):
+    if host == "youtu.be":
+        return "https://youtu.be/dQw4w9WgXcQ"
+    return f"https://{host}/watch?v=dQw4w9WgXcQ"
+
+
+def test_download_allowlist_matches_the_hosts_the_url_validator_accepts():
+    """Falha se `is_youtube_url` passar a aceitar um host que o gateway recusa (download quebrado) ou o contrário (allowlist maior que o validador)."""
+    from horus_backend.transcriber import YOUTUBE_DOWNLOAD_HOSTS
+    accepted = {h for h in CANDIDATE_HOSTS if is_youtube_url(sample_url(h))}
+    allowed = {r.host for r in DEFAULT_RULES if r.purpose == "youtube_download"}
+    assert accepted == allowed == set(YOUTUBE_DOWNLOAD_HOSTS), (accepted ^ allowed)
+    gateway_ = EgressGateway(DEFAULT_RULES)
+    for host in accepted:
+        gateway_.authorize("youtube_download", "GET", sample_url(host))      # nenhum host aceito é recusado pelo gateway
+    for host in set(CANDIDATE_HOSTS) - accepted:
+        with pytest.raises(EgressBlocked):
+            gateway_.authorize("youtube_download", "GET", sample_url(host))

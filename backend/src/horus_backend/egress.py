@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
 from .hermes_contract.models import _PRIVATE_TEXT
+from .transcriber import YOUTUBE_DOWNLOAD_HOSTS, is_youtube_url
 
 MAX_REDIRECTS = 3
 DEFAULT_MAX_BYTES = 256 * 1024
@@ -59,7 +60,7 @@ class Rule:
 
 # Destinos que o produto usa hoje, listados de forma explícita; qualquer outro exige configuração.
 DEFAULT_RULES = (
-    *(Rule("youtube_download", "https", host) for host in ("www.youtube.com", "youtube.com", "m.youtube.com", "youtu.be")),
+    *(Rule("youtube_download", "https", host) for host in sorted(YOUTUBE_DOWNLOAD_HOSTS)),
     Rule("radar_youtube", "https", "www.googleapis.com"),
 )
 
