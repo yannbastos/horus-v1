@@ -87,8 +87,9 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "import:urllib.request": "F-01", "call:build_opener": "F-01"},
     "workflow_hermes.py": {  # F-02 execuções cognitivas (gate + autorização) em loopback
         "import:urllib.request": "F-02", "call:build_opener": "F-02"},
+    "disk_encryption.py": {"import:subprocess": "F-11", "call:run_sync": "F-11"},  # consulta local somente leitura (HOR-119), sem rede
     "radar_youtube/transport.py": {  # F-03 YouTube Data API, desligado por padrão
-        "import:socket": "F-03", "import:ssl": "F-03", "import:urllib.request": "F-03", "call:build_opener": "F-03",
+        "import:socket": "F-03", "import:http.client": "F-03", "import:ssl": "F-03", "import:urllib.request": "F-03", "call:build_opener": "F-03",
         "url:www.googleapis.com": "F-03"},
     "transcriber.py": {  # F-04 download de modelo Whisper, F-05 yt-dlp
         "import:faster_whisper": "F-04", "call:WhisperModel": "F-04", "import:ctranslate2": "F-04", "import:subprocess": "F-05", "import:yt_dlp": "F-05", "call:subprocess.call": "F-05"},
