@@ -3,6 +3,9 @@ import { api } from '../services/api';
 import type { Connection, HermesStatus } from '../services/api';
 import { connectDesktop, nativeDesktop } from '../platform/desktop';
 import { StatusMessage } from '../components/StatusMessage';
+import { ShortcutsSettings } from '../components/ShortcutsSettings';
+import { loadShortcutPreferences, saveShortcutPreferences } from '../services/shortcuts';
+import type { ShortcutPreferences } from '../services/shortcuts';
 import PrivacySecurity from './PrivacySecurity';
 import NarrationSettings from './narration/NarrationSettings';
 import WhisperModelsPanel from './transcription/WhisperModelsPanel';
@@ -172,11 +175,38 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
   </section>;
 }
 
-export default function Settings({ theme, setTheme, connect, connection, hermes, onHermesStatus, initialSection = 'general' }: {
-  theme: Theme; setTheme: (theme: Theme) => void; connect: (connection: Connection) => void; connection: Connection | null;
-  hermes: HermesStatus | null; onHermesStatus: (status: HermesStatus) => void; initialSection?: SettingsSection;
+export default function Settings({
+  theme,
+  setTheme,
+  connect,
+  connection,
+  hermes,
+  onHermesStatus,
+  initialSection = 'general',
+  shortcutPrefs,
+  onChangeShortcutPrefs,
+}: {
+  theme: Theme;
+  setTheme: (theme: Theme) => void;
+  connect: (connection: Connection) => void;
+  connection: Connection | null;
+  hermes: HermesStatus | null;
+  onHermesStatus: (status: HermesStatus) => void;
+  initialSection?: SettingsSection;
+  shortcutPrefs?: ShortcutPreferences;
+  onChangeShortcutPrefs?: (next: ShortcutPreferences) => void;
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  const [localShortcutPrefs, setLocalShortcutPrefs] = useState<ShortcutPreferences>(loadShortcutPreferences);
+  const activeShortcutPrefs = shortcutPrefs ?? localShortcutPrefs;
+  function handleShortcutPrefsChange(next: ShortcutPreferences) {
+    if (onChangeShortcutPrefs) {
+      onChangeShortcutPrefs(next);
+    } else {
+      saveShortcutPreferences(next);
+      setLocalShortcutPrefs(next);
+    }
+  }
   const [url, setUrl] = useState('http://127.0.0.1:8765');
   const [token, setToken] = useState('');
   const [message, setMessage] = useState('');
@@ -248,7 +278,7 @@ export default function Settings({ theme, setTheme, connect, connection, hermes,
     {section === 'general' ? (
       <div id="panel-general" role="tabpanel" aria-labelledby="tab-general" className="settings-panel">
         <div className="theme-options" aria-label="Tema">{(['system', 'light', 'dark'] as Theme[]).map((value, index) => <button key={value} className={`button ${theme === value ? 'active' : ''}`} aria-pressed={theme === value} onClick={() => setTheme(value)}>{['SISTEMA', 'CLARO', 'ESCURO'][index]}</button>)}</div>
-        <section className="card"><p className="eyebrow">CONEXÃO LOCAL</p><h2>{connection ? 'Backend disponível.' : 'Conecte seu espaço de trabalho.'}</h2><p className="muted">{nativeDesktop ? 'O aplicativo gerencia o backend local. Credenciais de conexão ficam somente na memória desta sessão.' : 'No navegador, você pode conectar um backend iniciado separadamente. A versão desktop faz essa conexão automaticamente.'}</p>
+        <section className="card" aria-label="Conexão local"><p className="eyebrow">CONEXÃO LOCAL</p><h2>{connection ? 'Backend disponível.' : 'Conecte seu espaço de trabalho.'}</h2><p className="muted">{nativeDesktop ? 'O aplicativo gerencia o backend local. Credenciais de conexão ficam somente na memória desta sessão.' : 'No navegador, você pode conectar um backend iniciado separadamente. A versão desktop faz essa conexão automaticamente.'}</p>
           {!nativeDesktop && <form onSubmit={event => { event.preventDefault(); void manualConnect(); }}><label>Endereço local<input value={url} onChange={e => setUrl(e.target.value)} autoComplete="off" /></label><label>Token da sessão<input type="password" value={token} onChange={e => setToken(e.target.value)} autoComplete="off" /></label><button className="button primary" type="submit" disabled={token.length < 24}>CONECTAR BACKEND</button></form>}
           {nativeDesktop && <button className="button" disabled={connecting} onClick={() => void reconnect()}>RECONECTAR BACKEND</button>}
           {message && <StatusMessage state="success" tone="plain">{message}</StatusMessage>}
@@ -257,6 +287,7 @@ export default function Settings({ theme, setTheme, connect, connection, hermes,
         {connection && <EnvironmentDiagnostics connection={connection} />}
         <WhisperModelsPanel connection={connection} />
         <NarrationSettings connection={connection} />
+        <ShortcutsSettings preferences={activeShortcutPrefs} onChange={handleShortcutPrefsChange} />
       </div>
     ) : (
       <div id="panel-privacy" role="tabpanel" aria-labelledby="tab-privacy" className="settings-panel">

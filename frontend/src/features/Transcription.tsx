@@ -7,6 +7,7 @@ import type { Attachment, MediaPayload } from '../services/transcriptionRecovery
 import { fetchWhisperModels } from '../services/transcriptionModels';
 import type { WhisperModelInfo } from '../services/transcriptionModels';
 import { StatusMessage } from '../components/StatusMessage';
+import { matchesShortcut } from '../services/shortcuts';
 
 export const maxQueue = 20;
 const models = [
@@ -45,8 +46,18 @@ export function isYouTubeUrl(value: string) {
  * Fila de até 20 arquivos, processados um por vez. Ao concluir, a fila pausa: só depois de salvar
  * a versão atual do texto é possível avançar. O componente permanece montado para preservar a fila.
  */
-export default function Transcription({ connection, hidden, onOpenSettings }: {
-  connection: Connection | null; hidden: boolean; onOpenSettings?: () => void;
+export default function Transcription({
+  connection,
+  hidden,
+  onOpenSettings,
+  shortcutsEnabled = true,
+  saveShortcutBinding = 'Ctrl+S',
+}: {
+  connection: Connection | null;
+  hidden: boolean;
+  onOpenSettings?: () => void;
+  shortcutsEnabled?: boolean;
+  saveShortcutBinding?: string;
 }) {
   const [initialReceipt] = useState(inspectAttachment);
   const [queue, setQueue] = useState<string[]>(() => {
@@ -408,6 +419,21 @@ export default function Transcription({ connection, hidden, onOpenSettings }: {
     catch (reason) { setStatus(`Não foi possível copiar: ${message(reason)}`); }
   }
 
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  useEffect(() => {
+    if (hidden || !shortcutsEnabled || !saveShortcutBinding) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing) return;
+      if (!matchesShortcut(event, saveShortcutBinding)) return;
+      event.preventDefault();
+      void saveRef.current();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hidden, saveShortcutBinding, shortcutsEnabled]);
+
   function edit(value: string) {
     revision.current++;
     setTranscript(value); setSaved(false);
@@ -518,7 +544,15 @@ export default function Transcription({ connection, hidden, onOpenSettings }: {
         <p role="status" title={status}>{status}</p>
         <div className="status-actions">
           <button className="button" disabled={!transcript} onClick={() => void copy()}>COPIAR</button>
-          <button className="button primary" disabled={busy || !(completed || transcript.trim())} onClick={() => void save()}>SALVAR .TXT</button>
+          <button
+            className="button primary"
+            disabled={busy || !(completed || transcript.trim())}
+            title={shortcutsEnabled && saveShortcutBinding ? `Salvar transcrição (${saveShortcutBinding})` : undefined}
+            aria-keyshortcuts={shortcutsEnabled && saveShortcutBinding ? saveShortcutBinding : undefined}
+            onClick={() => void save()}
+          >
+            SALVAR .TXT
+          </button>
         </div>
       </div>
     </section>
