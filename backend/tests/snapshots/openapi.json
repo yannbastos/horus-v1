@@ -279,6 +279,60 @@
         "title": "DecisionRequest",
         "type": "object"
       },
+      "DeletionExecuteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "intent_token": {
+            "maxLength": 80,
+            "minLength": 20,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Intent Token",
+            "type": "string"
+          },
+          "phrase": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Phrase",
+            "type": "string"
+          },
+          "plan_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent_token",
+          "phrase",
+          "plan_id"
+        ],
+        "title": "DeletionExecuteRequest",
+        "type": "object"
+      },
+      "DeletionPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "import",
+              "production"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope"
+        ],
+        "title": "DeletionPreviewRequest",
+        "type": "object"
+      },
       "DownloadRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1357,6 +1411,172 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/v1/data-deletion/audit": {
+      "get": {
+        "operationId": "data_deletion_audit_v1_data_deletion_audit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Data Deletion Audit"
+      }
+    },
+    "/v1/data-deletion/execute": {
+      "post": {
+        "operationId": "execute_data_deletion_v1_data_deletion_execute_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletionExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Data Deletion"
+      }
+    },
+    "/v1/data-deletion/preview": {
+      "post": {
+        "operationId": "preview_data_deletion_v1_data_deletion_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletionPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Data Deletion"
+      }
+    },
+    "/v1/data-deletion/{audit_id}/restore": {
+      "post": {
+        "operationId": "restore_data_deletion_v1_data_deletion__audit_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_id",
+            "required": true,
+            "schema": {
+              "title": "Audit Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Data Deletion"
       }
     },
     "/v1/diagnostics": {

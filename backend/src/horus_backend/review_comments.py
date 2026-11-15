@@ -114,6 +114,8 @@ class ReviewCommentService:
 
     def _videos(self, production_id: str) -> set[str]:
         record = self.productions.get(production_id)   # KeyError → 404
+        if record.get("local_data", {}).get("state") != "present":
+            raise WorkflowConflict("Os dados locais desta produção foram excluídos; restaure da quarentena para comentar.")
         return {a["sha256"] for a in record["artifacts"] if a["kind"] == "video"}
 
     # --- operações -------------------------------------------------------------------------------------------------

@@ -167,6 +167,7 @@ class ProductionService:
             "error": job["error"], "failure": result.get('failure'), "demo_only": True, "real_voice": False, **media,
             "quality_acknowledgement_required":acknowledgement_required,
             "render_quality": render_quality, "narration": narration,
+            "local_data": self.manager.deletion_audit.local_data("production", row["id"]),
             "publishable": False, "narration_kind": result.get("narration_kind"),
             "narration_disclosure": result.get("narration_disclosure"), "alignment_method": result.get("alignment_method")}
 
@@ -262,7 +263,13 @@ class ProductionService:
         await self.manager.emit(job_id, "state", "queued")
         return record, True
 
+    def require_local_data(self, production_id):
+        """Dados locais excluídos (quarentena) nunca são oferecidos: prévia, exports e artefatos recusam com 409."""
+        if self.manager.deletion_audit.state("production", production_id):
+            raise WorkflowConflict("Os dados locais desta produção foram excluídos; restaure da quarentena para usá-los.")
+
     def artifact(self, production_id, artifact_id):
+        self.require_local_data(production_id)
         record = self.get(production_id)
         artifact = next((a for a in record["artifacts"] if a["id"] == artifact_id), None)
         if not artifact:
@@ -273,6 +280,7 @@ class ProductionService:
         return confined(self.root(production_id), artifact["relative_path"])
 
     def review(self, production_id, request, key):
+        self.require_local_data(production_id)
         body = request.model_dump()
         if not request.notes:
             body.pop("notes")  # Preserva recibos anteriores ao campo opcional.

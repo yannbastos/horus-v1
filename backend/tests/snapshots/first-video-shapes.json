@@ -371,6 +371,11 @@
       "failure": "null",
       "id": "string",
       "job_id": "string",
+      "local_data": {
+        "audit_id": "null",
+        "changed_at": "null",
+        "state": "string"
+      },
       "mode": "string",
       "narration": "null",
       "narration_disclosure": "string",
@@ -415,6 +420,11 @@
       "failure": "null",
       "id": "string",
       "job_id": "string",
+      "local_data": {
+        "audit_id": "null",
+        "changed_at": "null",
+        "state": "string"
+      },
       "mode": "string",
       "narration": "null",
       "narration_disclosure": "string",
@@ -618,6 +628,11 @@
           "failure": "null",
           "id": "string",
           "job_id": "string",
+          "local_data": {
+            "audit_id": "null",
+            "changed_at": "null",
+            "state": "string"
+          },
           "mode": "string",
           "narration": "null",
           "narration_disclosure": "string",
@@ -879,6 +894,11 @@
       "failure": "null",
       "id": "string",
       "job_id": "string",
+      "local_data": {
+        "audit_id": "null",
+        "changed_at": "null",
+        "state": "string"
+      },
       "mode": "string",
       "narration": "null",
       "narration_disclosure": "string",
@@ -917,6 +937,11 @@
       "failure": "null",
       "id": "string",
       "job_id": "string",
+      "local_data": {
+        "audit_id": "null",
+        "changed_at": "null",
+        "state": "string"
+      },
       "mode": "string",
       "narration": "null",
       "narration_disclosure": "null",

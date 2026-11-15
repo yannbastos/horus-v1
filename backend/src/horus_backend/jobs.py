@@ -125,6 +125,8 @@ class JobManager:
         self.active_process: OwnedProcess | None = None
         self.worker_lock = WorkerLock(store.path)
         self.workflows = WorkflowService(store, self.queue, self.notify, settings)
+        from .data_deletion import DeletionAudit
+        self.deletion_audit = DeletionAudit(settings.data_dir)
         self.productions = ProductionService(self)
 
     async def start(self):

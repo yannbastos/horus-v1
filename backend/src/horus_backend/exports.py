@@ -124,12 +124,14 @@ class ExportService:
             return result
 
     def file(self, production_id, export_id):
+        self.productions.require_local_data(production_id)
         with self.store.connect() as db:
             self.productions.require(db, production_id)
         self._metadata(production_id, export_id)
         return confined(self._root(production_id), f'{export_id}/package.zip')
 
     def create(self, production_id, key):
+        self.productions.require_local_data(production_id)
         try:
             return self._create(production_id, key)
         except WorkflowConflict:
