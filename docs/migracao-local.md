@@ -85,6 +85,8 @@ Não verificado: download real do YouTube, GPU/CUDA, modelos maiores, áudio lon
 
 ### Paridade funcional e dependências — etapas 1 e 2
 
+Robustez offline do download: [falhas, privacidade dos diagnósticos e retomada de parcial](download-youtube-falhas.md). O ensaio real do YouTube permanece separado e não foi executado nessa validação.
+
 O mesmo JobManager continua responsável por transcrição/download e workflows. A fila React mantém FIFO e limite de 20 inclusive o atual. Atualizações consecutivas do evento nativo de drop usam uma referência sincronizada da fila, evitando que um segundo drop sobrescreva o primeiro antes do próximo render. O seletor reserva o estado ocupado enquanto seu diálogo está aberto. Navegação preserva a tela; drops em outra área ou durante processamento são ignorados. Novos controles visuais ou mudanças de tokens/layout não foram introduzidos.
 
 Testes de paridade exercitam o adaptador Tauri real com seu IPC simulado: seleção múltipla, drops consecutivos, limite/rejeição, texto não salvo, preservação entre telas, salvamento cancelado, erro no diálogo, permissão negada, edição que volta a bloquear Próximo, FIFO após salvar, resultado vazio de silêncio, copiar/erro de clipboard, erro do seletor e download atrás do arquivo atual. Backend também verifica `.txt` vazio e que cancelamento vence mesmo quando o subprocesso retorna sucesso. Esses testes não certificam os diálogos do Windows ou decodificação real de silêncio pelo Whisper.

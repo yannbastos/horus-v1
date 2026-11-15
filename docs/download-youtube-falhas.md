@@ -1,0 +1,11 @@
+# Download YouTube — falhas e retomada (HOR-018)
+
+O download continua sendo uma operação explicitamente solicitada pelo usuário. O backend traduz falhas conhecidas do yt-dlp para mensagens fixas em português: vídeo privado, removido/indisponível, restrição de idade/região, falha de conexão, disco cheio e falta de permissão. Falhas desconhecidas pedem conferência do link, rede e destino. Não usa cookies ou credenciais para contornar restrições.
+
+Saída bruta do motor não é persistida nos eventos de download nem incorporada ao erro: pode conter caminhos, títulos hostis ou proxy autenticado. Apenas progresso numérico e mensagens reconstruídas são emitidos, com deduplicação; saída gigante é drenada em blocos, sem acumular o stdout do download. O caminho do arquivo concluído continua no resultado autenticado, pois é necessário para abrir a mídia; o payload mantém o destino escolhido pelo usuário.
+
+O yt-dlp recebe explicitamente `--continue`, `--part`, `--no-overwrites`, `--windows-filenames` e limite de nome. Após queda de rede, cancelamento ou timeout, o backend não apaga `.part`/fragmentos: uma nova tentativa explícita com o mesmo vídeo, opções e destino pode retomar o parcial compatível, conforme o yt-dlp. Não há nova tentativa automática de job nem garantia de retomada se o servidor/fragmentos mudarem. Arquivo externo ao destino, caminho recusado pela política local ou `.part`/`.ytdl` não pode ser declarado sucesso.
+
+Timeout global do download: 3600 s, incluindo drenagem dos streams; timeout de socket do yt-dlp: 20 s, com três retries de rede. Cancelamento e timeout encerram o subprocesso possuído existente. Nenhuma mudança no executor de processos ou na interface.
+
+Validação offline: `python -m pytest backend/tests/test_download_failures.py -q` usa subprocessos locais e yt-dlp simulado, sem rede real, sem preencher disco nem alterar permissões do operador. Cobre acesso restrito, erros de rede/disco/permissão, retomada de parcial por retry, cancelamento, timeout, saída gigante e validação do arquivo final; o sanitizador de nomes da biblioteca é exercitado quando o extra está instalado. Isso não homologa download real do YouTube, regras futuras do serviço ou retomada com CDNs reais; a Issue permanece parcial quanto ao ensaio real.
