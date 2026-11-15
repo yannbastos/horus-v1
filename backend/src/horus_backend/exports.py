@@ -51,13 +51,18 @@ class ExportService:
                 raise WorkflowConflict('Links não são permitidos na pasta de exportação.')
         return root
 
+    def _tokens(self):
+        """Token atual e, durante uma rotação, também o novo: ambos são redigidos."""
+        tokens = getattr(getattr(self.productions, 'manager', None), 'tokens', None)
+        return list(dict.fromkeys([self.settings.token, *(tokens.valid_tokens() if tokens else [])]))
+
     def _private(self, data: bytes):
         text = data.decode('utf-8')
         # Não alterar silenciosamente o roteiro aprovado ou as evidências.
         # URLs públicas e caminhos relativos de artefatos são preservados.
         paths = re.compile(PATH_START)
         credentials = re.compile(CREDENTIAL + r'\s*[=:]\s*\S+)', re.I)
-        if self.settings.token in text or paths.search(text) or credentials.search(text):
+        if any(token in text for token in self._tokens()) or paths.search(text) or credentials.search(text):
             raise WorkflowConflict('O pacote contém caminho absoluto ou possível credencial em texto; revise o conteúdo antes de exportar.')
 
     def _audit_metadata(self, value):
@@ -69,7 +74,8 @@ class ExportService:
             return [self._audit_metadata(item) for item in value]
         if not isinstance(value, str):
             return value
-        value = value.replace(self.settings.token, '[credencial omitida]')
+        for token in self._tokens():
+            value = value.replace(token, '[credencial omitida]')
         value = re.sub(CREDENTIAL + r'''["']?\s*[=:]\s*["']?[^\s,;"']+)''', '[credencial omitida]', value, flags=re.I)
         return re.sub(PATH_START + r'''[^\r\n;"']*''', '[caminho omitido]', value)
 

@@ -216,3 +216,60 @@ Testes antigos gravaram valores sintéticos no Credential Manager real (serviço
 Interpretação: valor `1` = `encrypted`/`on`; `2` = `not_encrypted`/`off` (volume sem criptografia **ou com a proteção suspensa**: a propriedade não diferencia); qualquer outro valor, erro, prazo esgotado, volume sem letra (UNC) ou plataforma sem a consulta = `unverified` com orientação. A propriedade não distingue BitLocker de criptografia de dispositivo, por isso `method` é `null`. O texto `guidance` (pt-BR) explica o que é, por que importa para os dados do Hórus, como ativar (Pro/Enterprise/Education: Criptografia de dispositivo ou BitLocker no Painel de Controle; **Home não tem BitLocker**: usar Criptografia de dispositivo, em computadores compatíveis, com conta Microsoft) e lembra de guardar a chave de recuperação fora do computador.
 
 Verificado: o mapeamento `1`/`2` e o texto estão cobertos por testes com consulta simulada (`test_disk_encryption.py`); na máquina de desenvolvimento (Windows 10 Pro, sem BitLocker ativo) a consulta real devolveu `2`. **Não foi possível confirmar o valor `1` em um volume realmente criptografado** (sem volume assim disponível); até essa confirmação, o resultado `encrypted` deve ser tratado como a leitura documentada pela comunidade, não como certificação. A exibição do aviso na interface não faz parte deste incremento.
+
+## Endurecimento de credenciais e da pasta de dados (HOR-120): implementado em ferramentas; aplicação real depende de autorização
+
+Nada nesta seção foi aplicado a dados ou credenciais reais. Cada item tem ferramenta testada em ambiente isolado (cofre em memória, pasta e `HORUS_DATA_DIR` temporários) e a aplicação real fica **dependente de autorização do usuário**, com os comandos exatos abaixo.
+
+### 7.2 Token do Hermes no cofre do SO
+
+`hermes.read_connection` agora **prefere o token do cofre** (`keyring`, serviço `horus.hermes.connection`, usuário = SHA-256 do caminho resolvido do arquivo de conexão) e usa o token do arquivo atual (`integrations/hermes.json`) quando o cofre está indisponível, vazio ou guarda valor inválido. A URL continua vindo do arquivo; o campo `token` do arquivo passa a ser opcional quando o cofre o tem. Sem o cofre, o comportamento é o anterior. Módulo: `backend/src/horus_backend/hermes_credential.py`; testes: `backend/tests/test_hermes_credential.py`.
+
+Migração (simulação por padrão; copia, **relê e compara**; não apaga o arquivo e não revoga nem rotaciona nada; nunca imprime o valor):
+
+```powershell
+# 1) simulação (não altera nada)
+& backend/.venv/Scripts/python.exe -m horus_backend.hermes_credential migrate --config "<pasta-de-dados>\integrations\hermes.json"
+# 2) APLICAR NO COFRE REAL: somente com autorização do usuário; pede a confirmação digitada MIGRAR
+& backend/.venv/Scripts/python.exe -m horus_backend.hermes_credential migrate --config "<pasta-de-dados>\integrations\hermes.json" --apply
+```
+
+Um token diferente já presente no cofre nunca é sobrescrito sem `--replace`. **Remover o campo `token` do arquivo** é um passo manual posterior e também exige autorização (reversão: gravar o token de volta no arquivo ou apagar a entrada do cofre; o arquivo original só deve ser alterado depois de a leitura pelo cofre ter sido conferida com a verificação do Hermes em Ajustes). A tela de segurança (`/v1/security/status`) continua descrevendo o arquivo como local do token até esse passo final.
+
+### 7.3 ACL da pasta de dados
+
+`scripts/data-dir-acl.py` (Windows, `icacls`; simulação por padrão): remove a herança e concede controle total **somente ao usuário atual e ao SYSTEM**, por SID. Administradores, o grupo local de sandbox de ferramentas de IA e demais principais deixam de ter acesso (filhos que herdam acompanham). Guarda a ACL anterior em `<pasta>-acl-backup/acl-<data>.json` (fora da pasta de dados), confere o resultado (duas ACEs, sem herança, escrita do usuário preservada) e **desfaz sozinho** se algo divergir. Só trata ACL 100% herdada (caso padrão); ACL já personalizada é recusada para revisão manual. **Recusa a pasta de dados real** (padrão do Hórus ou `HORUS_DATA_DIR`) sem `--allow-real`. Nunca toca banco, arquivos nem credenciais: só a DACL da pasta. `icacls /restore` exige privilégio de administrador, por isso a restauração usa `/inheritance:e` + remoção das concessões do script e compara com a ACL original.
+
+Os pacotes de pré-exclusão e de exportação usam a pasta irmã `<pasta>-backups`, de ACL própria e **não alterada**; o teste prova que `export_local_data`/`verify_export`/`restore_local_data` continuam funcionando com a pasta restrita. Testes: `backend/tests/test_data_dir_acl.py`, **somente em pasta temporária isolada** com ACL herdada padrão (o `tmp_path` do pytest nasce com ACL protegida e por isso não é usado).
+
+```powershell
+# simulação (somente leitura; mostra a ACL atual e os comandos exatos)
+& backend/.venv/Scripts/python.exe scripts/data-dir-acl.py plan "<pasta-de-dados>"
+# APLICAR NA PASTA REAL: somente com autorização do usuário; feche o Hórus antes; pede a frase APLICAR ACL
+& backend/.venv/Scripts/python.exe scripts/data-dir-acl.py apply "<pasta-de-dados>" --apply --allow-real
+# desfazer (usa o arquivo de backup da ACL indicado ao aplicar)
+& backend/.venv/Scripts/python.exe scripts/data-dir-acl.py restore "<pasta-de-dados>" --from "<pasta-de-dados>-acl-backup\acl-<data>.json" --allow-real
+```
+
+Efeito colateral esperado: agentes e ferramentas de IA que hoje leem a pasta por esse grupo deixam de ter acesso.
+
+### 7.4 Rotação do token local do backend
+
+O token local (`HORUS_API_TOKEN`) nasce a cada execução (Tauri) e vive só em memória; reiniciar o aplicativo já gera outro. Para trocá-lo **sem reiniciar**, o backend aceita uma rotação em duas fases, com validação e reversão automática (módulo `backend/src/horus_backend/local_token.py`; rotas aditivas autenticadas; testes em `backend/tests/test_token_rotation.py`, com `HORUS_DATA_DIR` temporário e tokens sintéticos):
+
+| Passo | Rota | Regra |
+|---|---|---|
+| 1. iniciar | `POST /v1/security/token/rotation` `{new_token}` (com o token **atual**) | O token novo é gerado pelo cliente e validado (24–256 caracteres `A-Za-z0-9._~-`, ao menos 12 distintos, diferente do atual; 422 sem eco do valor). Abre uma janela de 60 s em que o atual e o novo valem; só uma rotação por vez (409) |
+| 2. confirmar | `POST /v1/security/token/rotation/{id}/commit` (com o token **novo**) | A confirmação feita com o token novo prova que o cliente o guarda e que o servidor o aceita; com o antigo é recusada (403) e nada muda. Só então o novo vira o atual e o antigo deixa de valer |
+| reverter | `POST /v1/security/token/rotation/{id}/rollback` (com qualquer um dos dois) | Descarta o novo; se o `commit` não chega em 60 s, o novo expira sozinho e o atual continua valendo: o backend nunca fica sem token válido |
+| consultar | `GET /v1/security/token/rotation` | `idle` ou `pending` e o tempo restante |
+
+O token nunca é gravado em disco, log ou resposta (varredura nos testes). Efeitos: os tickets de mídia assinados com o token antigo deixam de valer após o `commit` (o cliente recarrega `GET /v1/media`); a redação de credenciais dos exports cobre os dois tokens durante a janela. Recuperação: se o cliente perder o token novo antes do `commit`, a janela expira e o atual segue valendo; se o processo que guarda o token (Tauri) cair, reiniciar o aplicativo gera um token novo, como sempre. **Limite:** a parte Tauri/React que chama este protocolo não faz parte desta entrega; o procedimento fica disponível para a integração futura. **Rotação real** (de qualquer credencial real: Hermes, ElevenLabs, sessões remotas) depende de autorização do usuário e segue o mesmo padrão em duas fases (emitir o novo, validar com chamada somente leitura, trocar, só então revogar o antigo).
+
+Verificação manual em ambiente de desenvolvimento (backend iniciado pelo próprio desenvolvedor com um token qualquer; nada é aplicado ao aplicativo instalado):
+
+```powershell
+$old = $env:HORUS_API_TOKEN; $new = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$r = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:<porta>/v1/security/token/rotation -Headers @{Authorization="Bearer $old"} -ContentType application/json -Body (@{new_token=$new} | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:<porta>/v1/security/token/rotation/$($r.rotation_id)/commit" -Headers @{Authorization="Bearer $new"}
+```

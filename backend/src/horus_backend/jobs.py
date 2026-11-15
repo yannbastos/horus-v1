@@ -127,6 +127,8 @@ class JobManager:
         self.workflows = WorkflowService(store, self.queue, self.notify, settings)
         from .data_deletion import DeletionAudit
         self.deletion_audit = DeletionAudit(settings.data_dir)
+        from .local_token import TokenState
+        self.tokens = TokenState(settings.token)
         self.productions = ProductionService(self)
 
     async def start(self):
