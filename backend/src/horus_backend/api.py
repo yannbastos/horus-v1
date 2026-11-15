@@ -38,6 +38,7 @@ from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, Sc
 from .body_limit import BodyLimitMiddleware
 from .error_center import ErrorCenter
 from .review_comments import CommentRequest, DecisionRequest, ReviewCommentService
+from .data_deletion import DataDeletionService, DeletionExecuteRequest, DeletionPreviewRequest
 from .notifications import NotificationService
 from .project_import import ImportRefused, ImportService
 from .storage import Store
@@ -376,6 +377,34 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     def reopen_review_comment(production_id: str, comment_id: str, request: DecisionRequest,
                               idempotency_key: str = Header(min_length=1, max_length=128)):
         return comment_call(lambda: review_comments.decide(production_id, comment_id, "reopen", request, idempotency_key))
+
+    deletion = DataDeletionService(manager)
+
+    def deletion_call(action):
+        try:
+            return action()
+        except KeyError:
+            raise HTTPException(404, "Alvo ou exclusão não encontrado.") from None
+        except WorkflowConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except OSError:
+            raise HTTPException(500, "Não foi possível concluir a operação de exclusão; nada foi alterado.") from None
+
+    @app.post("/v1/data-deletion/preview")
+    async def preview_data_deletion(request: DeletionPreviewRequest):
+        return await asyncio.to_thread(deletion_call, lambda: deletion.preview(request))
+
+    @app.post("/v1/data-deletion/execute")
+    async def execute_data_deletion(request: DeletionExecuteRequest):
+        return await asyncio.to_thread(deletion_call, lambda: deletion.execute(request))
+
+    @app.get("/v1/data-deletion/audit")
+    async def data_deletion_audit(limit: int = Query(50, ge=1, le=200), before: int | None = Query(None, ge=1)):
+        return await asyncio.to_thread(deletion_call, lambda: deletion.page(limit, before))
+
+    @app.post("/v1/data-deletion/{audit_id}/restore")
+    async def restore_data_deletion(audit_id: str):
+        return await asyncio.to_thread(deletion_call, lambda: deletion.restore(audit_id))
 
     @app.post("/v1/productions/{production_id}/review")
     def review_production(production_id: str, request: ProductionReviewRequest,
