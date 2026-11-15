@@ -14,7 +14,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -37,6 +37,7 @@ from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
 from .error_center import ErrorCenter
+from .review_comments import CommentRequest, DecisionRequest, ReviewCommentService
 from .notifications import NotificationService
 from .project_import import ImportRefused, ImportService
 from .storage import Store
@@ -327,6 +328,45 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     def production_artifact(production_id: str, artifact_id: str):
         path = script_call(lambda: manager.productions.artifact(production_id, artifact_id))
         return FileResponse(path, filename=path.name)
+
+    review_comments = ReviewCommentService(settings.data_dir, manager.productions)
+
+    def comment_call(action):
+        try:
+            return action()
+        except KeyError:
+            raise HTTPException(404, "Produção ou comentário não encontrado.") from None
+        except WorkflowConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(422, "Pedido de comentário inválido." if "pydantic" in type(error).__module__ else str(error)) from None
+        except OSError:
+            raise HTTPException(500, "Não foi possível gravar o comentário.") from None
+
+    @app.post("/v1/productions/{production_id}/comments", status_code=201)
+    def create_review_comment(production_id: str, request: CommentRequest, response: Response,
+                              idempotency_key: str = Header(min_length=1, max_length=128)):
+        comment, created = comment_call(lambda: review_comments.create(production_id, request, idempotency_key))
+        if not created:
+            response.status_code = 200
+        return comment
+
+    @app.get("/v1/productions/{production_id}/comments")
+    def list_review_comments(production_id: str, status: str | None = Query(None, max_length=10),
+                             artifact_sha256: str | None = Query(None, max_length=64), limit: int = Query(50, ge=1, le=200),
+                             after: str | None = Query(None, max_length=300)):
+        return comment_call(lambda: review_comments.page(production_id, status=status, artifact_sha256=artifact_sha256,
+                                                         limit=limit, after=after))
+
+    @app.post("/v1/productions/{production_id}/comments/{comment_id}/resolve")
+    def resolve_review_comment(production_id: str, comment_id: str, request: DecisionRequest,
+                               idempotency_key: str = Header(min_length=1, max_length=128)):
+        return comment_call(lambda: review_comments.decide(production_id, comment_id, "resolve", request, idempotency_key))
+
+    @app.post("/v1/productions/{production_id}/comments/{comment_id}/reopen")
+    def reopen_review_comment(production_id: str, comment_id: str, request: DecisionRequest,
+                              idempotency_key: str = Header(min_length=1, max_length=128)):
+        return comment_call(lambda: review_comments.decide(production_id, comment_id, "reopen", request, idempotency_key))
 
     @app.post("/v1/productions/{production_id}/review")
     def review_production(production_id: str, request: ProductionReviewRequest,
