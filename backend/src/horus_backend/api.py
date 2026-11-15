@@ -39,6 +39,7 @@ from .body_limit import BodyLimitMiddleware
 from .storage import Store
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
+from .whisper_models import ImportModelRequest, InstalledModel, ModelCatalog, ModelConflict, ModelName, RemovedModel, WhisperModels
 
 STREAM_KEEPALIVE_SECONDS = 10
 
@@ -71,6 +72,8 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     exports = ExportService(manager.productions)
     publishing = PublishingService(manager.productions)
     narration = NarrationService(settings, store)
+    whisper_models = WhisperModels(settings.data_dir)
+    model_mutation = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -493,6 +496,40 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     async def transcription_status():
         # Presença apenas; Whisper e yt-dlp não são importados no processo da API.
         return transcription_capabilities()
+
+    @app.get('/v1/transcription/models', response_model=ModelCatalog)
+    async def installed_whisper_models():
+        try:
+            return await asyncio.to_thread(whisper_models.list)
+        except (OSError, ValueError):
+            raise HTTPException(409, 'Não foi possível consultar o armazenamento local de modelos.') from None
+
+    @app.post('/v1/transcription/models/import', status_code=201, response_model=InstalledModel)
+    async def import_whisper_model(request: ImportModelRequest):
+        async with model_mutation:
+            try:
+                return await asyncio.to_thread(whisper_models.install, request)
+            except ModelConflict as error:
+                raise HTTPException(409, str(error)) from None
+            except (ValueError, UnicodeError):
+                raise HTTPException(400, 'Modelo ou origem inválidos. Confira os arquivos, tamanhos e licença MIT da pasta local; caminhos relativos, UNC e ADS são recusados.') from None
+            except OSError:
+                raise HTTPException(400, 'A cópia não foi concluída. Confira espaço livre e permissão no armazenamento local; a origem foi preservada.') from None
+
+    @app.delete('/v1/transcription/models/{model}', response_model=RemovedModel)
+    async def remove_whisper_model(model: ModelName, confirm: bool = Query(default=False)):
+        if not confirm:
+            raise HTTPException(400, 'Confirme explicitamente a remoção com confirm=true.')
+        async with model_mutation:
+            if manager.active_id or store.queued_ids():
+                raise HTTPException(409, 'Aguarde as tarefas em execução ou na fila antes de remover um modelo.')
+            try:
+                # Remoção curta e síncrona: nenhum job começa entre a checagem e a remoção.
+                return whisper_models.remove(model)
+            except ModelConflict as error:
+                raise HTTPException(409, str(error)) from None
+            except (OSError, ValueError):
+                raise HTTPException(409, 'Não foi possível remover o modelo. Confira o armazenamento local e tente novamente.') from None
 
     @app.post("/v1/transcriptions/save")
     async def save_transcript(request: TranscriptSave):

@@ -359,6 +359,96 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "ImportModelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_license": {
+            "const": true,
+            "title": "Confirm License",
+            "type": "boolean"
+          },
+          "model": {
+            "enum": [
+              "base",
+              "large-v3-turbo",
+              "medium",
+              "small",
+              "tiny"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "source_directory": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Source Directory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_license",
+          "model",
+          "source_directory"
+        ],
+        "title": "ImportModelRequest",
+        "type": "object"
+      },
+      "InstalledModel": {
+        "properties": {
+          "installed": {
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "license": {
+            "$ref": "#/components/schemas/ModelLicense"
+          },
+          "managed": {
+            "title": "Managed",
+            "type": "boolean"
+          },
+          "model": {
+            "enum": [
+              "base",
+              "large-v3-turbo",
+              "medium",
+              "small",
+              "tiny"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "removable": {
+            "title": "Removable",
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "installed",
+          "license",
+          "managed",
+          "model",
+          "removable",
+          "size_bytes",
+          "source"
+        ],
+        "title": "InstalledModel",
+        "type": "object"
+      },
       "LicenseReviewRequest": {
         "additionalProperties": false,
         "properties": {
@@ -476,6 +566,69 @@
           "title"
         ],
         "title": "MetadataRequest",
+        "type": "object"
+      },
+      "ModelCatalog": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/InstalledModel"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "ModelCatalog",
+        "type": "object"
+      },
+      "ModelLicense": {
+        "properties": {
+          "identifier": {
+            "const": "MIT",
+            "title": "Identifier",
+            "type": "string"
+          },
+          "model_card_present": {
+            "title": "Model Card Present",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "declared_unverified",
+              "local_declaration"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identifier",
+          "model_card_present",
+          "status"
+        ],
+        "title": "ModelLicense",
+        "type": "object"
+      },
+      "ModelSource": {
+        "properties": {
+          "kind": {
+            "const": "local_directory",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "title": "ModelSource",
         "type": "object"
       },
       "NarrationSelection": {
@@ -697,6 +850,32 @@
           "snapshot_id"
         ],
         "title": "RadarWorkflowRequest",
+        "type": "object"
+      },
+      "RemovedModel": {
+        "properties": {
+          "model": {
+            "enum": [
+              "base",
+              "large-v3-turbo",
+              "medium",
+              "small",
+              "tiny"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "removed": {
+            "const": true,
+            "title": "Removed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "model",
+          "removed"
+        ],
+        "title": "RemovedModel",
         "type": "object"
       },
       "ReviewLicense": {
@@ -2662,6 +2841,118 @@
           }
         },
         "summary": "Transcription Jobs"
+      }
+    },
+    "/v1/transcription/models": {
+      "get": {
+        "operationId": "installed_whisper_models_v1_transcription_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Installed Whisper Models"
+      }
+    },
+    "/v1/transcription/models/import": {
+      "post": {
+        "operationId": "import_whisper_model_v1_transcription_models_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Whisper Model"
+      }
+    },
+    "/v1/transcription/models/{model}": {
+      "delete": {
+        "operationId": "remove_whisper_model_v1_transcription_models__model__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "enum": [
+                "base",
+                "large-v3-turbo",
+                "medium",
+                "small",
+                "tiny"
+              ],
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "confirm",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Confirm",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemovedModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Whisper Model"
       }
     },
     "/v1/transcriptions/save": {
