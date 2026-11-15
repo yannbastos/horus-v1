@@ -333,7 +333,7 @@ export default function ScriptEditor({
               className="fact-item"
               role="group"
               aria-label={`Editor da seção ${index + 1}: ${SECTION_KIND_LABELS[section.kind]}`}
-              style={{ background: 'var(--Background)', gap: '10px' }}
+              style={{ background: 'var(--Background)', gap: 'var(--Space4)' }}
             >
               <div className="row spread">
                 <div className="row">
@@ -349,31 +349,28 @@ export default function ScriptEditor({
                   {isBody && (
                     <>
                       <button
-                        className="button"
+                        className="button sm"
                         type="button"
                         disabled={submitting || !canMoveUp}
                         aria-label={`Mover seção ${index + 1} para cima`}
-                        style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                         onClick={() => handleMoveSection(index, -1)}
                       >
                         Subir
                       </button>
                       <button
-                        className="button"
+                        className="button sm"
                         type="button"
                         disabled={submitting || !canMoveDown}
                         aria-label={`Mover seção ${index + 1} para baixo`}
-                        style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                         onClick={() => handleMoveSection(index, 1)}
                       >
                         Descer
                       </button>
                       <button
-                        className="button"
+                        className="button sm danger"
                         type="button"
                         disabled={submitting || !canRemove}
                         aria-label={`Remover seção ${index + 1}`}
-                        style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                         onClick={() => handleRemoveSection(index)}
                       >
                         Remover

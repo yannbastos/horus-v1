@@ -635,7 +635,7 @@ export default function ScriptReview({
       )}
 
       {loading && (
-        <StatusMessage state="loading" style={{ padding: '12px 0' }}>
+        <StatusMessage state="loading" style={{ padding: 'var(--Space5) 0' }}>
           Carregando versões do roteiro…
         </StatusMessage>
       )}
@@ -916,9 +916,8 @@ export default function ScriptReview({
                     </small>
                     {scripts.length > 1 && (
                       <button
-                        className={`button ${isSelected ? 'active' : ''}`}
+                        className={`button sm ${isSelected ? 'active' : ''}`}
                         type="button"
-                        style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                         onClick={() => void handleInspectVersion(item)}
                       >
                         {isSelected ? `Exibindo v${item.version}` : `Ver v${item.version}`}
@@ -926,9 +925,8 @@ export default function ScriptReview({
                     )}
                     {previousScript && (
                       <button
-                        className="button"
+                        className="button sm"
                         type="button"
-                        style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
                         onClick={() =>
                           setCompareState({
                             baseVersion: previousScript.version,
