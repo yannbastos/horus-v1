@@ -441,7 +441,7 @@ export default function Transcription({ connection, hidden, onOpenSettings }: {
       <div className="stack"><label>Modelo<select value={model} onChange={e => setModel(e.target.value)} disabled={busy}>{models.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>Idioma<select value={language} onChange={e => setLanguage(e.target.value)} disabled={busy}>{languages.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
       <div className="stack"><div className="row spread"><p className="eyebrow">FILA</p><span className="tag" aria-label="Arquivos na fila">{queue.length}/{maxQueue}</span></div>
-        {queue.length === 0 ? <StatusMessage state="empty" style={{ fontSize: 12 }}>A fila está vazia. O primeiro arquivo da fila é sempre o atual.</StatusMessage>
+        {queue.length === 0 ? <StatusMessage state="empty" style={{ fontSize: 'var(--TextMeta)' }}>A fila está vazia. O primeiro arquivo da fila é sempre o atual.</StatusMessage>
           : <ol className="queue" aria-label="Fila de transcrição">
               {queue.map((file, index) => (
                 <li key={`${index}-${file}`} title={file}>
@@ -489,7 +489,7 @@ export default function Transcription({ connection, hidden, onOpenSettings }: {
       </div>
       {warning && <StatusMessage state="error">{warning}</StatusMessage>}
       {missingSelectedModel && (
-        <div className="row spread" style={{ flexWrap: 'wrap', gap: 10 }} data-testid="transcription-missing-model-warning">
+        <div className="row spread" style={{ flexWrap: 'wrap', gap: 'var(--Space4)' }} data-testid="transcription-missing-model-warning">
           <StatusMessage state="error">
             {`O modelo "${model}" não está instalado localmente. Importe-o antes de transcrever.`}
           </StatusMessage>

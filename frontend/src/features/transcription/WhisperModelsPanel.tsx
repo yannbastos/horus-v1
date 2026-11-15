@@ -233,7 +233,7 @@ export default function WhisperModelsPanel({
 
       {models.length > 0 && (
         <ul
-          style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}
+          style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 'var(--Space4)' }}
           aria-label="Lista de modelos Whisper"
           data-testid="whisper-models-list"
         >
