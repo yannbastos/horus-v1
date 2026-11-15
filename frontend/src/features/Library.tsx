@@ -4,6 +4,7 @@ import type { Connection, Media } from '../services/api';
 import { nativeDesktop, selectDirectory, selectMedia } from '../platform/desktop';
 import { SectionHeader, sections } from '../components/Sections';
 import { StatusMessage } from '../components/StatusMessage';
+import { ImportedProjectsSection } from './library/ImportedProjectsSection';
 import {
   MediaPlayer,
   formatMediaDuration,
@@ -343,6 +344,8 @@ export default function Library({ connection }: { connection: Connection | null 
           </div>
         )
       )}
+
+      <ImportedProjectsSection connection={connection} />
     </div>
   );
 }
