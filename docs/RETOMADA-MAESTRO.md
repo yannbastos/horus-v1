@@ -2,6 +2,8 @@
 
 Procedimento único para iniciar, retomar, sincronizar ou transferir a coordenação do Hórus em uma sessão nova, em qualquer computador. É usado pelas skills `horus-maestro` (`.claude/skills/` para Claude Code e `.agents/skills/` para Codex) e pode ser seguido manualmente. Não depende do histórico de conversas: o estado oficial está no Git e no GitHub Projects.
 
+**Descoberta da skill:** o Claude Code só encontra `.claude/skills/` da pasta em que a sessão foi aberta. Abra a sessão na raiz do repositório `horus`. Se ela for aberta na pasta de trabalho que contém vários repositórios (horus, horus-storybook, fabrica-canais), a skill não aparece: invoque-a depois de abrir na raiz certa, use uma ponte local em `<pasta de trabalho>/.claude/skills/horus-maestro/` que apenas aponte para a skill versionada (sem regras próprias), ou siga este documento manualmente.
+
 Todos os caminhos são relativos à raiz do repositório. Os comandos `git` e `gh` funcionam em PowerShell e em shells POSIX.
 
 ## Regras durante a inicialização
@@ -108,6 +110,8 @@ Continua exigindo autorização do usuário: inferência real, APIs pagas, crede
 Algumas entregas validadas ficam fora da `main` por decisão de integração (ex.: migrações enquanto o usuário testa). Antes de delegar, confira na Issue indicada:
 
 ### F.1 Cadeia retida da linha Hermes (estado de 14/11/2026)
+
+**Atualização de 14/11 (noite): integre somente `yannbastos/integ-hermes-line-v3`**, que já consolida toda a tabela abaixo mais `test-hor-130-adversarial` e `yannbastos/feat-hor-107-checkpoints-ui` sobre a `main` daquele dia (backend+contracts 2490 passed; migração v9→v12 em cópia ok; Playwright 236+4; jornada real só o teste 1 por falta de memória — repetir 3/3 + Final na integração). Antes de integrar, faça `git merge origin/main` na v3 para trazer a `main` atual. A tabela e o procedimento abaixo ficam como referência da composição.
 
 Todas as branches estão publicadas em `origin` e **nenhuma está na `main`**. Cada uma contém a anterior; migrações aditivas v10–v12.
 
