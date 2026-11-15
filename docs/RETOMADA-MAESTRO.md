@@ -160,3 +160,12 @@ Pausa pedida pelo usuário. `main` publicada e validada (backend completo 2124 p
 - Aguardando o usuário: teste humano do primeiro vídeo (guia completo, inclusive prévia Kokoro); autorização específica para integrar `integ-hermes-line-v3` (§F.1); decisão sobre download automático do modelo Whisper; exclusão de dados locais (desenho em docs/seguranca-dados.md).
 - Retomar: revisão independente de docs/avaliacao-provedores-hermes.md (Issue #104, branch `review-hor-116-providers` se existir); variante Final da jornada (HORUS_E2E_FINAL=1) a repetir na `main` atual; UI das notificações e da importação já estão na `main`.
 - Regras de despacho: um Codex por vez (pedido do usuário); Antigravity sempre em worker novo com `--model gemini-4-hydrogen-medium`; confirmar `activity=working` após cada despacho.
+
+## H. Checkpoint — modo econômico de Claude (15/11/2026)
+
+Pedido do usuário: até nova orientação, Opus só coordena decisões críticas; Sonnet só para revisão de segurança que outro agente não faça; trabalho vai para Codex e Antigravity com Gemini 4 Hydrogen (nunca Argon nem Claude/GPT no Antigravity). Conferir cotas no Orca antes de delegar. Resumos de até 150 palavras.
+
+- **Persistência:** ADR aceito (docs/adr-persistencia-local-remota.md): SQLite local continua fonte; Supabase `horus-dev` (ref `uzirimqmwohnfraszvjn`, CLI via `npx supabase`, login feito pelo usuário) só para metadados sincronizáveis por adesão; acesso pela opção B. Issues: #124 (Fase A, Em revisão), #126 Fase B (Codex em `feat-hor-139-phase-b`), #127 C, #128 D, #129 E (bloqueada até aprovação do usuário). Contrato remoto da Fase B precisa de revisão de segurança antes da implementação dependente.
+- **Em andamento:** Codex #126; Antigravity UI de exclusão segura (#105, `feat-hor-117-delete-ui`); Sonnet encerrando em ponto seguro `feat-hor-120-secrets-hardening` (#4, 7.2–7.4 em simulação).
+- **Fila curta:** Codex → backend do download explícito do Whisper (#125; UI já na main, oculta até o catálogo existir) → restante de 7.2–7.4 (#4) se o Sonnet não concluir. Gemini → reconciliação periódica do Project → stories/docs dos componentes novos → UX da Fase D quando a B integrar.
+- **Aguardam o usuário:** teste do primeiro vídeo; integração da `integ-hermes-line-v3`; limpeza das 210 entradas do cofre (dizer qual pasta de dados proteger); aplicação real de cofre/ACL/rotação; senha do banco se `supabase link/db push` exigir (rodar no terminal dele).
