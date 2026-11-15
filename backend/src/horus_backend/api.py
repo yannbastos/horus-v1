@@ -76,6 +76,15 @@ class TranscriptSave(BaseModel):
 LOOPBACK_HOST = re.compile(r"(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?")
 
 
+class JobEventsResponse(StreamingResponse):
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # O cliente pode sair durante send(), com o gerador suspenso no yield.
+            await self.body_iterator.aclose()
+
+
 def create_app(settings: Settings, shutdown=None, ready=None):
     if len(settings.token) < 24:
         raise ValueError("A API exige um token local aleatório de pelo menos 24 caracteres.")
@@ -581,7 +590,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
                 if terminal and not store.events(job_id, cursor):
                     yield json.dumps({"kind": "complete", "job": require_job(job_id)}, ensure_ascii=False) + "\n"
                     return
-        return StreamingResponse(stream(), media_type="application/x-ndjson")
+        return JobEventsResponse(stream(), media_type="application/x-ndjson")
 
     def media_view(item):
         expires = int(time.time()) + 3600

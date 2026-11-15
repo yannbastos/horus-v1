@@ -1,5 +1,6 @@
 """Somente GET nos endpoints públicos oficiais; rede exige opt-in explícito."""
 import json
+from http.client import HTTPException
 import socket
 import ssl
 from urllib.error import HTTPError, URLError
@@ -46,14 +47,16 @@ class GoogleTransport:
             try:
                 body = json.loads(error.read(100_000))
                 reason = body['error']['errors'][0]['reason']
-            except (ValueError, KeyError, IndexError, TypeError):
+            except (ValueError, KeyError, IndexError, TypeError, OSError, HTTPException):
                 pass
+            finally:
+                error.close()
             if reason in {'quotaExceeded', 'dailyLimitExceeded'}:
                 raise CollectionError('upstream_quota', 'Cota recusada pelo YouTube.', quota=True) from None
             retryable = error.code in {429, 500, 502, 503, 504} or reason in {'rateLimitExceeded', 'userRateLimitExceeded'}
             code = 'rate_limit' if error.code == 429 or reason in {'rateLimitExceeded', 'userRateLimitExceeded'} else f'http_{error.code}'
             raise CollectionError(code, 'YouTube recusou a consulta; verifique acesso/configuração.', retryable=retryable) from None
-        except (URLError, socket.timeout, TimeoutError, OSError):
+        except (URLError, socket.timeout, TimeoutError, OSError, HTTPException):
             raise CollectionError('transport', 'Falha de transporte HTTPS; sem substituição por scraping.', retryable=True) from None
         except (ValueError, UnicodeError):
             raise CollectionError('invalid_response', 'Resposta JSON inválida do YouTube.') from None
