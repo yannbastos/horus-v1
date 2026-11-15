@@ -109,6 +109,9 @@ ALLOWLIST: dict[str, dict[str, str]] = {
     "production.py": {"call:OwnedProcess.start": "F-12"},
     "av_quality.py": {"call:OwnedProcess.start": "F-13"},
     "publishing.py": {"import:subprocess": "F-19", "call:run_sync": "F-19"},
+    "egress.py": {  # F-20 gateway único de saída HTTP (deny by default, DNS fixado, auditoria)
+        "import:http.client": "F-20", "import:socket": "F-20", "import:ssl": "F-20", "call:create_connection": "F-20",
+        "call:getaddrinfo": "F-20"},
     "production_worker.py": {  # F-12 render Remotion offline com auditoria de rede
         "import:http.server": "F-12", "import:socket": "F-12", "import:subprocess": "F-12", "call:subprocess.run": "F-12",
         "embedded_js_network:fetch/net/http": "F-12"},

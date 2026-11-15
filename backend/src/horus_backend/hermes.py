@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from . import egress
 from .config import Settings
 
 MAX_RESPONSE = 128 * 1024
@@ -52,6 +53,7 @@ def get_json(base_url: str, token: str, path: str):
     validate_origin(base_url)
     # Ignorar proxies de ambiente e recusar redirects: a credencial fica na origem local.
     opener = build_opener(ProxyHandler({}), NoRedirect())
+    egress.gateway().authorize("hermes", "GET", base_url + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     request = Request(base_url + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     with opener.open(request, timeout=3) as response:
         raw = response.read(MAX_RESPONSE + 1)

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
+from . import egress
 from .hermes import NoRedirect, read_connection, validate_origin
 from .security import (FINAL_RUN_STATUSES, SecurityGate, cost_reservation, daily_runs, daily_tokens,
                        estimated_cost, require_budget, require_secure)
@@ -81,6 +82,9 @@ class HermesRunClient:
         if not re.fullmatch(r"/v1/runs(?:/[A-Za-z0-9_-]+(?:/stop)?)?", path):
             raise ValueError("Referência de execução inválida.")
         data = json.dumps(body).encode() if body is not None else None
+        egress.gateway().authorize("hermes", method, self.base_url + path, body=data, headers={
+            "Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
+            "Accept": "application/json", **(headers or {})})
         request = Request(self.base_url + path, data=data, method=method, headers={
             "Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
             "Accept": "application/json", **(headers or {})})
