@@ -20,12 +20,13 @@ import urllib.request
 import psutil
 
 
-def request(port, token, path, method="GET"):
+def request(port, token, path, method="GET", payload=None, raw=False):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
-                                 headers={"Authorization": f"Bearer {token}"})
+                                 data=json.dumps(payload).encode() if payload is not None else None,
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(req, timeout=30) as response:
-        return json.load(response)
+        return response.read().decode('utf-8') if raw else json.load(response)
 
 
 def close_window(pid):
@@ -47,7 +48,8 @@ def close_window(pid):
     user32.EnumWindows(visit, 0)
 
 
-def smoke(executable, desktop=False, crash=False, data_dir=None):
+def smoke(executable, desktop=False, crash=False, data_dir=None, with_transcription=False,
+          cuda_runtime_dir=None, model_dir=None, audio=None, expected_device=None):
     started = time.perf_counter()
     with (nullcontext(str(data_dir)) if data_dir else tempfile.TemporaryDirectory(prefix="horus-package-smoke-")) as folder:
         Path(folder).mkdir(parents=True, exist_ok=True)
@@ -60,6 +62,11 @@ def smoke(executable, desktop=False, crash=False, data_dir=None):
         env["HORUS_HERMES_PROFILE"] = str(Path(folder) / "hermes-profile")
         token = secrets.token_hex(32)
         env.update(HORUS_API_TOKEN=token, HORUS_MANAGED="1")
+        if cuda_runtime_dir is not None:
+            env['HORUS_CUDA_RUNTIME_DIR'] = cuda_runtime_dir
+        if model_dir:
+            env.update(HORUS_WHISPER_MODELS_DIR=str(model_dir), HORUS_WHISPER_DEVICE='cuda',
+                       HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1')
         proc = subprocess.Popen([str(executable)] + ([] if desktop else ["--port", "0"]),
                                 env=env, cwd=folder, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -100,7 +107,28 @@ def smoke(executable, desktop=False, crash=False, data_dir=None):
             assert health["status"] == "ready"
             diagnostics = request(port, token, "/v1/diagnostics")
             missing = [c["id"] for c in diagnostics["checks"] if not c["available"]]
-            assert {"faster_whisper", "ctranslate2", "av", "ffmpeg", "node"} <= set(missing), missing
+            assert {'ffmpeg', 'node'} <= set(missing), missing
+            engines = {'faster_whisper', 'ctranslate2', 'av'}
+            assert (not engines.intersection(missing)) if with_transcription else engines <= set(missing), missing
+            if expected_device:
+                assert with_transcription and model_dir and audio
+                cuda = diagnostics['cuda_runtime']
+                assert cuda['available'] == (expected_device == 'cuda'), cuda
+                transcription_started = time.perf_counter()
+                job = request(port, token, '/v1/jobs', 'POST',
+                              dict(operation='transcription.run', path=str(audio), model='small', language='pt'))
+                deadline = time.monotonic() + 180
+                while time.monotonic() < deadline:
+                    job = request(port, token, f"/v1/jobs/{job['id']}")
+                    if job['status'] in {'succeeded', 'failed', 'blocked', 'interrupted', 'cancelled'}:
+                        break
+                    time.sleep(.2)
+                assert job['status'] == 'succeeded', job
+                assert job['result']['text'].strip(), job
+                events = request(port, token, f"/v1/jobs/{job['id']}/events", raw=True)
+                assert f'Transcrevendo em {expected_device.upper()}' in events, events
+                print(json.dumps(dict(transcription_device=expected_device, cuda_runtime=cuda['source'],
+                                      cuda_available=cuda['available'], transcription_seconds=round(time.perf_counter()-transcription_started, 3))))
             assert not diagnostics["production"]["ready"]
             assert (Path(folder) / "horus.sqlite3").is_file()
             descendants = psutil.Process(proc.pid).children(recursive=True)
@@ -139,5 +167,11 @@ if __name__ == "__main__":
     parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--crash", action="store_true")
     parser.add_argument("--data-dir", type=Path, help="Diretório descartável compartilhado entre versões")
+    parser.add_argument('--with-transcription', action='store_true')
+    parser.add_argument('--cuda-runtime-dir')
+    parser.add_argument('--model-dir', type=Path)
+    parser.add_argument('--audio', type=Path, help='Somente áudio sintético descartável')
+    parser.add_argument('--expected-device', choices=['cpu', 'cuda'])
     args = parser.parse_args()
-    smoke(args.executable.resolve(), args.desktop, args.crash, args.data_dir)
+    smoke(args.executable.resolve(), args.desktop, args.crash, args.data_dir, args.with_transcription,
+          args.cuda_runtime_dir, args.model_dir, args.audio, args.expected_device)

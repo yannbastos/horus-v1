@@ -6,6 +6,7 @@ from .dependencies import find_tool, has_module
 from .narration.kokoro import Kokoro
 from .narration.providers import WindowsSapi, NarrationError
 from .speech_alignment import resolve_model_path
+from .cuda_runtime import inspect_runtime
 
 
 def production_diagnostics(settings: Settings):
@@ -95,7 +96,10 @@ def diagnose(settings: Settings):
     checks.append({'id': 'whisper_device', 'name': 'Modo de transcrição', 'available': device in {'auto', 'cpu', 'cuda'},
                    'detail': f'Modo {device.upper()}. GPU é verificada somente ao transcrever; fallback CPU antes do primeiro trecho.'
                    if device in {'auto', 'cpu', 'cuda'} else 'HORUS_WHISPER_DEVICE inválido. Use auto, cpu ou cuda.'})
+    cuda = inspect_runtime()
+    checks.append({'id': 'cuda_runtime', 'name': 'Runtime CUDA explícito',
+                   'available': cuda['available'], 'detail': cuda['detail']})
     checks.append({"id": "hermes", "name": "Hermes CLI", "available": settings.hermes_executable is not None,
                    "detail": "A presença do CLI não confirma conexão com a API. Use a verificação Hermes em Ajustes."})
-    return {"checks": checks, "hermes_connected": False, "production": production_diagnostics(settings),
+    return {"checks": checks, "cuda_runtime": cuda, "hermes_connected": False, "production": production_diagnostics(settings),
             "notice": "Verificação de presença apenas. Não executa comandos, testa credenciais ou certifica prontidão para renderizar."}

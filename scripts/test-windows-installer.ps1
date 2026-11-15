@@ -1,6 +1,10 @@
 param(
     [Parameter(Mandatory=$true)][string]$Installer,
     [string]$UpgradeInstaller = '',
+    [switch]$WithTranscription,
+    [string]$CudaRuntimeDir = '',
+    [string]$ModelDir = '',
+    [string]$Audio = '',
     [string]$Python = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -11,6 +15,11 @@ $existing = Get-ChildItem HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninst
 if ($existing) { throw 'Instalação HORUS preexistente: execute em outro usuário/VM para preservá-la.' }
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
 $upgradePath = if ($UpgradeInstaller) { (Resolve-Path -LiteralPath $UpgradeInstaller).Path } else { '' }
+$smokeOptions = @()
+if ($WithTranscription) { $smokeOptions += '--with-transcription' }
+if ($CudaRuntimeDir -and (-not $WithTranscription -or -not $ModelDir -or -not $Audio)) { throw 'Ensaio CUDA exige WithTranscription, ModelDir e Audio sintético.' }
+if ($ModelDir) { $ModelDir = (Resolve-Path -LiteralPath $ModelDir).Path }
+if ($Audio) { $Audio = (Resolve-Path -LiteralPath $Audio).Path }
 function Assert-InstalledVersion([string]$Package) {
     $expected = (Get-Item -LiteralPath $Package).VersionInfo.ProductVersion
     if (-not $expected) { throw 'Instalador sem versão de produto.' }
@@ -37,13 +46,32 @@ try {
     Assert-InstalledVersion $installerPath
     $desktop = Join-Path $install 'horus-desktop.exe'
     if (-not (Test-Path -LiteralPath $desktop)) { throw 'Desktop não foi instalado no destino temporário.' }
-    & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop
+    & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop @smokeOptions
     if ($LASTEXITCODE) { throw 'Smoke do desktop falhou.' }
-    & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --crash
+    & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --crash @smokeOptions
     if ($LASTEXITCODE) { throw 'Smoke de queda do desktop falhou.' }
+    if ($CudaRuntimeDir) {
+        $smoke = Join-Path $PSScriptRoot 'smoke-windows-package.py'
+        # CUDA explicitamente solicitada em todos: ausência/inválido/UNC devem usar CPU.
+        & $Python $smoke $desktop --desktop --with-transcription --model-dir $ModelDir --audio $Audio --expected-device cpu
+        if ($LASTEXITCODE) { throw 'Fallback CPU sem runtime falhou.' }
+        foreach ($invalid in @((Join-Path $temporary 'missing-runtime'), '\\invalid-server\runtime')) {
+            & $Python $smoke $desktop --desktop --with-transcription --cuda-runtime-dir $invalid --model-dir $ModelDir --audio $Audio --expected-device cpu
+            if ($LASTEXITCODE) { throw 'Fallback CPU com runtime inválido/UNC falhou.' }
+        }
+        & $Python $smoke $desktop --desktop --with-transcription --cuda-runtime-dir $CudaRuntimeDir --model-dir $ModelDir --audio $Audio --expected-device cuda
+        if ($LASTEXITCODE) { throw 'Transcrição instalada em CUDA falhou.' }
+        $oldCudaPath = $env:CUDA_PATH
+        try {
+            # Apenas ambiente deste ensaio, nunca configuração global do Windows.
+            $env:CUDA_PATH = $CudaRuntimeDir
+            & $Python $smoke $desktop --desktop --with-transcription --cuda-runtime-dir system --model-dir $ModelDir --audio $Audio --expected-device cuda
+            if ($LASTEXITCODE) { throw 'Descoberta system instalada em CUDA falhou.' }
+        } finally { $env:CUDA_PATH = $oldCudaPath }
+    }
     if ($upgradePath) {
         $dataCheck = Join-Path $PSScriptRoot 'check-installer-data.py'
-        & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --data-dir $env:HORUS_DATA_DIR
+        & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --data-dir $env:HORUS_DATA_DIR @smokeOptions
         if ($LASTEXITCODE) { throw 'Inicialização N falhou.' }
         & $Python $dataCheck $env:HORUS_DATA_DIR seed
         if ($LASTEXITCODE) { throw 'Criação de dados sintéticos falhou.' }
@@ -54,11 +82,11 @@ try {
             # Conferir antes de abrir: reinstalação não pode recriar um banco vazio.
             & $Python $dataCheck $env:HORUS_DATA_DIR verify
             if ($LASTEXITCODE) { throw "$($step.name): dados perdidos na instalação." }
-            & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --data-dir $env:HORUS_DATA_DIR
+            & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --data-dir $env:HORUS_DATA_DIR @smokeOptions
             if ($LASTEXITCODE) { throw "$($step.name): smoke falhou." }
             & $Python $dataCheck $env:HORUS_DATA_DIR verify
             if ($LASTEXITCODE) { throw "$($step.name): dados perdidos ao iniciar." }
-            & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --crash --data-dir $env:HORUS_DATA_DIR
+            & $Python (Join-Path $PSScriptRoot 'smoke-windows-package.py') $desktop --desktop --crash --data-dir $env:HORUS_DATA_DIR @smokeOptions
             if ($LASTEXITCODE) { throw "$($step.name): smoke de queda falhou." }
             & $Python $dataCheck $env:HORUS_DATA_DIR future --executable (Join-Path $install 'backend/horus-backend.exe')
             if ($LASTEXITCODE) { throw "$($step.name): recusa de schema futuro falhou." }
