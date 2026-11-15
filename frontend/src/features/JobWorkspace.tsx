@@ -56,13 +56,22 @@ function JobDetails({ job, connection, refresh }: { job: FactoryJob; connection:
   </article>;
 }
 
-export default function JobWorkspace({ connection }: { connection: Connection | null }) {
+export default function JobWorkspace({
+  connection,
+  focusJobId,
+}: {
+  connection: Connection | null;
+  focusJobId?: string | null;
+}) {
   const [jobs, setJobs] = useState<FactoryJob[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [channel, setChannel] = useState('canal01');
   const [video, setVideo] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (focusJobId) setSelected(focusJobId);
+  }, [focusJobId]);
   async function refresh() {
     if (!connection) return;
     const list = (await api<Job[]>(connection, '/v1/jobs')).filter(isFactoryJob);

@@ -10,6 +10,7 @@ export type ShortcutId =
   | 'nav.production-center'
   | 'nav.channels'
   | 'nav.history'
+  | 'nav.error-center'
   | 'nav.transcription'
   | 'nav.settings'
   | 'library.search'
@@ -93,6 +94,13 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     description: 'Abre o histórico operacional.',
     category: 'navigation',
     defaultBinding: 'Alt+7',
+  },
+  {
+    id: 'nav.error-center',
+    label: 'Ir para Central de erros',
+    description: 'Abre o Histórico operacional com foco na Central de erros.',
+    category: 'navigation',
+    defaultBinding: 'Alt+E',
   },
   {
     id: 'nav.transcription',
