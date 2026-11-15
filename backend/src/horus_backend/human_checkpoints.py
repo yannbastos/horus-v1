@@ -28,6 +28,9 @@ COLUMNS = ("seq", "id", "action", "subject", "description", "approved_by", "oper
            "limit_amount", "currency", "consumed_at", "consumed_ref")
 _SHA = re.compile(r"[a-f0-9]{64}")
 _MONEY = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,8})?")
+# A descrição é exibida ao humano que aprova: controles, separadores de linha/parágrafo, marcas de direção (bidi) e
+# caracteres invisíveis poderiam reordenar ou esconder texto e tornar a aprovação enganosa.
+_UNSAFE_DESCRIPTION = re.compile("[\x00-\x1f\x7f-\x9f­؜᠎​-‏ -‮⁠-⁯﻿￹-￻]")
 
 
 class CheckpointRefused(SecurityGate):
@@ -67,7 +70,7 @@ class CheckpointService:
             raise ValueError("Ação ou objeto do checkpoint inválidos.")
         if approved_by != "human":
             raise ValueError("Somente aprovação humana é aceita.")
-        if not isinstance(description, str) or not 1 <= len(description) <= 200 or re.search(r"[\x00-\x1f\x7f]", description):
+        if not isinstance(description, str) or not 1 <= len(description) <= 200 or _UNSAFE_DESCRIPTION.search(description):
             raise ValueError("Descrição inválida.")
         if type(ttl_seconds) is not int or not 30 <= ttl_seconds <= MAX_TTL_SECONDS:
             raise ValueError("Validade fora do intervalo permitido.")
