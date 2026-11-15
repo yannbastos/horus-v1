@@ -254,6 +254,20 @@
           "name": "string"
         }
       },
+      "cuda_runtime": {
+        "available": "boolean",
+        "configured": "boolean",
+        "cuda_major": "integer",
+        "cudnn_major": "integer",
+        "detail": "string",
+        "directories": {
+          "__array__": "unknown"
+        },
+        "missing": {
+          "__array__": "unknown"
+        },
+        "source": "string"
+      },
       "hermes_connected": "boolean",
       "notice": "string",
       "production": {
