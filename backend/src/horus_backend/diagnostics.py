@@ -37,11 +37,11 @@ def production_diagnostics(settings: Settings):
         'Configure HORUS_FFMPEG com o executável local preparado com subtitles/libass; filtros não são executados nesta consulta.')
     add('ffprobe', 'FFprobe do piloto', ffmpeg and ffmpeg.with_name('ffprobe' + ffmpeg.suffix).is_file(),
         'Prepare ffprobe ao lado do executável indicado em HORUS_FFMPEG; mantenha também as ferramentas acessíveis ao worker pelo PATH ou compositor Remotion.')
-    model = settings.alignment_model
+    model = settings.alignment_models_dir
     model_path = resolve_model_path(Path(model), 'small') if model else None
     add('alignment_model', 'Modelo de alinhamento', model_path and all(
         (model_path / p).is_file() for p in ('model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt')),
-        'Configure HORUS_ALIGNMENT_MODEL com small/ ou faster-whisper-small/ contendo model.bin, config.json, tokenizer.json e vocabulary.txt.')
+        'Importe small em Ajustes/Transcrição; HORUS_ALIGNMENT_MODEL pode selecionar outra pasta local com os arquivos completos.')
     add('alignment_engine', 'Motor de alinhamento', all(has_module(m) for m in ('faster_whisper', 'ctranslate2', 'av')),
         'Prepare o extra de transcrição do backend; o modelo não é carregado nesta consulta.')
     try:
