@@ -484,3 +484,18 @@ main::-webkit-scrollbar-track,
 @media (max-width: 640px) {
   .error-center-filter-grid { grid-template-columns: 1fr; }
 }
+
+/* --- Exclusão segura de dados locais (HOR-117) --- */
+.data-deletion-modal { width: min(720px, 100%); max-height: min(88vh, 840px); background: var(--Background); border: 1px solid var(--LineStrong); display: flex; flex-direction: column; min-height: 0; }
+.data-deletion-modal-header { padding: var(--Space6) var(--Space8); border-bottom: 1px solid var(--Line); background: var(--Sunken); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--Space5); flex-wrap: wrap; }
+.data-deletion-modal-header h2 { margin: var(--Space1) 0 0; }
+.data-deletion-modal-body { padding: var(--Space6) var(--Space8); overflow-y: auto; display: flex; flex-direction: column; gap: var(--Space5); min-height: 0; }
+.data-deletion-modal-footer { padding: var(--Space5) var(--Space8); border-top: 1px solid var(--Line); background: var(--Sunken); display: flex; align-items: center; justify-content: flex-end; gap: var(--Space3); flex-wrap: wrap; }
+.data-deletion-phrase-box { padding: var(--Space4) var(--Space5); border: 1px solid var(--LineStrong); background: var(--Sunken); display: flex; flex-direction: column; gap: var(--Space2); }
+.data-deletion-phrase-code { font-family: var(--FontMono); font-size: var(--TextBody); font-weight: 700; color: var(--InkStrong); letter-spacing: 0.03em; user-select: all; }
+.data-deletion-notice { padding: var(--Space4) var(--Space5); border: 1px solid var(--Warn); border-left-width: 3px; background: var(--Sunken); display: flex; flex-direction: column; gap: var(--Space2); }
+.data-deletion-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--Space2); }
+.data-deletion-list-item { padding: var(--Space3) var(--Space4); border: 1px solid var(--Line); background: var(--Sunken); display: flex; flex-direction: column; gap: 2px; }
+.button.danger { border-color: var(--Bad); color: var(--Bad); }
+.button.danger:hover:not(:disabled) { background: var(--Bad); color: var(--Background); }
+

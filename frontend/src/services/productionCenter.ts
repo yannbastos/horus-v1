@@ -198,6 +198,17 @@ export function buildRow(input: RowInputs): CenterRow {
   base.productionMode = production.mode ?? null;
   base.updatedAt = maxTime([base.updatedAt, production.updated_at]);
   base.status = `${statusLabel} · ${stageName}`;
+  if (production.local_data?.state === 'deleted' || production.local_data?.state === 'incomplete') {
+    base.stage = 'production';
+    base.stageLabel = STAGE_LABELS.production;
+    base.status = 'Arquivos excluídos';
+    base.license = production.mode === 'local_pilot' ? (input.license ?? readLicense(production.asset_provenance)) : 'not_applicable';
+    base.blockers.push({
+      kind: 'ended',
+      text: 'Arquivos locais excluídos (em quarentena). Prévia e exportação indisponíveis até restaurar em Ajustes → Privacidade e Segurança.',
+    });
+    return base;
+  }
   const state = production.status as string;
 
   if (state === 'queued' || state === 'running' || state === 'cancel_requested') {
