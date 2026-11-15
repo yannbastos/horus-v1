@@ -389,7 +389,7 @@ export function ImportedProjectsSection({ connection, pickZip }: ImportedProject
 
       {imports.length > 0 && (
         <ul
-          className="media-list"
+          className="media-list imported-projects-list"
           aria-label="Lista de projetos importados"
           style={{ listStyle: 'none', margin: 0, padding: 0 }}
         >

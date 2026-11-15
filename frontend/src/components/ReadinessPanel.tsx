@@ -260,14 +260,16 @@ export function ReadinessPanel({
             </p>
           </div>
 
-          <StatusMessage
-            state={missingItems.length === 0 ? 'success' : 'empty'}
-            testId="first-run-summary"
-          >
-            {missingItems.length === 0
-              ? 'Tudo pronto: Whisper, Kokoro, yt-dlp e FFmpeg estão disponíveis localmente.'
-              : `${missingItems.length} de ${COMPONENTS.length} componentes opcionais ainda não instalados (${missingItems.map(i => i.spec.title.split(' ')[0]).join(', ')}). Nenhum download automático é executado; siga as instruções abaixo para instalar localmente.`}
-          </StatusMessage>
+          <div className="card">
+            <StatusMessage
+              state={missingItems.length === 0 ? 'success' : 'empty'}
+              testId="first-run-summary"
+            >
+              {missingItems.length === 0
+                ? 'Tudo pronto: Whisper, Kokoro, yt-dlp e FFmpeg estão disponíveis localmente.'
+                : `${missingItems.length} de ${COMPONENTS.length} componentes opcionais ainda não instalados (${missingItems.map(i => i.spec.title.split(' ')[0]).join(', ')}). Nenhum download automático é executado; siga as instruções abaixo para instalar localmente.`}
+            </StatusMessage>
+          </div>
 
           <div className="readiness-components-grid" style={{ display: 'grid', gap: 'var(--Space5)' }}>
             {items.map(({ spec, available }) => {
