@@ -6,7 +6,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 MIGRATIONS = {
     1: (
         """CREATE TABLE jobs (
@@ -183,6 +183,30 @@ MIGRATIONS = {
             BEGIN SELECT RAISE(ABORT, 'transmissions é append-only'); END""",
         """CREATE TRIGGER transmissions_no_delete BEFORE DELETE ON transmissions
             BEGIN SELECT RAISE(ABORT, 'transmissions é append-only'); END""",
+    ),
+    # Checkpoints humanos para gastar/publicar (HOR-107): append-only; só consumed_at/consumed_ref mudam, uma vez.
+    12: (
+        """CREATE TABLE human_checkpoints (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+            action TEXT NOT NULL CHECK(action IN ('hermes_run','hermes_script','paid_narration','publish')),
+            subject TEXT NOT NULL CHECK(length(subject) = 64),
+            description TEXT NOT NULL CHECK(length(description) BETWEEN 1 AND 200),
+            approved_by TEXT NOT NULL CHECK(approved_by = 'human'), operator_id TEXT NOT NULL,
+            approved_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+            limit_amount TEXT, currency TEXT CHECK(currency IS NULL OR length(currency) = 3),
+            consumed_at TEXT, consumed_ref TEXT, idempotency_key TEXT UNIQUE, request TEXT NOT NULL,
+            CHECK((limit_amount IS NULL) = (currency IS NULL)))""",
+        "CREATE INDEX human_checkpoints_lookup ON human_checkpoints(action, subject, seq)",
+        """CREATE TRIGGER human_checkpoints_no_delete BEFORE DELETE ON human_checkpoints
+            BEGIN SELECT RAISE(ABORT, 'human_checkpoints é append-only'); END""",
+        """CREATE TRIGGER human_checkpoints_consume_once BEFORE UPDATE ON human_checkpoints
+            WHEN NOT (OLD.consumed_at IS NULL AND NEW.consumed_at IS NOT NULL AND NEW.id = OLD.id AND NEW.seq = OLD.seq
+                AND NEW.action = OLD.action AND NEW.subject = OLD.subject AND NEW.description = OLD.description
+                AND NEW.approved_by = OLD.approved_by AND NEW.operator_id = OLD.operator_id
+                AND NEW.approved_at = OLD.approved_at AND NEW.expires_at = OLD.expires_at
+                AND NEW.limit_amount IS OLD.limit_amount AND NEW.currency IS OLD.currency
+                AND NEW.request = OLD.request AND NEW.idempotency_key IS OLD.idempotency_key)
+            BEGIN SELECT RAISE(ABORT, 'human_checkpoints só aceita o consumo único'); END""",
     ),
 }
 

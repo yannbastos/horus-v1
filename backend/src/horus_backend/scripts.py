@@ -242,6 +242,13 @@ class ScriptService:
                 db.execute("""INSERT INTO authorizations(id,workflow_id,revision,job_id,input_artifact_id,scope,max_runs,
                     operator_id,idempotency_key,request,consumed_attempt_id,created_at) VALUES(?,?,?,?,?,'cognitive_run',1,'local-operator',?,?,?,?)""",
                     (uuid.uuid4().hex, workflow_id, request.expected_revision, job_id, artifact["id"], "script:" + key, encoded, attempt_id, timestamp))
+                # HOR-107: a autorização explícita do roteiro vira checkpoint humano registrado e consumido na mesma transação.
+                from .human_checkpoints import CheckpointService
+                checkpoints = CheckpointService(self.store, self.audit)
+                subject = digest(envelope.model_dump())
+                checkpoints.grant(action="hermes_script", subject=subject, description=f"Roteiro via Hermes do workflow {workflow_id[:12]}",
+                                  key="script:" + key, db=db)
+                checkpoints.consume(action="hermes_script", subject=subject, ref=attempt_id, db=db)
                 self._receipt(db, scope, key, encoded, {"pending": True})
                 return {"job_id": job_id, "workflow_id": workflow_id, "script_envelope": envelope.model_dump(mode="json")}, True
             if _document is not None:

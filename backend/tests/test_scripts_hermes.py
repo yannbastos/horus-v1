@@ -110,7 +110,7 @@ def test_v9_upgrade_preserves_legacy_records_and_reading(tmp_path, monkeypatch):
     migrate(path)
     migrate(path)
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert db.execute("PRAGMA user_version").fetchone()[0] == __import__("horus_backend.migrations", fromlist=["SCHEMA_VERSION"]).SCHEMA_VERSION
         assert "generator" in {row[1] for row in db.execute("PRAGMA table_info(scripts)")}
         assert db.execute("SELECT origin,document,review FROM scripts").fetchall() == []
 

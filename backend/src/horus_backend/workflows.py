@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .hermes_contract.models import ChannelProfile, Dataset
+from .human_checkpoints import CheckpointService
 from .storage import Store, now
 from .workflow_hermes import CognitiveFailure, CognitiveUnknown, HermesStageOutput, HermesStages
 
@@ -97,9 +98,31 @@ async def simulate(context):
             "source_artifact_ids": [item["id"] for item in context["sources"]]}
 
 
+def _audit(store):
+    from .transmissions import TransmissionLog
+    return TransmissionLog(store)
+
+
+def _subject(job_id, content_hash):
+    return hashlib.sha256(f"{job_id}:{content_hash}".encode()).hexdigest()
+
+
+def _reservation(settings):
+    """Reserva em USD da execução paga, ou None se o orçamento não está configurado (execução simulada)."""
+    if settings is None:
+        return None
+    from .security import SecurityGate, cost_reservation
+    try:
+        return cost_reservation(settings)
+    except SecurityGate:
+        return None
+
+
 class WorkflowService:
     def __init__(self, store: Store, queue: asyncio.Queue, notify, settings=None):
         self.store, self.queue, self.notify = store, queue, notify
+        self.settings = settings
+        self.checkpoints = CheckpointService(store, _audit(store))
         # Substituição somente em testes; nunca aceitar um executor informado pela API.
         self.executor = simulate
         self.executor_kind = getattr(settings, "workflow_executor", "simulated")
@@ -246,6 +269,14 @@ class WorkflowService:
         return self.get(workflow_id)
 
     def _claim(self, job_id):
+        from .human_checkpoints import CheckpointRefused
+        try:
+            return self._claim_tx(job_id)
+        except CheckpointRefused as error:
+            self.checkpoints.audit_refusal(error)   # fora da transação já revertida
+            raise
+
+    def _claim_tx(self, job_id):
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             job = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -291,6 +322,13 @@ class WorkflowService:
                     if not grant:
                         raise WorkflowConflict("Execução cognitiva sem autorização humana vigente.")
                     context["authorization_id"] = grant["id"]
+                    # HOR-107: gasto exige checkpoint humano válido (vigente, dentro do limite, uso único); falha desfaz a tentativa.
+                    source = db.execute("SELECT a.content_hash FROM authorizations z JOIN artifacts a ON a.id=z.input_artifact_id WHERE z.id=?",
+                                        (grant["id"],)).fetchone()
+                    reservation = _reservation(self.settings)
+                    self.checkpoints.consume(action="hermes_run", subject=_subject(job_id, source["content_hash"]),
+                                             amount=reservation, currency="USD" if reservation is not None else None,
+                                             ref=attempt_id, db=db)
             executor_name = "simulated-v1" if executor == "simulated" else (
                 "hermes-v1" if stage in AUTHORIZED_STAGES.get(executor, ()) else "local-v1")
             db.execute("UPDATE jobs SET status='running',attempt=attempt+1,updated_at=?,error=NULL,result=NULL WHERE id=?",
@@ -513,6 +551,11 @@ class WorkflowService:
             db.execute("""INSERT INTO authorizations(id,workflow_id,revision,job_id,input_artifact_id,scope,max_runs,
                 operator_id,idempotency_key,request,created_at) VALUES(?,?,?,?,?,'cognitive_run',1,'local-operator',?,?,?)""",
                        (authorization_id, workflow_id, workflow["revision"], job["id"], source["id"], key, encoded, now()))
+            reservation = _reservation(self.settings)
+            self.checkpoints.grant(action="hermes_run", subject=_subject(job["id"], source["content_hash"]),
+                                   description=f"Execução cognitiva {job['step_key']} do workflow {workflow_id[:12]}",
+                                   limit_amount=None if reservation is None else format(reservation, "f"),
+                                   currency=None if reservation is None else "USD", key="authorize:" + authorization_id, db=db)
             self._job_status(db, job["id"], "queued")
             db.execute("UPDATE workflows SET status='queued',updated_at=? WHERE id=?", (now(), workflow_id))
             self._event(db, workflow_id, workflow["revision"], "workflow.authorized",

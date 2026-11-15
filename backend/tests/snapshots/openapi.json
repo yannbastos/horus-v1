@@ -72,6 +72,75 @@
         "title": "ChannelProfile",
         "type": "object"
       },
+      "CheckpointRequest": {
+        "additionalProperties": false,
+        "description": "Aprovação humana prévia para gastar (narração paga) ou publicar. Execução cognitiva do Hermes nasce em /authorize.",
+        "properties": {
+          "action": {
+            "enum": [
+              "paid_narration",
+              "publish"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "approved_by": {
+            "const": "human",
+            "title": "Approved By",
+            "type": "string"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "description": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "limit_amount": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{1,12}(?:\\.[0-9]{1,8})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Amount"
+          },
+          "subject": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Subject",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 900,
+            "maximum": 3600.0,
+            "minimum": 30.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "approved_by",
+          "description",
+          "subject"
+        ],
+        "title": "CheckpointRequest",
+        "type": "object"
+      },
       "CredentialRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1093,6 +1162,101 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/v1/checkpoints": {
+      "get": {
+        "operationId": "list_checkpoints_v1_checkpoints_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Checkpoints"
+      },
+      "post": {
+        "operationId": "create_checkpoint_v1_checkpoints_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Checkpoint"
       }
     },
     "/v1/diagnostics": {
