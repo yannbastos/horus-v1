@@ -20,6 +20,17 @@ Integrado na main o modo `local_pilot` (HOR-054/056/089/097, parciais): roteiro 
 
 O piloto é demonstrativo e não publicável: falta alinhamento por palavra, QC operacional no worker, licença da voz e dos componentes, escuta/aceite humano e acabamento em 1080×1920. Próxima rodada (estado no Project): contratos de `quality_report`, tempos por palavra e proveniência/licença por asset; alinhamento com tempos medidos e QC persistido no worker; revisão por timecode na UI; avaliação técnica do Piper como voz neural local, sem substituir a voz atual. Pexels/Pixabay apenas como arquitetura, sem APIs, chaves ou downloads.
 
+## Estado em 14/11/2026
+
+Síntese curta; a fila operacional está no Project e nas Issues. Na `main`:
+
+- **Legado C# removido** (HOR-010): React/TypeScript + Tauri 2 é a única interface; paridade de telas, contraste WCAG e tema do sistema cobertos por testes ([migração](migracao-legado-csharp.md)).
+- **Empacotamento Windows:** backend congelado (PyInstaller onedir) dentro do instalador NSIS por usuário, com ensaio de atualização e rollback (HOR-100/HOR-006; [empacotamento](empacotamento-windows.md)). Aceite nativo completo (instalação limpa em outro PC, diálogos nativos) ainda pendente.
+- **Transcrição local:** modelos Whisper somente locais, sem download em tempo de execução (HOR-017); GPU/CUDA com runtime explícito e fallback único para CPU antes do primeiro texto (HOR-008; [validação](validacao-cuda-hor-008.md)). Falhas de download do YouTube com mensagens seguras, prazo e validação do arquivo (HOR-018).
+- **Primeiro vídeo:** piloto local (Maria/Kokoro) com QC no worker, licenças revisadas por humano e checklist de aceite em [aceite-primeiro-video.md](aceite-primeiro-video.md); aguarda o teste humano do usuário. Licença pendente não bloqueia a aprovação técnica, só a publicação (`publishable=false` sempre).
+- **Endurecimentos de segurança integrados:** política de caminhos do cliente (HOR-123), contenção de subprocessos com Job Object, ambiente mínimo e saída limitada (HOR-124), supply chain e segredos com testes offline (HOR-130), telemetria desligada e exportação verificável dos dados locais (HOR-117), revisão adversarial independente, envelope do Hermes sem caminhos/credenciais. A exclusão de dados locais está só desenhada ([seguranca-dados.md](seguranca-dados.md)), aguardando decisão.
+- **Retido fora da `main` (decisão de integração, após o teste do primeiro vídeo):** linha Hermes com etapa `script`, auditoria de transmissões, gateway de saída e checkpoints humanos, migrações v10–v12; cadeia, ordem e validação em [RETOMADA-MAESTRO.md §F](RETOMADA-MAESTRO.md#f-branches-retidas-não-estão-no-project-como-código). Nada disso habilita Hermes real, provedor pago ou publicação.
+
 ## Como interpretar os estados
 
 - **Implementado:** existe código para a capacidade delimitada; não significa validação completa.
@@ -33,7 +44,7 @@ Uma capacidade pode estar implementada e parcialmente validada. Builds e testes 
 | Capacidade | Estado e limite |
 |---|---|
 | Desktop C#/Avalonia | Removido em HOR-010; equivalência em [migração do legado](migracao-legado-csharp.md) |
-| React/TypeScript + Tauri 2 | Implementados; build Windows e geração NSIS registrados; instalação NSIS ainda pendente |
+| React/TypeScript + Tauri 2 | Implementados; build Windows, instalador NSIS por usuário e ensaio de atualização/rollback registrados; aceite nativo completo ainda pendente |
 | FastAPI/SQLite | Implementados: tarefas persistentes, eventos/logs, executor sequencial, cancelamento e recuperação de estados |
 | Núcleo editorial simulado | Implementado e validado por testes do backend: quatro etapas no JobManager existente, schema v2, tentativas, artefatos, aprovação por revisão e recuperação; UI editorial integrada no M1; sem serviços externos |
 | Consulta de perfil da fábrica | Implementada; validação anterior com CLI real e persistência registrada |
