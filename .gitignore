@@ -32,6 +32,7 @@ frontend/src-tauri/target/
 frontend/src-tauri/gen/schemas/
 backend/dist/
 backend/build/
+installer-test-artifacts/
 backend/.cache/
 .venv/
 .venv-bundle/
