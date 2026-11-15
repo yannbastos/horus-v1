@@ -529,7 +529,8 @@ def security_status(settings, store=None):
                 {'id': 'hermes_connection_key', 'storage': 'local_file', 'protection': 'arquivo local; ACLs não auditadas; sem cifragem dedicada',
                  'location_label': '%LOCALAPPDATA%/Horus/workspace/integrations/hermes.json'}]},
             'private_mode': {'available': False, 'enabled': False, 'reason': 'Ainda não implementado no backend.'},
-            'audit': {'available': False, 'reason': 'Registro de transmissões externas ainda não implementado.'}}
+            'audit': ({'available': True, 'endpoint': '/v1/security/transmissions', 'append_only': True, 'content_stored': False}
+                      if store is not None else {'available': False, 'reason': 'Registro de transmissões indisponível sem o banco local.'})}
 
 
 def require_secure(settings, store=None):

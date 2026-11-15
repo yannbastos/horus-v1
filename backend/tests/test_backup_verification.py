@@ -75,7 +75,7 @@ def test_restore_and_current_version_migrate_only_copy(tmp_path, version, capsys
     assert hashlib.sha256(backup.read_bytes()).hexdigest() == before
     assert inspect_database(backup)['user_version'] == version
     if version < SCHEMA_VERSION:
-        assert list(tmp_path.glob('restored.backup-v8-*.sqlite3'))
+        assert list(tmp_path.glob(f'restored.backup-v{version}-*.sqlite3'))  # backup automático da versão de origem
 
 
 def test_existing_destination_and_source_refused(tmp_path):

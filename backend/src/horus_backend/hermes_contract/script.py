@@ -122,11 +122,11 @@ def build_script_request(envelope: ScriptRunEnvelope) -> HermesRunRequest:
 
 
 def validate_script_output(raw: dict, envelope: ScriptRunEnvelope,
-                           origin: Literal["simulated", "human"] = "simulated") -> tuple[ScriptDocument | None, list[Issue]]:
+                           origin: Literal["simulated", "human", "hermes"] = "simulated") -> tuple[ScriptDocument | None, list[Issue]]:
     """Converte a saída do Hermes em `ScriptDocument`; devolve o documento somente sem problemas.
 
     Códigos: `schema`, `task_mismatch`, `section_count`, `unknown_source`, `script_contract`.
-    `origin` segue `validate_script` (a origem `hermes` ainda não existe no contrato de roteiro).
+    `origin` segue `validate_script`; o executor usa `hermes`, com `simulated=false`.
     """
     try:
         output = ScriptOutput.model_validate(raw)
