@@ -129,6 +129,11 @@ class Settings:
     hermes_run_timeout: float = 900.0
     origins: tuple[str, ...] = field(default_factory=frontend_origins)
 
+    @property
+    def alignment_models_dir(self) -> Path:
+        # A importação local também serve à produção, sem reiniciar o aplicativo.
+        return self.alignment_model if self.alignment_model is not None else self.data_dir / 'models'
+
     def worker(self) -> tuple[str, ...]:
         if self.worker_command:
             return self.worker_command

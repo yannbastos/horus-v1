@@ -24,6 +24,8 @@ try {
     } else {
         foreach ($name in @('faster_whisper', 'ctranslate2', 'av', 'tokenizers')) { $modules += @('--exclude-module', $name) }
     }
-    & $python -m PyInstaller --noconfirm --clean --onedir --name horus-backend --distpath dist --workpath build/work --specpath build --paths src --collect-submodules uvicorn --collect-submodules horus_backend --hidden-import keyring.backends.Windows @modules launcher.py
+    # O Python externo do Kokoro precisa do script real, não do módulo no PYZ.
+    $kokoroWorker = (Join-Path $backend 'src/horus_backend/narration/kokoro_worker.py') + ';horus_backend/narration'
+    & $python -m PyInstaller --noconfirm --clean --onedir --name horus-backend --distpath dist --workpath build/work --specpath build --paths src --collect-submodules uvicorn --collect-submodules horus_backend --hidden-import keyring.backends.Windows --add-data $kokoroWorker @modules launcher.py
     if ($LASTEXITCODE) { throw 'PyInstaller falhou.' }
 } finally { Pop-Location }

@@ -61,6 +61,46 @@ o motor; não é um modelo Whisper. Para atualizar deliberadamente o lock:
 uv pip compile backend/pyproject.toml --extra bundle --extra transcription --python-version 3.12 --python-platform windows --generate-hashes --output-file scripts/backend-bundle-transcription-requirements.txt
 ```
 
+O pacote também inclui `narration/kokoro_worker.py` como arquivo de recurso:
+o Python externo configurado em `HORUS_KOKORO_PYTHON` não consegue executar um
+módulo armazenado somente no PYZ do PyInstaller. Pesos e ambiente Kokoro continuam
+externos; essa inclusão não instala Kokoro, não baixa modelos e não habilita
+geração paga. O modelo small importado por `/v1/transcription/models/import`
+fica disponível ao diagnóstico e alinhamento da produção sem reiniciar o app;
+`HORUS_ALIGNMENT_MODEL` continua tendo precedência quando configurado.
+
+### Ensaio do primeiro vídeo pela API do desktop instalado
+
+```powershell
+& backend/.venv/Scripts/python.exe scripts/test-installed-first-video.py `
+  --installer '<NSIS com transcrição>' --factory '<fábrica local preparada>' `
+  --whisper-source '<small local completo>' --kokoro-python '<python Kokoro>' `
+  --kokoro-model-dir '<pesos Kokoro existentes>' --ffmpeg '<ffmpeg.exe local>' `
+  --report-dir '<pasta de evidências do ensaio>'
+```
+
+O ensaio recusa instalação preexistente, instala por usuário em pasta temporária,
+extrai o token apenas em memória do backend filho do desktop, consulta diagnóstico,
+importa small sem rede, testa Kokoro e percorre proposta/roteiro fictícios,
+produção draft `local_pilot`, QC, revisão por hash e exportação. Aprovações e
+licenças são exclusivamente fixtures de teste, sem autorização de publicação.
+Ao falhar, registra a etapa/erro e preserva os dados temporários para investigação;
+fecha a árvore e desinstala, aguardando também a remoção assíncrona da entrada HKCU.
+Esse roteiro é uma verificação, não uma declaração de homologação: a guarda do
+worker de produção congelado ainda pode bloquear o fluxo e não é contornada pelo
+teste. Nenhum passo usa o banco operacional ou altera configuração global.
+
+**Resultado do ensaio instalado de 14/11/2026:** importação local, reconhecimento
+de small para alinhamento, preferência e prévia Kokoro funcionaram no pacote
+corrigido. A produção `local_pilot` foi recusada em `prepare` com “Worker de
+produção requer backend Python preparado; empacotamento ainda não homologado.”
+Logo, revisão/QC/exportação do primeiro vídeo **não foram alcançados no instalado**.
+A guarda foi preservada: os comandos dos workers internos e o bridge executado
+pelo Python da fábrica ainda exigem adaptação e validação no modo congelado.
+O diagnóstico de dependências pode retornar `production.ready=true` sem validar
+essa capacidade; não deve ser interpretado como homologação do fluxo completo.
+O ensaio confirmou desinstalação e ausência de processos órfãos.
+
 No Windows, a transcrição usa CPU int8 por padrão quando não há runtime
 explicitamente selecionado. Para usar um runtime existente, inicie o desktop
 com a configuração local (nenhuma alteração de PATH global ou instalação):
