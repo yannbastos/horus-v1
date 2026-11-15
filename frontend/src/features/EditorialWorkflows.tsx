@@ -55,12 +55,20 @@ function formatDate(iso: string | null | undefined): string {
   }
 }
 
+export type EditorialFocusTarget = {
+  kind: string;
+  id: string;
+  nonce: number;
+};
+
 export default function EditorialWorkflows({
   connection,
   onOpenCenter,
+  focusTarget,
 }: {
   connection: Connection | null;
   onOpenCenter?: () => void;
+  focusTarget?: EditorialFocusTarget | null;
 }) {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,6 +96,12 @@ export default function EditorialWorkflows({
   useEffect(() => {
     void refreshList(true);
   }, [connection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (focusTarget?.kind === 'workflow' && focusTarget.id) {
+      setSelectedId(focusTarget.id);
+    }
+  }, [focusTarget]);
 
   // Polling: updates list and current workflow every 1.5s until terminal or unmount
   useEffect(() => {
