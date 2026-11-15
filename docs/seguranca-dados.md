@@ -252,3 +252,24 @@ Os pacotes de pré-exclusão e de exportação usam a pasta irmã `<pasta>-backu
 ```
 
 Efeito colateral esperado: agentes e ferramentas de IA que hoje leem a pasta por esse grupo deixam de ter acesso.
+
+### 7.4 Rotação do token local do backend
+
+O token local (`HORUS_API_TOKEN`) nasce a cada execução (Tauri) e vive só em memória; reiniciar o aplicativo já gera outro. Para trocá-lo **sem reiniciar**, o backend aceita uma rotação em duas fases, com validação e reversão automática (módulo `backend/src/horus_backend/local_token.py`; rotas aditivas autenticadas; testes em `backend/tests/test_token_rotation.py`, com `HORUS_DATA_DIR` temporário e tokens sintéticos):
+
+| Passo | Rota | Regra |
+|---|---|---|
+| 1. iniciar | `POST /v1/security/token/rotation` `{new_token}` (com o token **atual**) | O token novo é gerado pelo cliente e validado (24–256 caracteres `A-Za-z0-9._~-`, ao menos 12 distintos, diferente do atual; 422 sem eco do valor). Abre uma janela de 60 s em que o atual e o novo valem; só uma rotação por vez (409) |
+| 2. confirmar | `POST /v1/security/token/rotation/{id}/commit` (com o token **novo**) | A confirmação feita com o token novo prova que o cliente o guarda e que o servidor o aceita; com o antigo é recusada (403) e nada muda. Só então o novo vira o atual e o antigo deixa de valer |
+| reverter | `POST /v1/security/token/rotation/{id}/rollback` (com qualquer um dos dois) | Descarta o novo; se o `commit` não chega em 60 s, o novo expira sozinho e o atual continua valendo: o backend nunca fica sem token válido |
+| consultar | `GET /v1/security/token/rotation` | `idle` ou `pending` e o tempo restante |
+
+O token nunca é gravado em disco, log ou resposta (varredura nos testes). Efeitos: os tickets de mídia assinados com o token antigo deixam de valer após o `commit` (o cliente recarrega `GET /v1/media`); a redação de credenciais dos exports cobre os dois tokens durante a janela. Recuperação: se o cliente perder o token novo antes do `commit`, a janela expira e o atual segue valendo; se o processo que guarda o token (Tauri) cair, reiniciar o aplicativo gera um token novo, como sempre. **Limite:** a parte Tauri/React que chama este protocolo não faz parte desta entrega; o procedimento fica disponível para a integração futura. **Rotação real** (de qualquer credencial real: Hermes, ElevenLabs, sessões remotas) depende de autorização do usuário e segue o mesmo padrão em duas fases (emitir o novo, validar com chamada somente leitura, trocar, só então revogar o antigo).
+
+Verificação manual em ambiente de desenvolvimento (backend iniciado pelo próprio desenvolvedor com um token qualquer; nada é aplicado ao aplicativo instalado):
+
+```powershell
+$old = $env:HORUS_API_TOKEN; $new = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+$r = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:<porta>/v1/security/token/rotation -Headers @{Authorization="Bearer $old"} -ContentType application/json -Body (@{new_token=$new} | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:<porta>/v1/security/token/rotation/$($r.rotation_id)/commit" -Headers @{Authorization="Bearer $new"}
+```

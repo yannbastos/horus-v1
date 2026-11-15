@@ -1236,6 +1236,22 @@
         "title": "ThumbnailRequest",
         "type": "object"
       },
+      "TokenRotationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "new_token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "New Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_token"
+        ],
+        "title": "TokenRotationRequest",
+        "type": "object"
+      },
       "TranscriptSave": {
         "additionalProperties": false,
         "properties": {
@@ -3918,6 +3934,130 @@
           }
         },
         "summary": "Inspect Security"
+      }
+    },
+    "/v1/security/token/rotation": {
+      "get": {
+        "operationId": "token_rotation_status_v1_security_token_rotation_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Token Rotation Status"
+      },
+      "post": {
+        "operationId": "begin_token_rotation_v1_security_token_rotation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRotationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Begin Token Rotation"
+      }
+    },
+    "/v1/security/token/rotation/{rotation_id}/commit": {
+      "post": {
+        "operationId": "commit_token_rotation_v1_security_token_rotation__rotation_id__commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rotation_id",
+            "required": true,
+            "schema": {
+              "title": "Rotation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Commit Token Rotation"
+      }
+    },
+    "/v1/security/token/rotation/{rotation_id}/rollback": {
+      "post": {
+        "operationId": "rollback_token_rotation_v1_security_token_rotation__rotation_id__rollback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rotation_id",
+            "required": true,
+            "schema": {
+              "title": "Rotation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rollback Token Rotation"
       }
     },
     "/v1/shutdown": {

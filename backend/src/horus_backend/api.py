@@ -49,6 +49,11 @@ from .whisper_models import ImportModelRequest, InstalledModel, ModelCatalog, Mo
 STREAM_KEEPALIVE_SECONDS = 10
 
 
+class TokenRotationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    new_token: str = Field(min_length=1, max_length=512, strict=True)
+
+
 class MediaRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1, max_length=4096)
@@ -126,6 +131,8 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.exception_handler(RequestValidationError)
     async def invalid_payload(request: Request, error: RequestValidationError):
         # Pydantic inclui input_value: roteiro/feedback privados não devem voltar no erro.
+        if request.url.path.startswith("/v1/security/token"):
+            return JSONResponse({"detail": "Pedido de rotação inválido."}, status_code=422)
         if request.url.path.startswith(("/v1/scripts/", "/v1/productions/", "/v1/narration/")) or request.url.path.endswith("/scripts"):
             return JSONResponse({"detail": "Pedido de roteiro inválido."}, status_code=422)
         return await request_validation_exception_handler(request, error)
@@ -141,9 +148,10 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         if request.method == "OPTIONS":
             return await call_next(request)
         is_stream = request.url.path.startswith("/v1/media/") and request.url.path.endswith("/stream")
-        if not is_stream and not secrets.compare_digest(request.headers.get("authorization", "").encode("utf-8", "replace"),
-                                                         f"Bearer {settings.token}".encode()):
+        token_kind = manager.tokens.match(request.headers.get("authorization", ""))
+        if not is_stream and token_kind is None:
             return JSONResponse({"detail": "Autenticação local necessária."}, status_code=401)
+        request.state.token_kind = token_kind
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -406,6 +414,34 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     async def restore_data_deletion(audit_id: str):
         return await asyncio.to_thread(deletion_call, lambda: deletion.restore(audit_id))
 
+    def rotation_call(action):
+        try:
+            return action()
+        except KeyError:
+            raise HTTPException(404, "Rotação não encontrada, expirada ou já encerrada.") from None
+        except WorkflowConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(403, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/v1/security/token/rotation")
+    def token_rotation_status():
+        return manager.tokens.status()
+
+    @app.post("/v1/security/token/rotation", status_code=202)
+    def begin_token_rotation(request: TokenRotationRequest):
+        return rotation_call(lambda: manager.tokens.begin(request.new_token))
+
+    @app.post("/v1/security/token/rotation/{rotation_id}/commit")
+    def commit_token_rotation(rotation_id: str, http_request: Request):
+        return rotation_call(lambda: manager.tokens.commit(rotation_id, getattr(http_request.state, "token_kind", None)))
+
+    @app.post("/v1/security/token/rotation/{rotation_id}/rollback")
+    def rollback_token_rotation(rotation_id: str):
+        return rotation_call(lambda: manager.tokens.rollback(rotation_id))
+
     @app.post("/v1/productions/{production_id}/review")
     def review_production(production_id: str, request: ProductionReviewRequest,
                           idempotency_key: str = Header(min_length=1, max_length=128)):
@@ -623,7 +659,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
 
     def media_view(item):
         expires = int(time.time()) + 3600
-        signature = hmac.new(settings.token.encode(), f"{item['id']}:{expires}".encode(), hashlib.sha256).hexdigest()
+        signature = hmac.new(manager.tokens.current.encode(), f"{item['id']}:{expires}".encode(), hashlib.sha256).hexdigest()
         return {"id": item["id"], "name": item["name"], "size": item["size"],
                 "stream_path": f"/v1/media/{item['id']}/stream?expires={expires}&ticket={signature}"}
 
@@ -662,8 +698,9 @@ def create_app(settings: Settings, shutdown=None, ready=None):
 
     @app.get("/v1/media/{media_id}/stream")
     async def media_stream(media_id: str, expires: int = 0, ticket: str = ""):
-        expected = hmac.new(settings.token.encode(), f"{media_id}:{expires}".encode(), hashlib.sha256).hexdigest()
-        if expires < time.time() or not secrets.compare_digest(ticket.encode("utf-8", "replace"), expected.encode()):
+        expected = [hmac.new(token.encode(), f"{media_id}:{expires}".encode(), hashlib.sha256).hexdigest() for token in manager.tokens.valid_tokens()]
+        matched = [secrets.compare_digest(ticket.encode("utf-8", "replace"), value.encode()) for value in expected]
+        if expires < time.time() or not any(matched):
             raise HTTPException(401, "Acesso à mídia expirado. Selecione-a novamente.")
         item = store.media(media_id)
         if not item:
