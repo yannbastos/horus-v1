@@ -36,6 +36,7 @@ from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
+from .project_import import ImportRefused, ImportService
 from .storage import Store
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
@@ -45,6 +46,12 @@ STREAM_KEEPALIVE_SECONDS = 10
 
 
 class MediaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ImportRequest(BaseModel):
+    """Pacote de exportação escolhido pelo usuário no diálogo (caminho local; o ZIP não passa pelo teto de corpo)."""
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1, max_length=4096)
 
@@ -119,6 +126,56 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    imports = ImportService(settings.data_dir)
+
+    def refused(error: ImportRefused):
+        return HTTPException(error.status, {"code": error.code, "message": str(error), **error.extra})
+
+    @app.post("/v1/imports", status_code=201)
+    def import_project(request: ImportRequest, idempotency_key: str = Header(min_length=1, max_length=128)):
+        try:
+            package = client_path(request.path, strict=True)
+            if not package.is_file() or package.suffix.lower() != ".zip":
+                raise ImportRefused("package_unreadable", "Selecione um pacote .zip de exportação do Hórus.")
+            record, created = imports.import_package(package, idempotency_key)
+        except PathNotAllowed as error:
+            raise HTTPException(422, {"code": "path_not_allowed", "message": str(error)}) from None
+        except ImportRefused as error:
+            raise refused(error) from None
+        except (ValueError, OSError):
+            raise HTTPException(422, {"code": "package_unreadable", "message": "Pacote inacessível."}) from None
+        return JSONResponse(record, status_code=201 if created else 200)
+
+    @app.get("/v1/imports")
+    def list_imports():
+        return imports.list()
+
+    @app.get("/v1/imports/{import_id}")
+    def get_import(import_id: str):
+        try:
+            return imports.get(import_id)
+        except KeyError:
+            raise HTTPException(404, "Importação não encontrada.") from None
+        except ImportRefused as error:
+            raise refused(error) from None
+
+    @app.get("/v1/imports/{import_id}/video")
+    def import_video(import_id: str):
+        return import_file(import_id, "video.mp4", "video/mp4")
+
+    @app.get("/v1/imports/{import_id}/subtitles")
+    def import_subtitles(import_id: str):
+        return import_file(import_id, "subtitles.srt", "text/plain; charset=utf-8")
+
+    def import_file(import_id: str, name: str, media_type: str):
+        try:
+            path, _ = imports.file(import_id, name)
+        except KeyError:
+            raise HTTPException(404, "Importação não encontrada.") from None
+        except ImportRefused as error:
+            raise refused(error) from None
+        return FileResponse(path, media_type=media_type)
 
     @app.get("/health")
     async def health():
