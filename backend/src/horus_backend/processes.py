@@ -213,6 +213,11 @@ def run_sync(command: list[str], *, timeout: float, input_text: str | None = Non
 
 
 def _kill_tree(process: subprocess.Popen, job: WindowsJob | None) -> None:
+    if process.stdin:   # após TimeoutExpired o pipe de entrada ficaria aberto até o GC
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
     if job:
         job.close()
     elif os.name != "nt":
