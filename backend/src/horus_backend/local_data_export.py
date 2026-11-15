@@ -2,7 +2,8 @@
 
 Conteúdo: cópia consistente (API de *backup* do SQLite, banco aberto em modo leitura) do banco operacional e do estado do
 Radar, as preferências não secretas (`narration-preference.json`) e os manifestos JSON das produções
-(`productions/<id>/*.json`). Nunca entram: `integrations/` (conexão e token do Hermes), `models/`, mídia, `exports/`,
+(`productions/<id>/*.json`), os comentários de revisão (`production-comments/<id>.json`, HOR-088) e o estado de leitura das
+notificações (`notifications-state.json`). Nunca entram: `integrations/` (conexão e token do Hermes), `models/`, mídia, `exports/`,
 arquivos com formato de credencial, links simbólicos/junções. Cada arquivo tem SHA-256 em `manifest.json`;
 `verify_export` confere hashes, nomes seguros e a integridade dos bancos. O pacote contém dados privados do usuário:
 guarde-o como o próprio banco (BitLocker; fora de pastas sincronizadas).
@@ -33,6 +34,7 @@ from pathlib import Path
 
 from .backups import _inspect
 from .migrations import SCHEMA_VERSION
+from .notifications import ID_PATTERN as NOTIFICATION_ID
 
 SCHEMA = 1
 MAX_MANIFEST_FILE = 5 * 1024 * 1024
@@ -42,9 +44,12 @@ SECRET_SHAPE = re.compile(
 SAFE_NAME = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,100}/)*[A-Za-z0-9][A-Za-z0-9._-]{0,100}$")
 MAX_ENTRIES = 20000
 ALLOWED_NAME = re.compile(r"^(?:database/(?:horus|radar-youtube)\.sqlite3|settings/narration-preference\.json"
+                          r"|settings/notifications-state\.json|comments/[A-Za-z0-9_-]{1,64}\.json"
                           r"|productions/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.json)$")
 RESTORE_TARGET = {"database/horus.sqlite3": "horus.sqlite3", "database/radar-youtube.sqlite3": "radar/radar-youtube.sqlite3",
-                  "settings/narration-preference.json": "narration-preference.json"}
+                  "settings/narration-preference.json": "narration-preference.json",
+                  "settings/notifications-state.json": "notifications-state.json"}
+COMMENT_NAME = re.compile(r"^comments/([A-Za-z0-9_-]{1,64})\.json$")
 EXCLUDED_AREAS = ("integrations/", "models/", "exports/")
 
 
@@ -55,6 +60,50 @@ def _sha(path: Path) -> str:
 
 def _is_link(path: Path) -> bool:
     return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+
+
+def _restore_relative(name: str) -> str:
+    comment = COMMENT_NAME.fullmatch(name)
+    return f"production-comments/{comment.group(1)}.json" if comment else RESTORE_TARGET.get(name, name)
+
+
+def _invalid_content(name: str, raw: bytes) -> str | None:
+    """Estrutura mínima dos JSON de comentários e de notificações (None = válido). Aplicada na exportação e na verificação."""
+    comment = COMMENT_NAME.fullmatch(name)
+    if not comment and name != "settings/notifications-state.json":
+        return None
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return "JSON inválido"
+    if not isinstance(doc, dict):
+        return "estrutura inválida"
+    if name == "settings/notifications-state.json":
+        read, unread, before = doc.get("read", {}), doc.get("unread", []), doc.get("read_all_before")
+        ok = (isinstance(read, dict) and len(read) <= 5000 and all(isinstance(k, str) and NOTIFICATION_ID.fullmatch(k) and isinstance(v, str) for k, v in read.items())
+              and isinstance(unread, list) and len(unread) <= 5000 and all(isinstance(k, str) and NOTIFICATION_ID.fullmatch(k) for k in unread)
+              and (before is None or isinstance(before, str)))
+        return None if ok else "estado de notificações inválido"
+    pid, comments = comment.group(1), doc.get("comments")
+    if doc.get("schema_version") != 1 or not isinstance(comments, list) or len(comments) > 500 or not isinstance(doc.get("receipts"), dict)             or len(doc["receipts"]) > 1000:
+        return "estrutura de comentários inválida"
+    seen = set()
+    for item in comments:
+        if not isinstance(item, dict):
+            return "comentário inválido"
+        at, trail = item.get("at_seconds"), item.get("trail")
+        if (not isinstance(item.get("id"), str) or not re.fullmatch(r"[a-f0-9]{32}", item["id"]) or item["id"] in seen
+                or item.get("production_id") != pid or not isinstance(item.get("artifact_sha256"), str)
+                or not re.fullmatch(r"[a-f0-9]{64}", item["artifact_sha256"]) or isinstance(at, bool)
+                or not isinstance(at, (int, float)) or not 0 <= at <= 86400 or not isinstance(item.get("text"), str)
+                or not isinstance(item.get("author"), str) or item.get("author_kind") != "human"
+                or item.get("status") not in ("open", "resolved") or not isinstance(item.get("created_at"), str)
+                or not isinstance(trail, list) or not 1 <= len(trail) <= 50
+                or not all(isinstance(e, dict) and e.get("action") in ("created", "resolved", "reopened") and isinstance(e.get("author"), str)
+                           for e in trail)):
+            return "comentário inválido (o autor deve ser humano)"
+        seen.add(item["id"])
+    return None
 
 
 def _snapshot(source: Path, target: Path) -> dict:
@@ -73,6 +122,14 @@ def _candidates(data_dir: Path):
     preference = data_dir / "narration-preference.json"
     if preference.is_file() and not _is_link(preference):
         yield "settings/narration-preference.json", preference
+    notifications = data_dir / "notifications-state.json"
+    if notifications.is_file() and not _is_link(notifications):
+        yield "settings/notifications-state.json", notifications
+    comments = data_dir / "production-comments"
+    if comments.is_dir() and not _is_link(comments):
+        for item in sorted(comments.glob("*.json")):
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item.stem) and item.is_file() and not _is_link(item):
+                yield f"comments/{item.name}", item
     productions = data_dir / "productions"
     if productions.is_dir() and not _is_link(productions):
         for folder in sorted(p for p in productions.iterdir() if p.is_dir() and not _is_link(p)):
@@ -123,6 +180,10 @@ def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None
             if SECRET_SHAPE.search(raw.decode("utf-8", "replace")):
                 excluded.append({"path": name, "reason": "formato de credencial"})
                 continue
+            reason = _invalid_content(name, raw)
+            if reason:
+                excluded.append({"path": name, "reason": reason})
+                continue
             staged.append((name, copy))
         created = (now or datetime.now(timezone.utc)).isoformat()
         for area in EXCLUDED_AREAS:
@@ -172,7 +233,8 @@ def verify_export(package: Path) -> dict:
                     if type(declared_size) is not int or declared_size < 0 or archive.getinfo(name).file_size != declared_size:
                         errors.append(f"tamanho divergente: {name}")
                         continue
-                    digest, total = hashlib.sha256(), 0
+                    digest, total, content = hashlib.sha256(), 0, bytearray()
+                    checked = COMMENT_NAME.fullmatch(name) or name == "settings/notifications-state.json"
                     copy = Path(scratch) / name.replace("/", "_") if name.startswith("database/") else None
                     sink = copy.open("wb") if copy else None
                     try:
@@ -182,6 +244,8 @@ def verify_export(package: Path) -> dict:
                                 if total > declared_size:      # o conteúdo real excede o declarado: para de ler
                                     break
                                 digest.update(chunk)
+                                if checked:
+                                    content += chunk
                                 if sink:
                                     sink.write(chunk)
                     finally:
@@ -189,6 +253,9 @@ def verify_export(package: Path) -> dict:
                             sink.close()
                     if total != declared_size or digest.hexdigest() != item["sha256"]:
                         errors.append(f"hash divergente: {name}")
+                        continue
+                    if checked and (reason := _invalid_content(name, bytes(content))):
+                        errors.append(f"conteúdo inválido ({reason}): {name}")
                         continue
                     if copy:
                         with closing(sqlite3.connect(copy)) as db:
@@ -232,7 +299,7 @@ def restore_local_data(package: Path, destination: Path) -> dict:
         try:
             restored = []
             for name, item in declared.items():
-                relative = RESTORE_TARGET.get(name, name)   # produções mantêm o caminho relativo da pasta de dados
+                relative = _restore_relative(name)   # produções mantêm o caminho relativo da pasta de dados
                 target = stage / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 digest, total = hashlib.sha256(), 0
