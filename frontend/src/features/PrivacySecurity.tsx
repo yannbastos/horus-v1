@@ -19,6 +19,7 @@ import {
   categorizeTool,
 } from '../components/SecurityWidgets';
 import type { HermesToolsSummary, ToolCategory } from '../components/SecurityWidgets';
+import CheckpointsHistory from './CheckpointsHistory';
 
 type LoadFailure = {
   kind: 'auth' | 'missing' | 'server' | 'network' | 'timeout' | 'other';
@@ -273,6 +274,8 @@ export default function PrivacySecurity({ connection }: { connection: Connection
           />
 
           <AuditSection audit={status.audit ?? null} />
+
+          <CheckpointsSection connection={connection} refreshKey={revision} />
 
           <CredentialsSection credentials={status.credentials ?? null} />
         </div>
@@ -990,6 +993,26 @@ function AuditSection({
           </tbody>
         </table>
       </div>
+    </StatusCard>
+  );
+}
+
+// --- 6b. Checkpoints Humanos ---
+function CheckpointsSection({
+  connection,
+  refreshKey,
+}: {
+  connection: Connection;
+  refreshKey: number;
+}) {
+  return (
+    <StatusCard
+      eyebrow="APROVAÇÃO HUMANA"
+      title="Checkpoints Humanos Recentes"
+      subtitle="Registro append-only de aprovações de uso único para gasto em USD e envios externos."
+      ariaLabel="Checkpoints Humanos Recentes"
+    >
+      <CheckpointsHistory connection={connection} refreshKey={refreshKey} />
     </StatusCard>
   );
 }

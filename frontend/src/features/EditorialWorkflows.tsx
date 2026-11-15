@@ -17,6 +17,8 @@ import {
   reviewWorkflow,
 } from '../services/api';
 import { StatusMessage } from '../components/StatusMessage';
+import { HumanCheckpointDialog } from '../components/HumanCheckpointDialog';
+import { formatSecurityGateError } from '../services/checkpoints';
 import ScriptReview from './ScriptReview';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -70,6 +72,8 @@ export default function EditorialWorkflows({
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
+  const [checkpointDialogOpen, setCheckpointDialogOpen] = useState(false);
+  const [dialogError, setDialogError] = useState('');
 
   // Initial fetch and when connection changes
   async function refreshList(selectFirst = false) {
@@ -153,22 +157,39 @@ export default function EditorialWorkflows({
     };
   }, [connection, selectedId]);
 
-  async function handleAuthorize() {
+  async function executeAuthorize(fromDialog = false) {
     if (!connection || !current || !current.pending_authorization) return;
     setBusy(true);
     setError('');
+    setDialogError('');
     try {
       const updated = await authorizeWorkflow(connection, current.id, {
         expected_revision: current.revision,
         job_id: current.pending_authorization.job_id,
       });
       setCurrent(updated);
+      setCheckpointDialogOpen(false);
       await refreshList();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      const friendly = formatSecurityGateError(reason);
+      if (fromDialog) {
+        setDialogError(friendly);
+      } else {
+        setError(friendly);
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleAuthorize() {
+    if (!current || !current.pending_authorization) return;
+    if (isSimulated) {
+      void executeAuthorize(false);
+      return;
+    }
+    setDialogError('');
+    setCheckpointDialogOpen(true);
   }
 
   async function handleCancel() {
@@ -388,14 +409,15 @@ export default function EditorialWorkflows({
                   <article className="card sunken" role="region" aria-label="Autorização necessária">
                     <div className="row spread">
                       <p className="eyebrow warn">AUTORIZAÇÃO EXPLÍCITA NECESSÁRIA</p>
-                      <span className="tag warn">ETAPA COGNITIVA</span>
+                      <span className="tag warn">{isSimulated ? 'ETAPA COGNITIVA' : 'CHECKPOINT HUMANO'}</span>
                     </div>
                     <p>
-                      A etapa de análise editorial cognitiva requer autorização explícita para prosseguir.
-                      Esta execução é simulada e não gera custo.
+                      {isSimulated
+                        ? 'A etapa de análise editorial cognitiva requer autorização explícita para prosseguir. Esta execução é simulada e não gera custo.'
+                        : 'A etapa de análise editorial no Hermes exige aprovação humana (checkpoint) com limite em USD, validade e uso único antes de prosseguir.'}
                     </p>
                     <div className="actions">
-                      <button className="button primary" disabled={busy} onClick={() => void handleAuthorize()}>
+                      <button className="button primary" disabled={busy} onClick={() => handleAuthorize()}>
                         Autorizar uma execução
                       </button>
                     </div>
@@ -678,6 +700,25 @@ export default function EditorialWorkflows({
           </main>
         </div>
       )}
+
+      <HumanCheckpointDialog
+        open={checkpointDialogOpen && Boolean(current?.pending_authorization)}
+        busy={busy}
+        error={dialogError}
+        what={
+          current?.pending_authorization
+            ? `Execução cognitiva no Hermes — etapa ${STAGE_LABELS[current.pending_authorization.stage] || current.pending_authorization.stage} (workflow ${current.id})`
+            : 'Execução cognitiva no Hermes'
+        }
+        estimatedCostUsd="Até US$ 0,20 (USD)"
+        limitUsd="US$ 0,20 (USD)"
+        validityLabel="15 minutos (900 segundos)"
+        onCancel={() => {
+          setCheckpointDialogOpen(false);
+          setDialogError('');
+        }}
+        onConfirm={() => executeAuthorize(true)}
+      />
     </section>
   );
 }
