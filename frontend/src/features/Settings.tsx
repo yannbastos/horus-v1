@@ -5,6 +5,8 @@ import { connectDesktop, nativeDesktop } from '../platform/desktop';
 import { StatusMessage } from '../components/StatusMessage';
 import PrivacySecurity from './PrivacySecurity';
 import NarrationSettings from './narration/NarrationSettings';
+import WhisperModelsPanel from './transcription/WhisperModelsPanel';
+import { readCudaRuntime } from '../services/transcriptionModels';
 
 export type Theme = 'system' | 'light' | 'dark';
 export type SettingsSection = 'general' | 'privacy';
@@ -12,7 +14,12 @@ export type SettingsSection = 'general' | 'privacy';
 type DiagnosticCheck = { id: string; name: string; available: boolean; detail: string };
 type ProductionDiagnosticCheck = DiagnosticCheck & { required_for: string[] };
 type ProductionDiagnostics = { ready: boolean; missing: string[]; checks: ProductionDiagnosticCheck[] };
-type Diagnostics = { checks?: DiagnosticCheck[]; notice?: string; production?: ProductionDiagnostics | null };
+type Diagnostics = {
+  checks?: DiagnosticCheck[];
+  notice?: string;
+  production?: ProductionDiagnostics | null;
+  cuda_runtime?: unknown;
+};
 
 const REQUIRED_FOR_LABELS: Record<string, string> = {
   draft: 'Rascunho',
@@ -63,6 +70,7 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
     return () => controller.abort();
   }, [connection, revision]);
   const production = readProductionDiagnostics(report?.production);
+  const cudaRuntime = readCudaRuntime(report?.cuda_runtime);
   const missingNames = production
     ? production.missing.map(id => production.checks.find(c => c.id === id)?.name ?? id)
     : [];
@@ -121,6 +129,43 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
             </li>
           ))}
         </ul>
+      </div>
+    )}
+    {cudaRuntime && (
+      <div
+        className="card sunken"
+        role="region"
+        aria-labelledby="cuda-runtime-title"
+        data-testid="cuda-runtime-status"
+      >
+        <div className="row spread">
+          <div>
+            <p className="eyebrow accent">ACELERAÇÃO GPU</p>
+            <h3 id="cuda-runtime-title">Runtime CUDA</h3>
+          </div>
+          <span className={cudaRuntime.available ? 'tag good' : 'tag warn'}>
+            {cudaRuntime.available ? 'DISPONÍVEL' : cudaRuntime.configured ? 'INDISPONÍVEL' : 'NÃO CONFIGURADO'}
+          </span>
+        </div>
+        <StatusMessage
+          state={cudaRuntime.available ? 'success' : 'empty'}
+          tone={cudaRuntime.available ? 'good' : 'muted'}
+          testId="cuda-runtime-summary"
+        >
+          {cudaRuntime.detail ?? (cudaRuntime.available
+            ? 'Runtime CUDA disponível para acelerar a transcrição local.'
+            : 'Runtime CUDA indisponível no momento; a transcrição usará CPU.')}
+        </StatusMessage>
+        {(cudaRuntime.cuda_major !== null || cudaRuntime.cudnn_major !== null || cudaRuntime.source || cudaRuntime.missing.length > 0) && (
+          <p className="muted">
+            {[
+              cudaRuntime.cuda_major !== null ? `CUDA ${cudaRuntime.cuda_major}` : null,
+              cudaRuntime.cudnn_major !== null ? `cuDNN ${cudaRuntime.cudnn_major}` : null,
+              cudaRuntime.source ? `Origem: ${cudaRuntime.source}` : null,
+              cudaRuntime.missing.length > 0 ? `Ausente: ${cudaRuntime.missing.join(', ')}` : null,
+            ].filter(Boolean).join(' · ')}
+          </p>
+        )}
       </div>
     )}
     {report?.checks?.map(check => <div key={check.id}><div className="row spread"><h3>{check.name}</h3><span className="tag">{check.available ? 'LOCALIZADO' : 'NÃO LOCALIZADO'}</span></div><p className="muted">{check.detail}</p></div>)}
@@ -210,6 +255,7 @@ export default function Settings({ theme, setTheme, connect, connection, hermes,
         </section>
         <HermesIntegration connection={connection} report={hermes} onStatus={onHermesStatus} />
         {connection && <EnvironmentDiagnostics connection={connection} />}
+        <WhisperModelsPanel connection={connection} />
         <NarrationSettings connection={connection} />
       </div>
     ) : (
