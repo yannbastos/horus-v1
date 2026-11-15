@@ -28,6 +28,7 @@ const STATUS_LABELS: Record<JobStatus, string> = {
 
 export type ProductionComparisonSummary = {
   scriptVersion: string;
+  jobRef: string;
   modeLabel: string;
   voice: string;
   renderQuality: string;
@@ -35,6 +36,8 @@ export type ProductionComparisonSummary = {
   qcSummary: string;
   qcTone: string;
   reviewState: string;
+  reviewFeedback: string;
+  artifactsSummary: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -142,17 +145,39 @@ function readReviewStateLabel(record: ProductionRecord): string {
   return 'Sem revisão';
 }
 
+function formatShortDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleString('pt-BR');
+}
+
+function readArtifactsSummary(record: ProductionRecord): string {
+  if (!Array.isArray(record.artifacts) || record.artifacts.length === 0) {
+    return 'Nenhum';
+  }
+  const kinds = Array.from(new Set(record.artifacts.map(a => a.kind).filter(Boolean)));
+  return `${record.artifacts.length} (${kinds.join(', ')})`;
+}
+
 export function summarizeProductionForCompare(record: ProductionRecord): ProductionComparisonSummary {
   const qc = readQcSummary(record);
+  const reviewState = readReviewStateLabel(record);
+  const notesCount = Array.isArray(record.review?.notes) ? record.review.notes.length : 0;
+  const reviewDetail = record.review
+    ? `${reviewState}${notesCount > 0 ? ` (${notesCount} nota(s))` : ''} — ${formatShortDate(record.review.reviewed_at)}`
+    : reviewState;
   return {
     scriptVersion: Number.isFinite(record.script_version) ? `v${record.script_version}` : 'Não informado',
+    jobRef: record.job_id ? `${shortId(record.job_id)} (${formatShortDate(record.created_at)})` : formatShortDate(record.created_at),
     modeLabel: MODE_SHORT_LABELS[record.mode] || record.mode,
     voice: readVoiceLabel(record),
     renderQuality: readRenderQualityLabel(record),
     duration: readDurationLabel(record),
     qcSummary: qc.label,
     qcTone: qc.tone,
-    reviewState: readReviewStateLabel(record),
+    reviewState,
+    reviewFeedback: reviewDetail,
+    artifactsSummary: readArtifactsSummary(record),
   };
 }
 
@@ -220,10 +245,12 @@ export default function ProductionCompare({
     summaryA && summaryB
       ? [
           { label: 'Versão do roteiro', valA: summaryA.scriptVersion, valB: summaryB.scriptVersion },
+          { label: 'Job / Execução', valA: summaryA.jobRef, valB: summaryB.jobRef },
           { label: 'Modo', valA: summaryA.modeLabel, valB: summaryB.modeLabel },
           { label: 'Voz', valA: summaryA.voice, valB: summaryB.voice },
           { label: 'Qualidade', valA: summaryA.renderQuality, valB: summaryB.renderQuality },
           { label: 'Duração', valA: summaryA.duration, valB: summaryB.duration },
+          { label: 'Artefatos', valA: summaryA.artifactsSummary, valB: summaryB.artifactsSummary },
           {
             label: 'Resumo do QC',
             valA: summaryA.qcSummary,
@@ -232,6 +259,7 @@ export default function ProductionCompare({
             toneB: summaryB.qcTone,
           },
           { label: 'Estado da revisão', valA: summaryA.reviewState, valB: summaryB.reviewState },
+          { label: 'Decisão registrada', valA: summaryA.reviewFeedback, valB: summaryB.reviewFeedback },
         ]
       : [];
 

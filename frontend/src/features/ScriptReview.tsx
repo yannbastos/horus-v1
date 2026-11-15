@@ -141,7 +141,13 @@ export default function ScriptReview({
   const [feedbackError, setFeedbackError] = useState('');
   const [editorSession, setEditorSession] = useState<
     | { mode: 'create'; initialDocument: ScriptDocument }
-    | { mode: 'edit'; baseScriptId: string; baseVersion: number; initialDocument: ScriptDocument }
+    | {
+        mode: 'edit';
+        baseScriptId: string;
+        baseVersion: number;
+        restoredFromVersion?: number;
+        initialDocument: ScriptDocument;
+      }
     | null
   >(null);
   const [editorError, setEditorError] = useState('');
@@ -442,6 +448,21 @@ export default function ScriptReview({
     });
   }
 
+  function handleRestoreVersion(source: ScriptRecord) {
+    if (!canEditLatest || !latestScript || source.version === latestScript.version) return;
+    setError('');
+    setEditorError('');
+    setEditorConflict(false);
+    setCompareState(null);
+    setEditorSession({
+      mode: 'edit',
+      baseScriptId: latestScript.id,
+      baseVersion: latestScript.version,
+      restoredFromVersion: source.version,
+      initialDocument: cloneDocumentForEditing(source.document),
+    });
+  }
+
   async function handleSaveEditor(document: ScriptDocument) {
     if (!connection || !editorSession || !isProposalApproved || !proposalArtifactId) return;
     if (inFlightRef.current || submitting) return;
@@ -648,21 +669,29 @@ export default function ScriptReview({
       )}
 
       {editorSession && (
-        <ScriptEditor
-          mode={editorSession.mode}
-          initialDocument={editorSession.initialDocument}
-          targetVersion={editorSession.mode === 'edit' ? editorSession.baseVersion : undefined}
-          submitting={submitting}
-          apiError={editorError}
-          isConflictError={editorConflict}
-          onSave={handleSaveEditor}
-          onReloadOnConflict={handleReloadOnConflict}
-          onCancel={() => {
-            setEditorSession(null);
-            setEditorError('');
-            setEditorConflict(false);
-          }}
-        />
+        <>
+          {editorSession.mode === 'edit' && editorSession.restoredFromVersion !== undefined && (
+            <StatusMessage state="success" role="status">
+              Restaurando conteúdo da v{editorSession.restoredFromVersion} como nova versão a partir
+              da v{editorSession.baseVersion}. O histórico anterior será preservado ao salvar.
+            </StatusMessage>
+          )}
+          <ScriptEditor
+            mode={editorSession.mode}
+            initialDocument={editorSession.initialDocument}
+            targetVersion={editorSession.mode === 'edit' ? editorSession.baseVersion : undefined}
+            submitting={submitting}
+            apiError={editorError}
+            isConflictError={editorConflict}
+            onSave={handleSaveEditor}
+            onReloadOnConflict={handleReloadOnConflict}
+            onCancel={() => {
+              setEditorSession(null);
+              setEditorError('');
+              setEditorConflict(false);
+            }}
+          />
+        </>
       )}
 
       {latestScript && latestScript.status === 'changes_requested' && (
@@ -935,6 +964,15 @@ export default function ScriptReview({
                         }
                       >
                         Comparar com a anterior
+                      </button>
+                    )}
+                    {canEditLatest && latestScript && item.version !== latestScript.version && (
+                      <button
+                        className="button sm"
+                        type="button"
+                        onClick={() => handleRestoreVersion(item)}
+                      >
+                        Restaurar v{item.version}
                       </button>
                     )}
                   </div>
