@@ -1,5 +1,5 @@
 import { api, ApiError } from './api';
-import type { Connection } from './api';
+import type { Connection, Job } from './api';
 
 export type WhisperModelLicense = {
   identifier: string;
@@ -24,6 +24,29 @@ export type WhisperModelInfo = {
 
 export type WhisperModelsResponse = {
   models: WhisperModelInfo[];
+};
+
+export type WhisperCatalogModel = {
+  model: string;
+  size_bytes: number;
+  source: {
+    host: string;
+    url: string;
+  };
+  license: {
+    identifier: string;
+    url: string;
+  };
+  sha256?: string | null;
+  destination_label: string;
+};
+
+export type WhisperCatalogResponse = {
+  models: WhisperCatalogModel[];
+};
+
+export type DownloadWhisperModelResponse = {
+  job_id: string;
 };
 
 export type ImportWhisperModelRequest = {
@@ -72,6 +95,74 @@ export async function deleteWhisperModel(
   });
 }
 
+export async function fetchWhisperModelCatalog(
+  connection: Connection,
+  signal?: AbortSignal
+): Promise<WhisperCatalogModel[] | null> {
+  try {
+    const response = await api<Partial<WhisperCatalogResponse>>(
+      connection,
+      '/v1/transcription/models/catalog',
+      { signal }
+    );
+    if (!response || !Array.isArray(response.models)) {
+      return [];
+    }
+    return response.models;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404) {
+      return null;
+    }
+    throw reason;
+  }
+}
+
+export async function startWhisperModelDownload(
+  connection: Connection,
+  model: string,
+  idempotencyKey: string
+): Promise<DownloadWhisperModelResponse> {
+  return api<DownloadWhisperModelResponse>(
+    connection,
+    `/v1/transcription/models/${encodeURIComponent(model)}/download`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ confirm: true }),
+    }
+  );
+}
+
+export async function fetchWhisperDownloadJob(
+  connection: Connection,
+  jobId: string,
+  signal?: AbortSignal
+): Promise<Job> {
+  return api<Job>(connection, `/v1/jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
+export async function cancelWhisperDownloadJob(
+  connection: Connection,
+  jobId: string
+): Promise<unknown> {
+  return api<unknown>(connection, `/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+  });
+}
+
+export function safeExternalUrl(raw: string | null | undefined): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function readCudaRuntime(raw: unknown): CudaRuntimeDiagnostics | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
@@ -106,7 +197,10 @@ export function formatModelSize(sizeBytes: number | null | undefined): string {
   return `${formatted} ${units[unitIndex]}`;
 }
 
-export function formatModelActionError(action: 'import' | 'delete' | 'list', reason: unknown): string {
+export function formatModelActionError(
+  action: 'import' | 'delete' | 'list' | 'download' | 'cancel',
+  reason: unknown
+): string {
   const detail = reason instanceof Error ? reason.message : String(reason);
   if (reason instanceof ApiError) {
     if (action === 'import') {
@@ -120,6 +214,26 @@ export function formatModelActionError(action: 'import' | 'delete' | 'list', rea
     if (action === 'delete' && reason.status === 409) {
       return `Não foi possível remover o modelo (${detail}). Modelos de legado externo não podem ser removidos por aqui, e modelos em uso exigem aguardar a conclusão da transcrição.`;
     }
+    if (action === 'download') {
+      if (reason.status === 409) {
+        return `Este modelo já está instalado ou possui um download em andamento (${detail}). Atualize a lista de modelos antes de tentar novamente.`;
+      }
+      if (reason.status === 400 || reason.status === 422) {
+        return `Não foi possível iniciar o download (${detail}). Confirme os dados da prévia e tente novamente.`;
+      }
+      if (reason.status === 404) {
+        return `Modelo não encontrado no catálogo oficial (${detail}). Atualize os modelos ou use a importação de pasta local.`;
+      }
+      if (reason.status === 502 || reason.status === 503 || reason.status === 504) {
+        return `Falha de conexão ao baixar o modelo (${detail}). Verifique sua rede e tente novamente ou importe de uma pasta local.`;
+      }
+    }
+    if (action === 'cancel' && (reason.status === 404 || reason.status === 409)) {
+      return `Não foi possível cancelar o download (${detail}). A tarefa pode já ter sido finalizada.`;
+    }
+  }
+  if (action === 'download') {
+    return `${detail || 'Falha durante o download do modelo.'} Verifique sua conexão, o espaço em disco ou use a importação manual de pasta.`;
   }
   return detail || 'Não foi possível concluir a operação. Verifique a conexão com o backend local.';
 }
