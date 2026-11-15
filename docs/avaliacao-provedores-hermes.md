@@ -1,0 +1,64 @@
+# Avaliação de provedores para o Hermes real — subsídio à decisão (HOR-116)
+
+Issue de gestão: [HOR-116](https://github.com/yannbastos/horus-management/issues/104). Serve à decisão **pendente do idealizador** da fase F1 de [plano-hermes-real.md](plano-hermes-real.md) (provedor/modelo, preço por token, teto monetário no provedor) e ao item **C8** do [checklist pré-inferência](checklist-pre-inferencia.md). **Não configura nada, não cria conta nem chave e não habilita inferência.**
+
+Metodologia: pesquisa pública feita em **14/11/2026** em páginas oficiais; nenhum dado do usuário ou do projeto foi enviado. **[F]** = lido na fonte oficial citada; **[S]** = fonte secundária ou resumo de busca (reler a oficial antes de decidir); **[N]** = não consegui confirmar. Preços e termos mudam: reler a fonte no dia da contratação. Nota de transparência: quem escreve é um modelo da Anthropic; a comparação usa só critérios abaixo e as fontes citadas.
+
+## 1. Resumo
+
+| Critério | Anthropic | OpenAI | Google (Gemini API) | Mistral (La Plateforme) | Local (Ollama) |
+|---|---|---|---|---|---|
+| Treino com dados da API | **Não por padrão** (termos comerciais) [F/S]; exceção: feedback enviado ou opt-in | **Não**, salvo opt-in [F] | **Pago: não**; **gratuito: sim**, com revisão humana [F] | Não, no plano Scale; exceção: modelos Labs/Preview [S] | n/a (nada sai da máquina) |
+| Retenção padrão | Entradas/saídas apagadas em até **30 dias** (exceções legais/política de uso) [F] | Logs de abuso até **30 dias**; estado de aplicação varia por endpoint [F] | "Período limitado" para abuso, **duração não informada** [F] | 30 dias de abuso [S] | Local |
+| Zero retenção | Por **acordo** com a Anthropic (como obter: [N]) [F] | **ZDR/MAM** sob aprovação prévia e contato com vendas [F] | [N] | ZDR: fontes divergentes (plano Scale vs sob aprovação) [S] | n/a |
+| Região | Parâmetro `inference_geo` (`us`/`global`) [F]; subprocessadores: [N] | Guia de residência de dados com regiões por elegibilidade [F]; lista: [N] | Pode armazenar/processar "em qualquer país" com instalações do Google; lista de regiões não incluída; subprocessadores via DPA [F] | **UE por padrão** (endpoint EUA opcional) [S]; subprocessadores com SCC [S] | n/a |
+| Teto de gasto no provedor | **Limite mensal por organização e por workspace**, abaixo do teto do nível [F] | **Hard limit** por organização/projeto + alerta que não bloqueia [F]; relatos divergentes de que o limite de projeto só notifica [S] | **Spend cap** (orçamento do Cloud Billing por projeto/serviço) e teto mensal por projeto no AI Studio [F/S] | **Limite mensal por Workspace**, ≤ limite da organização [F] | n/a |
+| Ao estourar | HTTP **400** `invalid_request_error` no limite próprio; **429** `enforced_spend_limit_reached` no teto do nível; **sem `retry-after`**; volta no mês seguinte ou ao aumentar [F] | **429** `…_spend_limit_exceeded`; **não é instantâneo** (pode passar um pouco) [F] | Pausa novo uso até o fim do período ou até suspender o teto; **não é instantâneo**; o excedente é cobrado [F] | Acesso do Workspace suspenso até o mês seguinte ou aumento [F] | n/a |
+| Compatível com o Hermes | Nativo (`ANTHROPIC_API_KEY`) [F] | Nativo (`openai-api`) [F] | Nativo (`gemini`) [F] | Só como endpoint OpenAI-compatível personalizado [F] | Endpoint personalizado local; contexto ≥ 64 mil tokens exigido pelo Hermes [F] |
+
+Fontes: [Anthropic – limites](https://platform.claude.com/docs/en/api/rate-limits), [Anthropic – retenção](https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data), [Anthropic – treino](https://support.anthropic.com/en/articles/7996868-is-my-data-used-for-model-training), [Anthropic – termos comerciais](https://www.anthropic.com/legal/commercial-terms); [OpenAI – seus dados](https://developers.openai.com/api/docs/guides/your-data), [OpenAI – limites de gasto](https://developers.openai.com/api/docs/guides/spend-limits); [Google – termos da Gemini API](https://aistudio.google.com/docs/terms), [Google – spend caps](https://docs.cloud.google.com/billing/docs/how-to/budgets-spend-caps); [Mistral – limites de uso](https://docs.mistral.ai/admin/workspaces/usage-limits), [Mistral – treino](https://help.mistral.ai/en/articles/323757-do-you-use-my-user-data-to-train-your-artificial-intelligence-models); [Hermes – provedores](https://hermes-agent.nousresearch.com/docs/integrations/providers). Todas lidas em 14/11/2026.
+
+## 2. Preços (USD por milhão de tokens, tarifa padrão, texto)
+
+| Provedor / modelo | Entrada | Saída | Observação (fonte, 14/11/2026) |
+|---|---|---|---|
+| Anthropic Haiku 5.5 | 0,10 | 0,50 | até 100 mil tokens de prompt; acima, 0,50 / 2,50 [F, [preços](https://platform.claude.com/docs/en/about-claude/pricing)] |
+| Anthropic Sonnet 5.5 | 2 | 10 | [F, mesma página] |
+| Anthropic Opus 5.5 | 4 | 20 | [F] |
+| OpenAI gpt-6-luna | 0,10 | 0,50 | [F, [preços](https://developers.openai.com/api/docs/pricing)] |
+| OpenAI gpt-6.1-terra | 1 | 5 | [F] |
+| OpenAI gpt-5.4-mini | 0,75 | 4,50 | [F] |
+| Google Gemini 3.5 Flash-Lite | 0,30 | 2,50 | [F, [preços](https://aistudio.google.com/docs/pricing)]; paga |
+| Google Gemini 3.8 Flash | 0,75 até 31/12/2026, depois 1,50 | 3,75 até 31/12/2026, depois 7,50 | [F]; **preço muda em 01/01/2027** |
+| Mistral Large | 0,5 | 1,5 | única linha de API na página de preços [F, [preços](https://mistral.ai/pricing)]; Small 4 e Medium 3.5: [N] |
+| Ollama local | 0 | 0 | custo é hardware/energia; modelo e licença escolhidos pelo operador [N: qualidade/português] |
+
+Impacto no gate do Hórus: a reserva por execução é `HORUS_MAX_TOKENS_PER_RUN × max(preço de entrada, preço de saída) / 1.000.000`. Com o teto aprovado de 16.384 tokens, a reserva por execução fica em ≈ **US$ 0,008** (Haiku 5.5), **0,025** (Mistral Large), **0,041** (Gemini 3.5 Flash-Lite), **0,074** (gpt-5.4-mini), **0,082** (gpt-6.1-terra) e **0,164** (Sonnet 5.5). Todos cabem nos tetos atuais (US$ 5 total, US$ 1/dia). Os preços são **configuração do operador** (`HORUS_PRICE_INPUT_USD_PER_MTOK`/`OUTPUT`), sem tabela embutida; o gate recusa sem eles.
+
+## 3. Compatibilidade com o contrato do Hermes
+
+- O Hórus fala só com o Hermes em loopback; o provedor é configurado **no perfil Hermes**, não no Hórus (por isso o teto no provedor, C2, é externo ao backend). O corpo de `/v1/runs` aceita `model`/`provider` opcionais, mas o plano mantém o provedor fixado no perfil e o [gateway de saída](politica-destinos-e-ameacas.md) não audita o destino atrás do Hermes (limite conhecido).
+- O contrato exige **saída JSON validada** pelo Hórus (schema, fontes permitidas, `task_id`); saída inválida é rejeitada, nunca consertada. Qualquer modelo que siga instruções em português e emita JSON estrito serve; **qualidade real por modelo: [N]** até a primeira execução com dataset fictício (F3).
+- O Hermes exige **≥ 64 mil tokens de contexto** para uso com ferramentas [F]; o perfil do Hórus fica **sem ferramentas** (ver [segurança do Hermes](seguranca-hermes.md)). Se o Hermes recusa janelas menores ou exige suporte a ferramentas mesmo com o perfil mínimo: [N], testar no F2.
+- **Cuidado com o Ollama:** a biblioteca lista modelos "cloud" que rodam fora da máquina [F]; usar só modelos locais (`ollama pull`), com `OLLAMA_CONTEXT_LENGTH` ≥ 64000 (padrão em GPU < 24 GB é 4.096 [F]). Hardware, velocidade e qualidade em português neste PC: [N].
+- Quando o limite do provedor estoura, o erro chega ao Hórus **via Hermes**; o mapeamento HTTP 400/429 → `failed` sem retentativa já existe no cliente (`workflow_hermes`), mas o texto exato que o Hermes repassa: [N].
+
+## 4. Recomendação (a decisão é do idealizador)
+
+**Primeira escolha: Anthropic, com chave e workspace dedicados ao Hórus.** Motivos: treino desligado por padrão e retenção curta e documentada (30 dias, ZDR por acordo); **teto mensal próprio por workspace, enforçado pelo provedor**, com erro explícito e sem retentativa útil (casa com a regra "sem retentativa automática"); suporte nativo no Hermes; reserva por execução muito abaixo dos tetos. Modelo para o primeiro ensaio: **Haiku 5.5** (custo mínimo; se a qualidade do roteiro/análise não bastar, subir para **Sonnet 5.5**). Configuração sugerida (o operador faz, não este documento): workspace só do Hórus, limite mensal igual ao orçamento total do Hórus (US$ 5) ou menor, preços de entrada/saída copiados da tabela acima, revisão do ZDR se o envelope deixar de ser fictício.
+
+**Alternativas, em ordem:**
+1. **Ollama local** — zero saída de dados e custo, ideal para os ensaios F2/F3 e como contingência; risco: qualidade/português/64k de contexto e desempenho [N]. Recomendado **em paralelo** como teste sem custo antes de gastar.
+2. **OpenAI** — sem treino por padrão e ZDR sob aprovação; limite duro documentado, mas **não instantâneo** e com relatos de divergência [S]: se escolhido, testar o corte num projeto descartável antes.
+3. **Google Gemini API** — usar **somente o nível pago** (o gratuito treina com os dados e permite revisão humana) [F]; spend cap existe, mas **não é instantâneo** e o excedente é cobrado; localização "em qualquer país" e retenção de abuso sem prazo informado pesam contra a revisão de privacidade (C8); preços de modelos Flash sobem em 01/01/2027.
+4. **Mistral** — UE por padrão (bom para LGPD/GDPR) e limite por workspace; no Hermes entra só como endpoint personalizado e os preços/ZDR dos modelos atuais ficaram **[N]**.
+
+## 5. O que fica pendente para a decisão
+
+| Item | Quem | Observação |
+|---|---|---|
+| Escolher provedor e modelo | idealizador | usar a seção 4 como ponto de partida |
+| Criar conta/chave dedicada e **definir o teto no provedor** (C2) | idealizador | nenhuma conta foi criada aqui; um corte "não instantâneo" exige margem (US$ < teto do Hórus) |
+| Copiar preços de entrada/saída para as variáveis do Hórus | idealizador | releia a página de preços no dia |
+| Revisar retenção/treino/subprocessadores com o texto vigente (C8) | idealizador | itens [N]: ZDR da Anthropic (como pedir), regiões/subprocessadores, ZDR da Mistral, retenção de abuso do Google |
+| Ensaio F3 (dataset fictício, teto mínimo) | após autorização | confirmar formato real do erro de limite repassado pelo Hermes e qualidade do JSON |

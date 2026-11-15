@@ -36,7 +36,7 @@ Pesquisa → proposta → roteiro com Hermes real, mantendo:
 5. **Relatório B automatizado**: comando que consulta `/v1/security/status` de um backend já em execução e imprime B1–B9 sem expor o token.
 
 ### F1 — Decisões do idealizador 🔒
-- Provedor e modelo; preço de entrada/saída por token (sem tabela embutida).
+- Provedor e modelo; preço de entrada/saída por token (sem tabela embutida). Subsídio comparativo (preços, retenção/treino, tetos e compatibilidade, com fontes de 14/11/2026): [avaliacao-provedores-hermes.md](avaliacao-provedores-hermes.md).
 - Chave dedicada com **teto monetário configurado no provedor** (C2).
 - Política de retenção/treinamento do provedor revisada (C8).
 - Aceite escrito ou mitigação de C1 (sem isolamento de SO), C5 (sem auditoria de transmissões) e C6 (sem modos de privacidade).
