@@ -471,7 +471,11 @@ main::-webkit-scrollbar-track,
 .error-center-meta code { font-family: var(--FontMono); font-size: var(--TextCode); color: var(--Ink); }
 .error-center-pagination { justify-content: center; }
 
-@media (max-width: 1040px) {
+@media (max-width: 1120px) {
+  .error-center-summary { grid-template-columns: minmax(140px, 170px) 1fr 1fr; gap: var(--Space4); }
+  .error-center-filter-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+}
+@media (max-width: 860px) {
   .error-center-summary { grid-template-columns: 1fr; }
   .error-center-filter-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
 }
