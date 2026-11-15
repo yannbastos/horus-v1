@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import {
   connectSession,
@@ -276,6 +277,9 @@ test.describe('Comparar versões do roteiro e das produções (HOR-088)', () => 
     await expect(compareTable.getByRole('row', { name: /Duração.*14\.0s.*12\.4s.*Alterado/ })).toBeVisible();
     await expect(compareTable.getByRole('row', { name: /Resumo do QC.*Aprovado \(0 fail, 0 warn\).*Reprovado \(1 fail, 1 warn\).*Alterado/ })).toBeVisible();
     await expect(compareTable.getByRole('row', { name: /Estado da revisão.*Aprovada.*Aguardando revisão.*Alterado/ })).toBeVisible();
+    await expect(compareTable.getByRole('row', { name: /Job \/ Execução/ })).toBeVisible();
+    await expect(compareTable.getByRole('row', { name: /Artefatos/ })).toBeVisible();
+    await expect(compareTable.getByRole('row', { name: /Decisão registrada/ })).toBeVisible();
     await expect(compareTable.getByRole('row', { name: /Versão do roteiro.*v2.*v2.*Igual/ })).toBeVisible();
 
     // Link/botão para abrir produção B (que é prodA na ordem de seleção: 0=prodB, 1=prodA)
@@ -312,5 +316,206 @@ test.describe('Comparar versões do roteiro e das produções (HOR-088)', () => 
 
     const prodHistory = page.getByRole('region', { name: 'Histórico de execuções da produção' });
     await expect(prodHistory.getByText('Apenas uma produção registrada para este roteiro. Execute outra produção para comparar.')).toBeVisible();
+  });
+
+  test('compara revisões de propostas editoriais ligadas a jobs e decisões, com acessibilidade (HOR-090)', async ({ page }) => {
+    const state = newBackendState({ productions: [] });
+    state.extra = async (route, path, method) => {
+      if (path === `/v1/workflows/${WORKFLOW_ID}` && method === 'GET') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: {
+            id: WORKFLOW_ID,
+            status: 'approved',
+            revision: 2,
+            executor: 'hermes_simulated',
+            simulated: true,
+            request: { objective: 'Comparar revisões da proposta' },
+            current_artifact_id: PROPOSAL_ARTIFACT_ID,
+            artifacts: [
+              {
+                id: 'art_prop_rev1',
+                workflow_id: WORKFLOW_ID,
+                revision: 1,
+                stage: 'proposal',
+                job_id: 'job_prop_r1',
+                attempt_id: 'att_prop_r1',
+                schema_version: 1,
+                content_hash: 'hash_rev1_abcdef123456',
+                created_at: '2026-11-12T09:00:00Z',
+                content: {
+                  stage: 'proposal',
+                  title: 'Proposta inicial v1',
+                  result_status: 'complete',
+                  recommendation: {
+                    title_options: ['Título antigo'],
+                    premise: 'Premissa inicial menos focada.',
+                    angle: 'Ângulo geral',
+                    format: 'short',
+                    originality: 'Média',
+                    risks: ['Risco inicial'],
+                  },
+                  evidence: { sources: 2, facts: 3, hypotheses: 1 },
+                },
+              },
+              {
+                id: PROPOSAL_ARTIFACT_ID,
+                workflow_id: WORKFLOW_ID,
+                revision: 2,
+                stage: 'proposal',
+                job_id: 'job_prop_r2',
+                attempt_id: 'att_prop_r2',
+                schema_version: 1,
+                content_hash: 'hash_rev2_fedcba654321',
+                created_at: '2026-11-12T09:30:00Z',
+                content: {
+                  stage: 'proposal',
+                  title: 'Proposta refinada v2',
+                  result_status: 'complete',
+                  recommendation: {
+                    title_options: ['Título focado'],
+                    premise: 'Premissa revisada com foco prático.',
+                    angle: 'Ângulo direto ao ponto',
+                    format: 'short',
+                    originality: 'Alta',
+                    risks: ['Risco mitigado'],
+                  },
+                  evidence: { sources: 4, facts: 6, hypotheses: 2 },
+                },
+              },
+            ],
+            approvals: [
+              {
+                id: 'app_r1',
+                workflow_id: WORKFLOW_ID,
+                revision: 1,
+                artifact_id: 'art_prop_rev1',
+                decision: 'request_changes',
+                feedback: 'Refinar premissa e ampliar fontes.',
+                created_at: '2026-11-12T09:10:00Z',
+              },
+              {
+                id: 'app_r2',
+                workflow_id: WORKFLOW_ID,
+                revision: 2,
+                artifact_id: PROPOSAL_ARTIFACT_ID,
+                decision: 'approve',
+                feedback: 'Aprovada para roteiro.',
+                created_at: '2026-11-12T09:40:00Z',
+              },
+            ],
+            events: [],
+          },
+        });
+        return true;
+      }
+      return false;
+    };
+
+    await installBackend(page, state);
+    await connectSession(page);
+    await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('button', { name: 'Produção', exact: true }).click();
+
+    const proposalCard = page.getByRole('region', { name: 'Proposta editorial' });
+    await expect(proposalCard).toBeVisible();
+    await proposalCard.getByRole('button', { name: /Comparar revisões \(2\)/ }).click();
+
+    const compareRegion = page.getByRole('region', { name: 'Comparação de revisões da proposta' });
+    await expect(compareRegion).toBeVisible();
+    const compareTable = compareRegion.getByRole('table', { name: 'Tabela comparativa de revisões da proposta' });
+    await expect(compareTable.getByRole('row', { name: /Job \/ Tentativa.*job_prop_r1.*job_prop_r2.*Alterado/ })).toBeVisible();
+    await expect(compareTable.getByRole('row', { name: /Decisão editorial.*Alterações solicitadas.*Aprovado.*Alterado/ })).toBeVisible();
+    await expect(compareTable.getByRole('row', { name: /Premissa.*Premissa inicial menos focada.*Premissa revisada com foco prático.*Alterado/ })).toBeVisible();
+    await expect(compareTable.getByRole('row', { name: /Formato.*Vídeo Curto \(Shorts\).*Vídeo Curto \(Shorts\).*Igual/ })).toBeVisible();
+
+    const axeDark = await new AxeBuilder({ page }).include('[aria-label="Comparação de revisões da proposta"]').analyze();
+    expect(axeDark.violations).toEqual([]);
+
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = 'light';
+    });
+    const axeLight = await new AxeBuilder({ page }).include('[aria-label="Comparação de revisões da proposta"]').analyze();
+    expect(axeLight.violations).toEqual([]);
+  });
+
+  test('restaura versão anterior do roteiro como nova revisão sem perder histórico (HOR-090)', async ({ page }) => {
+    const validV1 = {
+      ...SCRIPT_V1,
+      document: {
+        ...SCRIPT_V1.document,
+        sections: [
+          ...SCRIPT_V1.document.sections,
+          {
+            id: 'sec_conc_v1',
+            kind: 'conclusion',
+            heading: 'Conclusão v1',
+            narration: 'Encerramento original da primeira versão.',
+            source_ids: ['src_1'],
+          },
+        ],
+      },
+    };
+    const editableV2 = {
+      ...SCRIPT_V2,
+      status: 'changes_requested',
+      review: {
+        decision: 'request_changes',
+        feedback: 'Voltar para o gancho da v1.',
+        reviewed_at: '2026-11-12T10:15:00Z',
+      },
+    };
+    const scripts = [editableV2, validV1];
+    let createdPayload: Record<string, unknown> | null = null;
+
+    const state = newBackendState({ productions: [] });
+    state.extra = async (route, path, method) => {
+      if (path === `/v1/workflows/${WORKFLOW_ID}/scripts` && method === 'GET') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: { items: scripts } });
+        return true;
+      }
+      if (path === `/v1/scripts/${SCRIPT_ID}/versions` && method === 'POST') {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        createdPayload = body;
+        const restoredV3 = {
+          ...validV1,
+          id: 'script_restored_v3',
+          version: 3,
+          status: 'awaiting_review',
+          origin: 'human',
+          authored_by: 'human',
+          document: body.document,
+          created_at: '2026-11-15T09:35:00Z',
+          review: null,
+        };
+        scripts.unshift(restoredV3);
+        await route.fulfill({ status: 201, headers: corsHeaders, json: restoredV3 });
+        return true;
+      }
+      return false;
+    };
+
+    await installBackend(page, state);
+    await connectSession(page);
+    await page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('button', { name: 'Produção', exact: true }).click();
+
+    const scriptHistory = page.getByRole('region', { name: 'Histórico de versões do roteiro' });
+    await expect(scriptHistory).toBeVisible();
+    await scriptHistory.getByRole('button', { name: 'Restaurar v1' }).click();
+
+    await expect(page.getByText(/Restaurando conteúdo da v1 como nova versão a partir da v2/)).toBeVisible();
+    const axeHistory = await new AxeBuilder({ page }).include('[aria-label="Histórico de versões do roteiro"]').analyze();
+    expect(axeHistory.violations).toEqual([]);
+
+    await page.getByRole('button', { name: /Salvar como nova versão/i }).click();
+
+    await expect.poll(() => createdPayload).not.toBeNull();
+    expect(createdPayload).toMatchObject({
+      expected_version: 2,
+      document: { title: 'Roteiro inicial de teste' },
+    });
+    await expect(scriptHistory.getByText('Versão 3', { exact: true })).toBeVisible();
+    await expect(scriptHistory.getByText('Versão 2', { exact: true }).first()).toBeVisible();
+    await expect(scriptHistory.getByText('Versão 1', { exact: true }).first()).toBeVisible();
   });
 });

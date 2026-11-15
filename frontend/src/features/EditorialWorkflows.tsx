@@ -17,6 +17,7 @@ import {
   reviewWorkflow,
 } from '../services/api';
 import { StatusMessage } from '../components/StatusMessage';
+import ProposalComparePanel, { type ProposalCompareItem } from './proposal-compare/ProposalComparePanel';
 import ScriptReview from './ScriptReview';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -78,6 +79,10 @@ export default function EditorialWorkflows({
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
+  const [proposalCompareState, setProposalCompareState] = useState<{
+    baseId: string;
+    targetId: string;
+  } | null>(null);
 
   // Initial fetch and when connection changes
   async function refreshList(selectFirst = false) {
@@ -142,6 +147,7 @@ export default function EditorialWorkflows({
 
   // Load selected workflow detail immediately when selection changes
   useEffect(() => {
+    setProposalCompareState(null);
     const conn = connection;
     if (!conn || !selectedId) {
       setCurrent(null);
@@ -270,6 +276,18 @@ export default function EditorialWorkflows({
     (a: WorkflowArtifact) => a.stage === 'proposal' && a.revision === current.revision
   );
   const proposalContent = proposalArtifact?.content as ProposalArtifactContent | undefined;
+
+  const proposalCompareItems: ProposalCompareItem[] = (current?.artifacts ?? [])
+    .filter((a: WorkflowArtifact) => a.stage === 'proposal')
+    .sort((a, b) => a.revision - b.revision)
+    .map(artifact => ({
+      artifact,
+      content: (artifact.content ?? { stage: 'proposal', title: '' }) as ProposalArtifactContent,
+      approval:
+        current?.approvals?.find(
+          app => app.artifact_id === artifact.id || app.revision === artifact.revision
+        ) ?? null,
+    }));
 
   const analysisArtifact = current?.artifacts?.find(
     (a: WorkflowArtifact) => a.stage === 'analysis' && a.revision === current.revision
@@ -420,9 +438,31 @@ export default function EditorialWorkflows({
                   <article className="card" role="region" aria-label="Proposta editorial">
                     <div className="row spread">
                       <p className="eyebrow accent">PROPOSTA EDITORIAL</p>
-                      {proposalContent.result_status && (
-                        <span className="tag good">Status: {proposalContent.result_status}</span>
-                      )}
+                      <div className="row" style={{ flexWrap: 'wrap' }}>
+                        {proposalCompareItems.length >= 2 && (
+                          <button
+                            type="button"
+                            className={`button sm ${proposalCompareState ? 'active' : ''}`}
+                            onClick={() =>
+                              setProposalCompareState(prev =>
+                                prev
+                                  ? null
+                                  : {
+                                      baseId: proposalCompareItems[proposalCompareItems.length - 2].artifact.id,
+                                      targetId: proposalCompareItems[proposalCompareItems.length - 1].artifact.id,
+                                    }
+                              )
+                            }
+                          >
+                            {proposalCompareState
+                              ? 'Ocultar comparação de propostas'
+                              : `Comparar revisões (${proposalCompareItems.length})`}
+                          </button>
+                        )}
+                        {proposalContent.result_status && (
+                          <span className="tag good">Status: {proposalContent.result_status}</span>
+                        )}
+                      </div>
                     </div>
 
                     <h2>{proposalContent.title}</h2>
@@ -517,6 +557,21 @@ export default function EditorialWorkflows({
                       proposalContent.text && <p className="muted">{proposalContent.text}</p>
                     )}
                   </article>
+                )}
+
+                {proposalCompareState && proposalCompareItems.length >= 2 && (
+                  <ProposalComparePanel
+                    proposals={proposalCompareItems}
+                    baseArtifactId={proposalCompareState.baseId}
+                    targetArtifactId={proposalCompareState.targetId}
+                    onChangeBaseId={baseId =>
+                      setProposalCompareState(prev => (prev ? { ...prev, baseId } : null))
+                    }
+                    onChangeTargetId={targetId =>
+                      setProposalCompareState(prev => (prev ? { ...prev, targetId } : null))
+                    }
+                    onClose={() => setProposalCompareState(null)}
+                  />
                 )}
 
                 {analysisResult && (
