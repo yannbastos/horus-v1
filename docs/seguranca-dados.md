@@ -235,3 +235,20 @@ Migração (simulação por padrão; copia, **relê e compara**; não apaga o ar
 ```
 
 Um token diferente já presente no cofre nunca é sobrescrito sem `--replace`. **Remover o campo `token` do arquivo** é um passo manual posterior e também exige autorização (reversão: gravar o token de volta no arquivo ou apagar a entrada do cofre; o arquivo original só deve ser alterado depois de a leitura pelo cofre ter sido conferida com a verificação do Hermes em Ajustes). A tela de segurança (`/v1/security/status`) continua descrevendo o arquivo como local do token até esse passo final.
+
+### 7.3 ACL da pasta de dados
+
+`scripts/data-dir-acl.py` (Windows, `icacls`; simulação por padrão): remove a herança e concede controle total **somente ao usuário atual e ao SYSTEM**, por SID. Administradores, o grupo local de sandbox de ferramentas de IA e demais principais deixam de ter acesso (filhos que herdam acompanham). Guarda a ACL anterior em `<pasta>-acl-backup/acl-<data>.json` (fora da pasta de dados), confere o resultado (duas ACEs, sem herança, escrita do usuário preservada) e **desfaz sozinho** se algo divergir. Só trata ACL 100% herdada (caso padrão); ACL já personalizada é recusada para revisão manual. **Recusa a pasta de dados real** (padrão do Hórus ou `HORUS_DATA_DIR`) sem `--allow-real`. Nunca toca banco, arquivos nem credenciais: só a DACL da pasta. `icacls /restore` exige privilégio de administrador, por isso a restauração usa `/inheritance:e` + remoção das concessões do script e compara com a ACL original.
+
+Os pacotes de pré-exclusão e de exportação usam a pasta irmã `<pasta>-backups`, de ACL própria e **não alterada**; o teste prova que `export_local_data`/`verify_export`/`restore_local_data` continuam funcionando com a pasta restrita. Testes: `backend/tests/test_data_dir_acl.py`, **somente em pasta temporária isolada** com ACL herdada padrão (o `tmp_path` do pytest nasce com ACL protegida e por isso não é usado).
+
+```powershell
+# simulação (somente leitura; mostra a ACL atual e os comandos exatos)
+& backend/.venv/Scripts/python.exe scripts/data-dir-acl.py plan "<pasta-de-dados>"
+# APLICAR NA PASTA REAL: somente com autorização do usuário; feche o Hórus antes; pede a frase APLICAR ACL
+& backend/.venv/Scripts/python.exe scripts/data-dir-acl.py apply "<pasta-de-dados>" --apply --allow-real
+# desfazer (usa o arquivo de backup da ACL indicado ao aplicar)
+& backend/.venv/Scripts/python.exe scripts/data-dir-acl.py restore "<pasta-de-dados>" --from "<pasta-de-dados>-acl-backup\acl-<data>.json" --allow-real
+```
+
+Efeito colateral esperado: agentes e ferramentas de IA que hoje leem a pasta por esse grupo deixam de ter acesso.
