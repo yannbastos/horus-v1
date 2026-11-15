@@ -1,0 +1,523 @@
+{
+  "$defs": {
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "test",
+            "render",
+            "review"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 260,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "path",
+        "sha256",
+        "description"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Implementation": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,79}$",
+          "title": "Component",
+          "type": "string"
+        },
+        "factory_path": {
+          "maxLength": 260,
+          "minLength": 1,
+          "title": "Factory Path",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "factory_path"
+      ],
+      "title": "Implementation",
+      "type": "object"
+    },
+    "Parameter": {
+      "additionalProperties": false,
+      "properties": {
+        "certainty": {
+          "enum": [
+            "measured",
+            "inferred",
+            "estimated"
+          ],
+          "title": "Certainty",
+          "type": "string"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Note",
+          "type": "string"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "maximum": 19,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "maxLength": 20,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "name",
+        "value",
+        "certainty"
+      ],
+      "title": "Parameter",
+      "type": "object"
+    },
+    "Reference": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "maximum": 86400.0,
+          "minimum": 0,
+          "title": "End",
+          "type": "number"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Note",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "start": {
+          "maximum": 86400.0,
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source_id",
+        "start",
+        "end"
+      ],
+      "title": "Reference",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Author"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "maximum": 86400.0,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Seconds"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "external_video",
+            "local_media"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "media_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Media Sha256"
+        },
+        "retrieved_at": {
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "reuse": {
+          "$ref": "#/$defs/SourceReuse"
+        },
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "verified_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verified At"
+        },
+        "verified_by": {
+          "anyOf": [
+            {
+              "const": "human",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verified By"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "retrieved_at"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "SourceReuse": {
+      "additionalProperties": false,
+      "properties": {
+        "note": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Note",
+          "type": "string"
+        },
+        "status": {
+          "default": "unknown",
+          "enum": [
+            "unknown",
+            "restricted",
+            "allowed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "verified_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verified At"
+        },
+        "verified_by": {
+          "anyOf": [
+            {
+              "const": "human",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verified By"
+        }
+      },
+      "title": "SourceReuse",
+      "type": "object"
+    },
+    "Technique": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "enum": [
+            "transition",
+            "camera",
+            "text",
+            "audio_sync",
+            "layout",
+            "color",
+            "effect",
+            "other"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "maxItems": 20,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "implementation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Implementation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          },
+          "maxItems": 30,
+          "title": "Parameters",
+          "type": "array"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/Reference"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "References",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "analyzed",
+            "implemented",
+            "validated"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9-]{0,29}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "title": "Tags",
+          "type": "array"
+        },
+        "validation_context": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validation Context"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "category",
+        "references",
+        "status"
+      ],
+      "title": "Technique",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/Source"
+      },
+      "maxItems": 500,
+      "title": "Sources",
+      "type": "array"
+    },
+    "techniques": {
+      "items": {
+        "$ref": "#/$defs/Technique"
+      },
+      "maxItems": 2000,
+      "title": "Techniques",
+      "type": "array"
+    }
+  },
+  "required": [
+    "sources",
+    "techniques"
+  ],
+  "title": "TechniqueCatalog",
+  "type": "object"
+}
