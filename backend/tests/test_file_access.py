@@ -193,7 +193,7 @@ def test_factory_ids_are_not_paths(client, payload):
 def test_no_route_models_a_client_path_outside_the_policy():
     """Campos de caminho em modelos de requisição conhecidos. Um campo novo exige decisão explícita aqui."""
     from horus_backend import api, jobs
-    expected = {(api.MediaRequest, "path"), (api.TranscriptSave, "path"),
+    expected = {(api.MediaRequest, "path"), (api.TranscriptSave, "path"), (api.ImportRequest, "path"),
                 (jobs.TranscriptionRequest, "path"), (jobs.DownloadRequest, "directory")}
     found = set()
     for module in (api, jobs):
