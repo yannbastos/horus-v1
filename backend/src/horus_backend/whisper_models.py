@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .file_access import client_path
-from .speech_alignment import resolve_model_path
+from .speech_alignment import model_directory, model_file, resolve_model_path
 from .transcriber import MODELS
 
 ModelName = Literal['tiny', 'base', 'small', 'medium', 'large-v3-turbo']
@@ -85,7 +85,7 @@ class WhisperModels:
 
     def _manifest(self, folder: Path, model: str) -> dict | None:
         path = folder / MANIFEST
-        if _link(folder) or _link(path) or not path.is_file() or path.stat().st_size > MAX_METADATA:
+        if not model_directory(folder) or not model_file(path) or path.lstat().st_size > MAX_METADATA:
             return None
         try:
             value = json.loads(path.read_text(encoding='utf-8'))
@@ -93,7 +93,7 @@ class WhisperModels:
             if (value['schema_version'] != 1 or value['model'] != model or not isinstance(files, dict)
                     or not set(REQUIRED) <= set(files) or not set(files) <= set(REQUIRED + OPTIONAL)):
                 return None
-            if any(not (folder / name).is_file() or _link(folder / name) for name in files):
+            if any(not model_file(folder / name) for name in files):
                 return None
             if type(value['size_bytes']) is not int or value['size_bytes'] < 0 or not isinstance(value['license'], dict):
                 return None
@@ -116,25 +116,25 @@ class WhisperModels:
                     folder = None
                 record = self._manifest(folder, model) if folder else None
                 models.append({'model': model, 'installed': folder is not None, 'managed': record is not None,
-                    'size_bytes': record['size_bytes'] if record else sum((folder / n).stat().st_size for n in REQUIRED) if folder else 0,
+                    'size_bytes': record['size_bytes'] if record else sum((folder / n).lstat().st_size for n in REQUIRED) if folder else 0,
                     'license': record['license'] if record else {'identifier': 'MIT', 'status': 'declared_unverified', 'model_card_present': False},
                     'source': {'kind': 'local_directory', 'name': record['source']['name']} if record else None,
                     'removable': record is not None})
             return {'models': models}
 
     def _validate(self, source: Path) -> tuple[list[str], dict]:
-        if not source.is_dir():
-            raise ValueError('Escolha uma pasta local existente com o modelo faster-whisper.')
+        if not model_directory(source):
+            raise ValueError('Escolha uma pasta local existente sem links com o modelo faster-whisper.')
         files = []
         for name in REQUIRED + OPTIONAL:
             path = source / name
             if _link(path):
                 raise ValueError('Arquivos do modelo não podem ser links; escolha uma cópia local completa.')
-            if not path.exists() and name in OPTIONAL:
+            if not model_file(path) and not path.exists() and name in OPTIONAL:
                 continue
-            if not path.is_file():
+            if not model_file(path):
                 raise ValueError(f'Arquivo obrigatório ausente ou inválido: {name}.')
-            size = path.stat().st_size
+            size = path.lstat().st_size
             if name == 'model.bin':
                 if not MIN_WEIGHTS <= size <= MAX_WEIGHTS:
                     raise ValueError('model.bin deve ter entre 1 MiB e 16 GiB; confira se os pesos foram baixados integralmente.')
@@ -171,6 +171,8 @@ class WhisperModels:
     def install(self, request: ImportModelRequest) -> dict:
         with self.lock:
             source = client_path(request.source_directory)
+            if not model_directory(Path(request.source_directory).expanduser()):
+                raise ValueError('A pasta de origem não pode ser um link; selecione uma pasta local completa.')
             self._root()
             target = self.root / request.model
             if target.exists() or _link(target) or resolve_model_path(self.root, request.model) is not None:
@@ -182,9 +184,9 @@ class WhisperModels:
                 total = 0
                 for name in files:
                     origin = source / name
-                    before = origin.stat()
+                    before = origin.lstat()
                     maximum = MAX_WEIGHTS if name == 'model.bin' else MAX_METADATA
-                    if _link(origin) or before.st_size > maximum:
+                    if not model_file(origin) or before.st_size > maximum:
                         raise ValueError('A origem mudou durante a importação; tente novamente com uma cópia estável.')
                     digest = hashlib.sha256()
                     copied = 0
@@ -197,7 +199,7 @@ class WhisperModels:
                             digest.update(chunk)
                         writer.flush()
                         os.fsync(writer.fileno())
-                    after = origin.stat()
+                    after = origin.lstat()
                     if copied != before.st_size or (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
                         raise ValueError('A origem mudou durante a importação; tente novamente com uma cópia estável.')
                     hashes[name] = {'sha256': digest.hexdigest(), 'size_bytes': copied}
@@ -237,7 +239,7 @@ class WhisperModels:
             # Caminho fixo sob models; nunca remove a origem nem diretórios de legado.
             for name in owned:
                 path = target / name
-                if _link(path) or not path.is_file():
+                if not model_file(path):
                     raise ModelConflict('A instalação mudou; a remoção foi recusada para preservar os arquivos.')
             for name in owned:
                 (target / name).unlink()

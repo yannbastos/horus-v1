@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from .dependencies import find_tool
 from . import cuda_runtime
+from .local_diagnostics import safe_error
 
 MODELS = ("tiny", "base", "small", "medium", "large-v3-turbo")
 LANGUAGES = ("auto", "pt", "en", "es")
@@ -95,7 +96,7 @@ def _transcribe(path: Path, model_name: str, language: str, models_dir: Path, cu
     else:
         model_path = resolve_model_path(models_dir, model_name)
         if model_path is None:
-            raise FileNotFoundError(f'Modelo Whisper {model_name!r} não instalado em {models_dir}. Instale-o explicitamente antes de transcrever.')
+            raise FileNotFoundError(f'Modelo Whisper {model_name!r} não instalado na pasta de modelos selecionada. Instale-o explicitamente antes de transcrever.')
     emitted = False
     while True:
         model = segments = None
@@ -217,5 +218,5 @@ def main(argv: list[str]):
             return 0
         return download(args.url, args.directory)
     except Exception as error:  # noqa: BLE001 - o motivo segue para o log da tarefa
-        print(download_error(error) if args.command == 'download' else f"{type(error).__name__}: {error}", file=sys.stderr, flush=True)
+        print(download_error(error) if args.command == 'download' else safe_error(f"{type(error).__name__}: {error}"), file=sys.stderr, flush=True)
         return 1
