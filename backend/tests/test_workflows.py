@@ -58,6 +58,27 @@ def review(client, workflow, decision="approve", key="review-1", **extra):
                              "decision": decision, **extra})
 
 
+class FakeOwnedProcess:
+    """Processo possuído determinístico: stdout pronto, saída 0, nada é criado no sistema operacional."""
+
+    def __init__(self, stdout: bytes):
+        from types import SimpleNamespace
+        out, err = asyncio.StreamReader(), asyncio.StreamReader()
+        out.feed_data(stdout)
+        out.feed_eof()
+        err.feed_eof()
+
+        async def wait():
+            return 0
+        self.process = SimpleNamespace(stdout=out, stderr=err, returncode=0, pid=0, wait=wait)
+
+    async def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
 def test_complete_workflow_is_simulated_and_keeps_worker_free(settings, monkeypatch):
     from horus_backend.hermes import HermesConnector
     from horus_backend.processes import OwnedProcess
@@ -77,15 +98,26 @@ def test_complete_workflow_is_simulated_and_keeps_worker_free(settings, monkeypa
         assert all(item["executor"] == "simulated-v1" for item in workflow["attempts"])
         assert workflow["approvals"] == []
         assert client.app.state.manager.active_id is None
-        # Aguardar revisão humana não ocupa o único worker: operação antiga continua funcionando.
+        # Aguardar revisão humana não ocupa o único worker: operação antiga continua funcionando. O que se prova aqui é a
+        # fila/worker livre, não o sistema operacional: o processo da fábrica é substituído por um determinístico (a criação
+        # real de processos é coberta por test_api/test_job_environment/test_process_sandbox). Antes, `failed` esporádico em
+        # suíte longa com a máquina sem memória vinha do spawn real; agora a espera tem prazo generoso e o erro é exibido.
+        started = []
+
+        async def fake_factory_process(command, **kwargs):
+            started.append((list(command), kwargs.get("cwd")))
+            return FakeOwnedProcess(json.dumps({"id": "canal01"}).encode() + chr(10).encode())
+        monkeypatch.setattr(OwnedProcess, "start", fake_factory_process)
         job = client.post("/v1/jobs", json={"operation": "factory.profile"}).json()
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             job = client.get(f"/v1/jobs/{job['id']}").json()
-            if job["status"] == "succeeded":
+            if job["status"] in {"succeeded", "failed", "blocked", "interrupted", "cancelled"}:
                 break
             time.sleep(.02)
-        assert job["status"] == "succeeded"
+        assert job["status"] == "succeeded", job
+        assert len(started) == 1 and started[0][0][0] == sys.executable and started[0][0][1].endswith("fake_factory.py")
+        assert started[0][1] == settings.factory_root
         response = review(client, workflow)
         assert response.status_code == 200, response.text
         assert response.json()["workflow"]["status"] == "approved"
