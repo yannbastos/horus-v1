@@ -53,7 +53,7 @@ class ExportService:
 
     def _tokens(self):
         """Token atual e, durante uma rotação, também o novo: ambos são redigidos."""
-        tokens = getattr(getattr(self.productions, 'manager', None), 'tokens', None)
+        tokens = getattr(getattr(getattr(self, 'productions', None), 'manager', None), 'tokens', None)
         return list(dict.fromkeys([self.settings.token, *(tokens.valid_tokens() if tokens else [])]))
 
     def _private(self, data: bytes):
