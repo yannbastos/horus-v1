@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
+import math
 from pathlib import Path
 import sqlite3
 import time
@@ -18,13 +19,20 @@ class CollectionCancelled(RuntimeError):
     """Cancelamento cooperativo; nenhuma revisão parcial é salva."""
 
 
+class CollectionLockTimeout(TimeoutError):
+    """Outra coleta reteve a trava além do limite local de espera."""
+
+
 def check_cancelled(cancel):
     if cancel is not None and cancel():
         raise CollectionCancelled('Coleta cancelada pelo chamador.')
 
 
 class RadarState:
-    def __init__(self, path: Path, *, clock=utcnow):
+    def __init__(self, path: Path, *, clock=utcnow, lock_timeout=5):
+        if not math.isfinite(lock_timeout) or lock_timeout < 0:
+            raise ValueError('Timeout da trava deve ser finito e não negativo.')
+        self.lock_timeout = lock_timeout
         path = Path(path)
         if path.name != 'radar-youtube.sqlite3' or path.is_symlink():
             raise ValueError('Use somente um arquivo dedicado radar-youtube.sqlite3, sem symlink.')
@@ -61,6 +69,7 @@ class RadarState:
         if path.is_symlink():
             raise ValueError('Trava não pode ser symlink.')
         db = sqlite3.connect(path, timeout=0)
+        deadline = time.monotonic() + self.lock_timeout
         try:
             while True:
                 check_cancelled(cancel)
@@ -70,7 +79,10 @@ class RadarState:
                 except sqlite3.OperationalError as error:
                     if error.sqlite_errorcode != sqlite3.SQLITE_BUSY:
                         raise
-                    time.sleep(0.05)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise CollectionLockTimeout('Tempo de espera pela trava do Radar excedido; tente novamente após a coleta em andamento.') from None
+                    time.sleep(min(0.05, remaining))
             check_cancelled(cancel)
             yield
         finally:

@@ -83,6 +83,12 @@ Antes de automação ainda faltam: integrar cancelamento e chamadas periódicas 
 
 ## Validação offline
 
+HOR-041: a espera pela trava de coleta usa relógio monotônico e termina após 5 s por padrão; `RadarState(..., lock_timeout=segundos)` permite um limite finito não negativo (zero tenta adquirir sem esperar). Ao esgotar, lança `CollectionLockTimeout`, exportada pelo pacote, fecha a conexão auxiliar e não inicia HTTP, reserva cota ou salva revisão. O chamador pode tentar novamente explicitamente após resolver a coleta concorrente; o arquivo de trava não deve ser apagado. A trava do `JobManager` (`worker_lock.py`) permanece não bloqueante: outro backend recebe erro imediato e o SO libera a posse após encerramento/crash.
+
+Timeout ao abrir/ler HTTP e resposta interrompida (`http.client.HTTPException`, inclusive `IncompleteRead`) são erros de transporte sanitizados; a resposta aberta é fechada e o conteúdo incompleto não entra no cache. Mantém-se a única retentativa já existente e as reservas consumidas. Isso não acrescenta interrupção imediata ao GET por callback: o limite descrito acima para cancelamento cooperativo continua válido.
+
+O stream de progresso de jobs (`GET /v1/jobs/{id}/events`) fecha explicitamente seu gerador quando o observador desconecta durante envio, espera ou expira seu prazo de leitura. Desconectar não cancela o job nem altera eventos persistidos; a tarefa só é cancelada pela ação explícita existente, e um novo observador pode retomar pelo cursor. O stream tem testes ASGI sem sockets, incluindo falha de envio e liberação da condição de notificação, em `backend/tests/test_progress_disconnect.py`.
+
 ```powershell
 & backend/.venv/Scripts/python.exe -m pytest backend/tests/radar_youtube -q
 ```

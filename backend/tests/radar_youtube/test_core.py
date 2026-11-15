@@ -522,6 +522,109 @@ def test_cancel_while_waiting_for_collection_lock(state):
     assert not fake.calls
 
 
+@pytest.mark.parametrize('timeout', [0, .1])
+def test_stuck_collection_lock_times_out_without_quota_or_partial_revision(state, timeout):
+    from time import monotonic
+    from horus_backend.radar_youtube import CollectionLockTimeout
+    contender = RadarState(state.path, clock=state.clock, lock_timeout=timeout)
+    engine, fake = collector(contender, [video()])
+    with state.collection_lock():
+        started = monotonic()
+        with pytest.raises(CollectionLockTimeout, match='trava do Radar'):
+            engine.collect(CollectionRequest(videos=[VIDEO]))
+        assert monotonic() - started < 1
+    assert not fake.calls
+    with state.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM radar_datasets').fetchone()[0] == 0
+    # O handle do concorrente foi fechado; não há trava órfã nem retry automático.
+    assert engine.collect(CollectionRequest(videos=[VIDEO])).status == 'complete'
+
+
+@pytest.mark.parametrize('timeout', [-1, float('inf'), float('nan')])
+def test_collection_lock_rejects_unbounded_or_negative_timeout(tmp_path, timeout):
+    with pytest.raises(ValueError, match='Timeout da trava'):
+        RadarState(tmp_path / 'radar-youtube.sqlite3', lock_timeout=timeout)
+    assert not (tmp_path / 'radar-youtube.sqlite3').exists()
+
+
+@pytest.mark.parametrize('during', ['open', 'read'])
+def test_http_timeout_is_bounded_sanitized_and_closes_response(monkeypatch, during):
+    from horus_backend.radar_youtube import transport
+    response = BytesIO(b'')
+    calls = []
+
+    def timeout(*args):
+        raise socket.timeout('private-url?key=mock-sensitive')
+
+    class Opener:
+        def open(self, request, *, timeout):
+            calls.append(timeout)
+            if during == 'open':
+                raise socket.timeout('private-url?key=mock-sensitive')
+            return response
+
+    if during == 'read':
+        monkeypatch.setattr(response, 'read', timeout)
+    monkeypatch.setattr(transport, 'build_opener', lambda *_: Opener())
+    with pytest.raises(CollectionError) as caught:
+        GoogleTransport('mock-sensitive', allow_network=True, timeout=2).get('videos', {})
+    assert caught.value.code == 'transport' and caught.value.retryable
+    assert 'mock-sensitive' not in str(caught.value)
+    assert calls == [2]
+    if during == 'read':
+        assert response.closed
+
+
+def test_interrupted_http_body_is_sanitized_and_never_cached(state, monkeypatch):
+    from http.client import IncompleteRead
+    from horus_backend.radar_youtube import transport
+    responses = []
+
+    class Interrupted(BytesIO):
+        def read(self, size=-1):
+            raise IncompleteRead(b'private-partial-key=mock-sensitive', 100)
+
+    class Opener:
+        def open(self, *args, **kwargs):
+            response = Interrupted()
+            responses.append(response)
+            return response
+
+    monkeypatch.setattr(transport, 'build_opener', lambda *_: Opener())
+    engine = YouTubeCollector(GoogleTransport('mock-sensitive', allow_network=True), state, sleep=lambda _: None)
+    dataset = engine.collect(CollectionRequest(videos=[VIDEO], enrich_channels=False))
+    assert dataset.status == 'failed' and dataset.records == []
+    assert dataset.issues[0].code == 'transport' and dataset.issues[0].retryable
+    assert 'mock-sensitive' not in dataset.model_dump_json()
+    assert len(responses) == 2 and all(response.closed for response in responses)
+    with state.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM radar_cache').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == 2
+    with state.collection_lock():
+        pass
+
+
+def test_interrupted_http_error_body_is_closed_and_sanitized(monkeypatch):
+    from http.client import IncompleteRead
+    from horus_backend.radar_youtube import transport
+
+    class Interrupted(BytesIO):
+        def read(self, size=-1):
+            raise IncompleteRead(b'private-key=mock-sensitive', 100)
+
+    body = Interrupted()
+    class Opener:
+        def open(self, *args, **kwargs):
+            raise HTTPError('https://example/?key=mock-sensitive', 503, 'private', {}, body)
+
+    monkeypatch.setattr(transport, 'build_opener', lambda *_: Opener())
+    with pytest.raises(CollectionError) as caught:
+        GoogleTransport('mock-sensitive', allow_network=True).get('videos', {})
+    assert caught.value.code == 'http_503' and caught.value.retryable
+    assert 'mock-sensitive' not in str(caught.value) and body.closed
+
+
 def test_cleanup_exact_expiry_preserves_live_revisions_and_quota_window(state):
     engine, _ = collector(state, [video()])
     original = engine.collect(CollectionRequest(videos=[VIDEO], enrich_channels=False))
