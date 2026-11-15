@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { EyeMark } from './components/Identity';
 import { NotificationBellButton, NotificationsPanel } from './components/NotificationsCenter';
-import { navigation, Overview, Preview, SectionHeader, sections } from './components/Sections';
+import { navigation, Overview, SectionHeader, sections } from './components/Sections';
 import type { Page } from './components/Sections';
 import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
 import { connectDesktop, nativeDesktop } from './platform/desktop';
@@ -18,6 +18,7 @@ import {
 } from './services/shortcuts';
 import type { ShortcutId, ShortcutPreferences } from './services/shortcuts';
 import type { EditorialFocusTarget } from './features/EditorialWorkflows';
+import type { ErrorCenterItem } from './services/errorCenter';
 import type { Theme } from './features/Settings';
 
 const Library = lazy(() => import('./features/Library'));
@@ -27,6 +28,7 @@ const Transcription = lazy(() => import('./features/Transcription'));
 const Radar = lazy(() => import('./features/Radar'));
 const EditorialWorkflows = lazy(() => import('./features/EditorialWorkflows'));
 const ProductionCenter = lazy(() => import('./features/ProductionCenter'));
+const ErrorCenter = lazy(() => import('./features/ErrorCenter'));
 
 export default function App() {
   const [page, setPage] = useState<Page | 'production-center'>('overview');
@@ -75,6 +77,8 @@ export default function App() {
   const [notificationsHiddenBy404, setNotificationsHiddenBy404] = useState(false);
   const [bellAnnouncement, setBellAnnouncement] = useState('');
   const [notificationFocusTarget, setNotificationFocusTarget] = useState<EditorialFocusTarget | null>(null);
+  const [focusJobId, setFocusJobId] = useState<string | null>(null);
+  const [errorCenterFocusNonce, setErrorCenterFocusNonce] = useState(0);
   const [shortcutPrefs, setShortcutPrefs] = useState<ShortcutPreferences>(loadShortcutPreferences);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [librarySearchNonce, setLibrarySearchNonce] = useState(0);
@@ -132,6 +136,24 @@ export default function App() {
     [dismissNotice, productionNotice],
   );
 
+  const handleNavigateFromError = useCallback((item: ErrorCenterItem) => {
+    if (item.ref.kind === 'job') {
+      setFocusJobId(item.ref.id);
+      setPage('production');
+      return;
+    }
+    const targetId =
+      item.ref.kind === 'workflow' && item.ref.workflow_id
+        ? item.ref.workflow_id
+        : item.ref.id;
+    setNotificationFocusTarget({
+      kind: item.ref.kind,
+      id: targetId,
+      nonce: Date.now(),
+    });
+    setPage('production');
+  }, []);
+
   useEffect(() => {
     if (!shortcutPrefs.enabled) return;
 
@@ -173,6 +195,14 @@ export default function App() {
         setPage('library');
         setLibrarySearchNonce(value => value + 1);
         setNavAnnouncement('Biblioteca: busca focada.');
+        return;
+      }
+
+      if (matchesShortcut(event, shortcutPrefs.bindings['nav.error-center'])) {
+        event.preventDefault();
+        setPage('history');
+        setErrorCenterFocusNonce(n => n + 1);
+        setNavAnnouncement('Navegou para Central de erros.');
         return;
       }
 
@@ -251,7 +281,7 @@ export default function App() {
           : page === 'transcription' ? null
           : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={() => setPage('production')} onOpenSettings={() => setPage('settings')} /></div>
           : page === 'radar' ? <div className="page"><SectionHeader section={sections.radar} /><Radar connection={connection} onOpenProduction={() => setPage('production')} /></div>
-          : <div className="page"><SectionHeader section={sections[page]} />{page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} focusTarget={notificationFocusTarget} />}{(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} />}{page === 'history' && <Preview section={sections[page]} />}</div>}
+          : <div className="page"><SectionHeader section={sections[page]} />{page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} focusTarget={notificationFocusTarget} />}{(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} focusJobId={focusJobId} />}{page === 'history' && <ErrorCenter connection={connection} onNavigateItem={handleNavigateFromError} focusNonce={errorCenterFocusNonce} />}</div>}
         {(transcriptionOpened || page === 'transcription') && (
           <Transcription
             connection={connection}
