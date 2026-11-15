@@ -7,13 +7,22 @@ arquivos com formato de credencial, links simbólicos/junções. Cada arquivo te
 `verify_export` confere hashes, nomes seguros e a integridade dos bancos. O pacote contém dados privados do usuário:
 guarde-o como o próprio banco (BitLocker; fora de pastas sincronizadas).
 
-CLI: `python -m horus_backend.local_data_export export <pasta-de-dados> --to <pacote.zip>` e `... verify <pacote.zip>`.
+Restauração (HOR-093): `restore_local_data` devolve o pacote a uma pasta de dados **nova ou vazia** escolhida pelo usuário,
+nunca sobrescrevendo nada. Verifica o pacote por completo antes de escrever, recusa schema de banco mais novo que o do
+aplicativo, grava numa pasta temporária irmã (hash conferido durante a gravação) e só então troca para o destino. Segredos
+não fazem parte do pacote: o usuário reconfigura Hermes e demais credenciais. A mídia e os arquivos finais das produções
+(`exports/`) também não entram no pacote e, portanto, não são restaurados. Não migra o banco.
+
+CLI: `python -m horus_backend.local_data_export export <pasta-de-dados> --to <pacote.zip>`, `... verify <pacote.zip>` e
+`... restore <pacote.zip> --to <pasta-nova-ou-vazia>`.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -23,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .backups import _inspect
+from .migrations import SCHEMA_VERSION
 
 SCHEMA = 1
 MAX_MANIFEST_FILE = 5 * 1024 * 1024
@@ -30,6 +40,11 @@ SECRET_SHAPE = re.compile(
     r"\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36,}|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}|-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"
     r"|\bBearer\s+[A-Za-z0-9._~+/-]{24,}|(?i:\b(?:api[_-]?key|secret|token|password|senha)\b[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+_=-]{20,}[\"'])")
 SAFE_NAME = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,100}/)*[A-Za-z0-9][A-Za-z0-9._-]{0,100}$")
+MAX_ENTRIES = 20000
+ALLOWED_NAME = re.compile(r"^(?:database/(?:horus|radar-youtube)\.sqlite3|settings/narration-preference\.json"
+                          r"|productions/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.json)$")
+RESTORE_TARGET = {"database/horus.sqlite3": "horus.sqlite3", "database/radar-youtube.sqlite3": "radar/radar-youtube.sqlite3",
+                  "settings/narration-preference.json": "narration-preference.json"}
 EXCLUDED_AREAS = ("integrations/", "models/", "exports/")
 
 
@@ -184,17 +199,82 @@ def verify_export(package: Path) -> dict:
     return {"ok": not errors, "errors": errors}
 
 
+def restore_local_data(package: Path, destination: Path) -> dict:
+    """Restaura o pacote verificado numa pasta de dados nova/vazia, de forma atômica. Nunca sobrescreve nem migra."""
+    package, destination = Path(package), Path(destination)
+    if _is_link(destination):
+        raise ValueError("O destino não pode ser um link; escolha uma pasta nova ou vazia.")
+    if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
+        raise ValueError("O destino precisa ser uma pasta nova ou vazia; nada existente é sobrescrito.")
+    if not destination.parent.is_dir():
+        raise ValueError("A pasta que conterá o destino não existe.")
+    report = verify_export(package)
+    if not report["ok"]:
+        raise ValueError("Pacote não verificado; nada foi escrito: " + "; ".join(report["errors"][:3]))
+    with zipfile.ZipFile(package) as archive:
+        if len(archive.infolist()) > MAX_ENTRIES:
+            raise ValueError("Pacote com entradas demais; nada foi escrito.")
+        manifest = json.loads(archive.read("manifest.json"))
+        declared = {f["name"]: f for f in manifest["files"]}
+        refused = [n for n in declared if not ALLOWED_NAME.fullmatch(n)]
+        if refused:
+            raise ValueError(f"Pacote contém arquivo fora do formato do Hórus ({refused[0]}); nada foi escrito.")
+        for info in archive.infolist():
+            if (info.external_attr >> 16) & 0o170000 == 0o120000:   # entrada de link simbólico
+                raise ValueError("Pacote contém link simbólico; nada foi escrito.")
+        operational = (manifest.get("databases") or {}).get("horus.sqlite3", {}).get("user_version")
+        if type(operational) is not int or operational < 0:
+            raise ValueError("Versão do banco ausente no manifesto; nada foi escrito.")
+        if operational > SCHEMA_VERSION:
+            raise ValueError(f"O pacote vem de uma versão mais nova do Hórus (banco v{operational}; este aplicativo entende até "
+                             f"v{SCHEMA_VERSION}). Atualize o Hórus antes de restaurar; nada foi escrito.")
+        stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=destination.parent))
+        try:
+            restored = []
+            for name, item in declared.items():
+                relative = RESTORE_TARGET.get(name, name)   # produções mantêm o caminho relativo da pasta de dados
+                target = stage / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                digest, total = hashlib.sha256(), 0
+                with archive.open(name) as stream, target.open("xb") as out:
+                    while chunk := stream.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > item["size"]:
+                            raise ValueError(f"Conteúdo maior que o declarado: {name}")
+                        digest.update(chunk)
+                        out.write(chunk)
+                if total != item["size"] or digest.hexdigest() != item["sha256"]:
+                    raise ValueError(f"Arquivo alterado durante a restauração: {name}")
+                if relative.endswith(".json") and SECRET_SHAPE.search(target.read_text(encoding="utf-8", errors="replace")):
+                    raise ValueError(f"Arquivo com formato de credencial recusado: {name}")
+                if relative.endswith(".sqlite3"):
+                    with closing(sqlite3.connect(f"{target.resolve().as_uri()}?mode=ro", uri=True)) as db:
+                        if not _inspect(db)["ok"]:
+                            raise ValueError(f"Banco restaurado sem integridade: {name}")
+                restored.append(relative)
+            if destination.exists():
+                destination.rmdir()   # só existe vazia (conferido acima); falha se alguém escreveu nela nesse intervalo
+            os.rename(stage, destination)   # atômico no mesmo volume; nunca substitui uma pasta existente
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)   # nada parcial no destino
+            raise
+    return {"ok": True, "destination": str(destination), "files": len(restored), "database_version": operational,
+            "instruction": "Restaurado sem migração: aponte HORUS_DATA_DIR para a nova pasta; o Hórus migra o banco ao abrir. "
+                           "Credenciais (Hermes, tokens) não fazem parte do pacote: reconfigure-as. Mídia e exports finais não são restaurados."}
+
+
 def main(argv: list[str]) -> int:
     import argparse
     parser = argparse.ArgumentParser(description="Exporta/verifica os dados locais do Hórus (somente leitura da origem).")
-    parser.add_argument("command", choices=("export", "verify"))
-    parser.add_argument("path", type=Path, help="pasta de dados (export) ou pacote .zip (verify)")
+    parser.add_argument("command", choices=("export", "verify", "restore"))
+    parser.add_argument("path", type=Path, help="pasta de dados (export) ou pacote .zip (verify, restore)")
     parser.add_argument("--to", type=Path)
     args = parser.parse_args(argv)
-    if (args.command == "export") != (args.to is not None):
-        parser.error("export exige --to; verify não aceita --to")
+    if (args.command != "verify") != (args.to is not None):
+        parser.error("export e restore exigem --to; verify não aceita --to")
     try:
-        report = export_local_data(args.path, args.to) if args.command == "export" else verify_export(args.path)
+        report = {"export": lambda: export_local_data(args.path, args.to), "verify": lambda: verify_export(args.path),
+                  "restore": lambda: restore_local_data(args.path, args.to)}[args.command]()
     except (OSError, ValueError, sqlite3.Error) as error:
         report = {"ok": False, "error": str(error) if isinstance(error, ValueError) else "Operação recusada; nada foi sobrescrito."}
     print(json.dumps(report, ensure_ascii=False, indent=2))
