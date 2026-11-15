@@ -36,6 +36,7 @@ from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
+from .error_center import ErrorCenter
 from .notifications import NotificationService
 from .project_import import ImportRefused, ImportService
 from .storage import Store
@@ -158,6 +159,25 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise HTTPException(422, str(error)) from None
         except OSError:
             raise HTTPException(500, "Não foi possível salvar o estado de leitura.") from None
+
+    error_center = ErrorCenter(store)
+
+    @app.get("/v1/errors")
+    def list_errors(limit: int = Query(50, ge=1, le=200), after: str | None = Query(None, max_length=300),
+                    stage: str | None = Query(None, max_length=40), code: str | None = Query(None, max_length=60),
+                    kind: str | None = Query(None, max_length=20), since: str | None = Query(None, max_length=40),
+                    until: str | None = Query(None, max_length=40)):
+        try:
+            return error_center.page(limit, after, stage=stage, code=code, kind=kind, since=since, until=until)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/v1/errors/summary")
+    def errors_summary(since: str | None = Query(None, max_length=40), until: str | None = Query(None, max_length=40)):
+        try:
+            return error_center.summary(since=since, until=until)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
 
     imports = ImportService(settings.data_dir)
 
