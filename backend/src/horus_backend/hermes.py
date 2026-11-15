@@ -28,7 +28,9 @@ def read_connection(settings: Settings):
     config = json.loads(raw)
     if not isinstance(config, dict):
         raise ValueError("Configuração inválida")
-    url, token = config.get("base_url"), config.get("token")
+    from .hermes_credential import vault_token
+    # O cofre do SO tem preferência; sem ele (indisponível, vazio ou inválido) vale o token do arquivo atual.
+    url, token = config.get("base_url"), vault_token(settings.hermes_config) or config.get("token")
     if not isinstance(url, str) or not isinstance(token, str) or not 16 <= len(token) <= 4096:
         raise ValueError("Configuração incompleta")
     if any(ord(char) < 33 or ord(char) > 126 for char in token):

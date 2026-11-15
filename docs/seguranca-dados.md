@@ -216,3 +216,22 @@ Testes antigos gravaram valores sintéticos no Credential Manager real (serviço
 Interpretação: valor `1` = `encrypted`/`on`; `2` = `not_encrypted`/`off` (volume sem criptografia **ou com a proteção suspensa**: a propriedade não diferencia); qualquer outro valor, erro, prazo esgotado, volume sem letra (UNC) ou plataforma sem a consulta = `unverified` com orientação. A propriedade não distingue BitLocker de criptografia de dispositivo, por isso `method` é `null`. O texto `guidance` (pt-BR) explica o que é, por que importa para os dados do Hórus, como ativar (Pro/Enterprise/Education: Criptografia de dispositivo ou BitLocker no Painel de Controle; **Home não tem BitLocker**: usar Criptografia de dispositivo, em computadores compatíveis, com conta Microsoft) e lembra de guardar a chave de recuperação fora do computador.
 
 Verificado: o mapeamento `1`/`2` e o texto estão cobertos por testes com consulta simulada (`test_disk_encryption.py`); na máquina de desenvolvimento (Windows 10 Pro, sem BitLocker ativo) a consulta real devolveu `2`. **Não foi possível confirmar o valor `1` em um volume realmente criptografado** (sem volume assim disponível); até essa confirmação, o resultado `encrypted` deve ser tratado como a leitura documentada pela comunidade, não como certificação. A exibição do aviso na interface não faz parte deste incremento.
+
+## Endurecimento de credenciais e da pasta de dados (HOR-120): implementado em ferramentas; aplicação real depende de autorização
+
+Nada nesta seção foi aplicado a dados ou credenciais reais. Cada item tem ferramenta testada em ambiente isolado (cofre em memória, pasta e `HORUS_DATA_DIR` temporários) e a aplicação real fica **dependente de autorização do usuário**, com os comandos exatos abaixo.
+
+### 7.2 Token do Hermes no cofre do SO
+
+`hermes.read_connection` agora **prefere o token do cofre** (`keyring`, serviço `horus.hermes.connection`, usuário = SHA-256 do caminho resolvido do arquivo de conexão) e usa o token do arquivo atual (`integrations/hermes.json`) quando o cofre está indisponível, vazio ou guarda valor inválido. A URL continua vindo do arquivo; o campo `token` do arquivo passa a ser opcional quando o cofre o tem. Sem o cofre, o comportamento é o anterior. Módulo: `backend/src/horus_backend/hermes_credential.py`; testes: `backend/tests/test_hermes_credential.py`.
+
+Migração (simulação por padrão; copia, **relê e compara**; não apaga o arquivo e não revoga nem rotaciona nada; nunca imprime o valor):
+
+```powershell
+# 1) simulação (não altera nada)
+& backend/.venv/Scripts/python.exe -m horus_backend.hermes_credential migrate --config "<pasta-de-dados>\integrations\hermes.json"
+# 2) APLICAR NO COFRE REAL: somente com autorização do usuário; pede a confirmação digitada MIGRAR
+& backend/.venv/Scripts/python.exe -m horus_backend.hermes_credential migrate --config "<pasta-de-dados>\integrations\hermes.json" --apply
+```
+
+Um token diferente já presente no cofre nunca é sobrescrito sem `--replace`. **Remover o campo `token` do arquivo** é um passo manual posterior e também exige autorização (reversão: gravar o token de volta no arquivo ou apagar a entrada do cofre; o arquivo original só deve ser alterado depois de a leitura pelo cofre ter sido conferida com a verificação do Hermes em Ajustes). A tela de segurança (`/v1/security/status`) continua descrevendo o arquivo como local do token até esse passo final.
