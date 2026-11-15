@@ -179,6 +179,25 @@ def test_api_import_list_confirm_and_busy_remove(client, source):
     assert (source / 'model.bin').is_file()
 
 
+def test_imported_small_is_available_for_production_alignment_without_restart(client, source, monkeypatch):
+    from horus_backend.diagnostics import WindowsSapi
+    monkeypatch.setattr(WindowsSapi, 'voices', lambda self: [])
+    def alignment():
+        report = client.get('/v1/diagnostics').json()
+        return next(c for c in report['production']['checks'] if c['id'] == 'alignment_model')
+    assert alignment()['available'] is False
+    response = client.post('/v1/transcription/models/import', json={
+        'model': 'small', 'source_directory': str(source), 'confirm_license': True})
+    assert response.status_code == 201
+    assert alignment()['available'] is True
+
+
+def test_explicit_alignment_model_still_overrides_import_directory(tmp_path):
+    settings = Settings(token='whisper-model-test-token-0123456789', data_dir=tmp_path,
+                        alignment_model=tmp_path / 'selected')
+    assert settings.alignment_models_dir == tmp_path / 'selected'
+
+
 @pytest.mark.parametrize('directory', ['relative/path', r'\\server\share', r'C:\model:stream'])
 def test_api_rejects_unsafe_source_paths(client, directory):
     response = client.post('/v1/transcription/models/import',
