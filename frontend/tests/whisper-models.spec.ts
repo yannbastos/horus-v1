@@ -52,17 +52,38 @@ function makeInitialModels(): ModelRecord[] {
   ];
 }
 
+type CatalogModelRecord = {
+  model: string;
+  size_bytes: number;
+  source: { host: string; url: string };
+  license: { identifier: string; url: string };
+  sha256?: string | null;
+  destination_label: string;
+};
+
 type SetupOptions = {
   models?: ModelRecord[];
+  catalogModels?: CatalogModelRecord[] | null;
   cudaRuntime?: Record<string, unknown> | null;
   omitCudaField?: boolean;
   importError?: { status: number; detail: string } | null;
   deleteError?: { status: number; detail: string } | null;
+  downloadStartError?: { status: number; detail: string } | null;
+  downloadOutcome?: 'succeeded' | 'failed' | 'cancelled';
+  downloadFailureMessage?: string;
+  holdAfterProgress?: boolean;
 };
 
 async function setupMockBackend(page: Page, options: SetupOptions = {}) {
   let models = (options.models ?? makeInitialModels()).map(item => ({ ...item }));
-  const calls: { method: string; path: string; body: unknown }[] = [];
+  const calls: { method: string; path: string; body: unknown; headers: Record<string, string> }[] = [];
+  let releaseDownloadCompletion: (() => void) | null = null;
+  const downloadCompletionGate = options.holdAfterProgress
+    ? new Promise<void>(resolve => {
+        releaseDownloadCompletion = resolve;
+      })
+    : Promise.resolve();
+  let cancelledViaApi = false;
 
   await page.route('http://127.0.0.1:8765/**', async route => {
     const request = route.request();
@@ -77,7 +98,7 @@ async function setupMockBackend(page: Page, options: SetupOptions = {}) {
 
     const raw = request.postData();
     const body = raw ? JSON.parse(raw) : null;
-    calls.push({ method, path, body });
+    calls.push({ method, path, body, headers: request.headers() });
 
     if (path === '/health') {
       return route.fulfill({ headers: cors, json: { status: 'ready', database_id: 'test-db' } });
@@ -112,6 +133,100 @@ async function setupMockBackend(page: Page, options: SetupOptions = {}) {
 
     if (path === '/v1/transcription/models' && method === 'GET') {
       return route.fulfill({ headers: cors, json: { models } });
+    }
+
+    if (path === '/v1/transcription/models/catalog' && method === 'GET') {
+      if (!options.catalogModels) {
+        return route.fulfill({ status: 404, headers: cors, json: { detail: 'Not found' } });
+      }
+      return route.fulfill({ headers: cors, json: { models: options.catalogModels } });
+    }
+
+    if (path.startsWith('/v1/transcription/models/') && path.endsWith('/download') && method === 'POST') {
+      if (options.downloadStartError) {
+        return route.fulfill({
+          status: options.downloadStartError.status,
+          headers: cors,
+          json: { detail: options.downloadStartError.detail },
+        });
+      }
+      return route.fulfill({ status: 202, headers: cors, json: { job_id: 'job-dl-small' } });
+    }
+
+    if (path === '/v1/jobs/job-dl-small/events' && method === 'GET') {
+      const after = Number(url.searchParams.get('after') ?? '0');
+      if (after === 0) {
+        const lines = [
+          JSON.stringify({ sequence: 1, kind: 'status', message: 'Baixando arquivos do modelo…' }),
+          JSON.stringify({ sequence: 2, kind: 'progress', message: '45' }),
+        ].join('\n') + '\n';
+        return route.fulfill({
+          status: 200,
+          headers: { ...cors, 'Content-Type': 'application/x-ndjson' },
+          body: lines,
+        });
+      }
+
+      await downloadCompletionGate;
+      const finalStatus = cancelledViaApi ? 'cancelled' : (options.downloadOutcome ?? 'succeeded');
+      if (finalStatus === 'succeeded') {
+        models = models.map(item =>
+          item.model === 'small'
+            ? {
+                model: 'small',
+                installed: true,
+                managed: true,
+                size_bytes: 508_559_360,
+                license: { identifier: 'MIT', status: 'verified', model_card_present: true },
+                source: { kind: 'catalog_download', name: 'huggingface.co' },
+                removable: true,
+              }
+            : item
+        );
+      }
+      const completeJob = {
+        id: 'job-dl-small',
+        status: finalStatus,
+        attempt: 1,
+        created_at: '2026-11-15T09:00:00Z',
+        updated_at: '2026-11-15T09:00:10Z',
+        payload: { operation: 'transcription.run', path: '', model: 'small', language: 'pt' },
+        error: finalStatus === 'failed' ? (options.downloadFailureMessage ?? 'Checksum SHA-256 divergente') : null,
+        result: finalStatus === 'succeeded' ? { model: 'small' } : null,
+      };
+      const lines = [
+        JSON.stringify({ sequence: 3, kind: 'status', message: 'Verificando integridade SHA-256…' }),
+        JSON.stringify({ sequence: 4, kind: 'complete', message: 'Finalizado', job: completeJob }),
+      ].join('\n') + '\n';
+      return route.fulfill({
+        status: 200,
+        headers: { ...cors, 'Content-Type': 'application/x-ndjson' },
+        body: lines,
+      });
+    }
+
+    if (path === '/v1/jobs/job-dl-small/cancel' && method === 'POST') {
+      cancelledViaApi = true;
+      releaseDownloadCompletion?.();
+      return route.fulfill({ status: 200, headers: cors, json: { status: 'cancel_requested' } });
+    }
+
+    if (path === '/v1/jobs/job-dl-small' && method === 'GET') {
+      const finalStatus = cancelledViaApi ? 'cancelled' : (options.downloadOutcome ?? 'running');
+      return route.fulfill({
+        status: 200,
+        headers: cors,
+        json: {
+          id: 'job-dl-small',
+          status: finalStatus,
+          attempt: 1,
+          created_at: '2026-11-15T09:00:00Z',
+          updated_at: '2026-11-15T09:00:10Z',
+          payload: { operation: 'transcription.run', path: '', model: 'small', language: 'pt' },
+          error: finalStatus === 'failed' ? (options.downloadFailureMessage ?? 'Checksum SHA-256 divergente') : null,
+          result: null,
+        },
+      });
     }
 
     if (path === '/v1/transcription/models/import' && method === 'POST') {
@@ -175,7 +290,7 @@ async function setupMockBackend(page: Page, options: SetupOptions = {}) {
   await page.getByRole('button', { name: 'CONECTAR BACKEND', exact: true }).click();
   await expect(page.getByTestId('whisper-models-list')).toBeVisible();
 
-  return { calls };
+  return { calls, releaseDownloadCompletion: () => releaseDownloadCompletion?.() };
 }
 
 test.describe('Modelos Whisper e Runtime CUDA', () => {
@@ -337,5 +452,138 @@ test.describe('Modelos Whisper e Runtime CUDA', () => {
     await expect(warningBox).toBeVisible();
     await page.getByTestId('transcription-manage-models-shortcut').click();
     await expect(page.getByTestId('whisper-models-panel')).toBeVisible();
+  });
+
+  test('esconde opção de baixar modelo quando o catálogo retorna 404, mantendo importação manual', async ({ page }) => {
+    await setupMockBackend(page, { catalogModels: null });
+
+    await expect(page.getByTestId('whisper-download-btn-small')).toHaveCount(0);
+    await expect(page.getByTestId('whisper-import-btn-small')).toBeVisible();
+  });
+
+  test('fluxo completo de download explícito: prévia obrigatória, confirmação, progresso acessível e verificação concluída (+ axe)', async ({ page }) => {
+    const catalogSmall: CatalogModelRecord = {
+      model: 'small',
+      size_bytes: 508_559_360,
+      source: { host: 'huggingface.co', url: 'https://huggingface.co/Systran/faster-whisper-small' },
+      license: { identifier: 'MIT', url: 'https://opensource.org/licenses/MIT' },
+      sha256: 'e3b0c44298fc1c149afbf4c8996fb924',
+      destination_label: 'Dados locais do Hórus / whisper / small',
+    };
+
+    const { calls, releaseDownloadCompletion } = await setupMockBackend(page, {
+      catalogModels: [catalogSmall],
+      holdAfterProgress: true,
+      downloadOutcome: 'succeeded',
+    });
+
+    await page.getByTestId('whisper-download-btn-small').click();
+    const preview = page.getByTestId('whisper-download-preview-small');
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText('small');
+    await expect(preview).toContainText('485 MB');
+    await expect(preview).toContainText('huggingface.co');
+    await expect(preview).toContainText('Dados locais do Hórus / whisper / small');
+    await expect(preview).toContainText('e3b0c44298fc1c149afbf4c8996fb924');
+
+    const licenseLink = preview.getByRole('link', { name: /MIT/i });
+    await expect(licenseLink).toHaveAttribute('href', 'https://opensource.org/licenses/MIT');
+
+    const confirmBtn = page.getByTestId('whisper-confirm-download-btn-small');
+    await expect(confirmBtn).toBeDisabled();
+
+    const axePreview = await new AxeBuilder({ page })
+      .include('[data-testid="whisper-models-panel"]')
+      .analyze();
+    expect(axePreview.violations).toEqual([]);
+
+    await preview.getByRole('checkbox').check();
+    await expect(confirmBtn).toBeEnabled();
+    await confirmBtn.click();
+
+    const progressBox = page.getByTestId('whisper-download-progress-small');
+    await expect(progressBox).toBeVisible();
+    const progressBar = page.getByTestId('whisper-download-progressbar-small');
+    await expect(progressBar).toHaveAttribute('role', 'progressbar');
+    await expect(progressBar).toHaveAttribute('aria-valuemin', '0');
+    await expect(progressBar).toHaveAttribute('aria-valuemax', '100');
+    await expect(progressBar).toHaveAttribute('aria-valuenow', '45');
+    await expect(page.getByTestId('whisper-download-progress-value-small')).toHaveText('45%');
+
+    const axeProgress = await new AxeBuilder({ page })
+      .include('[data-testid="whisper-models-panel"]')
+      .analyze();
+    expect(axeProgress.violations).toEqual([]);
+
+    releaseDownloadCompletion();
+
+    await expect(page.getByTestId('whisper-models-action-success')).toContainText('verificação concluída');
+    await expect(page.getByTestId('whisper-models-action-success')).toContainText('SHA-256 validado');
+    await expect(page.getByTestId('whisper-model-item-small')).toContainText('INSTALADO');
+
+    const downloadCall = calls.find(c => c.path === '/v1/transcription/models/small/download');
+    expect(downloadCall?.method).toBe('POST');
+    expect(downloadCall?.body).toEqual({ confirm: true });
+    expect(downloadCall?.headers['idempotency-key']).toBeTruthy();
+  });
+
+  test('permite cancelar download em andamento via POST /v1/jobs/{id}/cancel', async ({ page }) => {
+    const catalogSmall: CatalogModelRecord = {
+      model: 'small',
+      size_bytes: 508_559_360,
+      source: { host: 'huggingface.co', url: 'https://huggingface.co/Systran/faster-whisper-small' },
+      license: { identifier: 'MIT', url: 'https://opensource.org/licenses/MIT' },
+      destination_label: 'Dados locais do Hórus / whisper / small',
+    };
+
+    const { calls } = await setupMockBackend(page, {
+      catalogModels: [catalogSmall],
+      holdAfterProgress: true,
+    });
+
+    await page.getByTestId('whisper-download-btn-small').click();
+    await page.getByTestId('whisper-download-preview-small').getByRole('checkbox').check();
+    await page.getByTestId('whisper-confirm-download-btn-small').click();
+
+    await expect(page.getByTestId('whisper-download-progress-small')).toBeVisible();
+    await page.getByTestId('whisper-cancel-download-btn-small').click();
+
+    await expect(page.getByTestId('whisper-models-action-notice')).toContainText('cancelado');
+    await expect(page.getByTestId('whisper-model-item-small')).toContainText('AUSENTE');
+    expect(calls.some(c => c.method === 'POST' && c.path === '/v1/jobs/job-dl-small/cancel')).toBe(true);
+  });
+
+  test('exibe erro acionável quando o download falha na verificação ou ao iniciar', async ({ page }) => {
+    const catalogSmall: CatalogModelRecord = {
+      model: 'small',
+      size_bytes: 508_559_360,
+      source: { host: 'huggingface.co', url: 'https://huggingface.co/Systran/faster-whisper-small' },
+      license: { identifier: 'MIT', url: 'https://opensource.org/licenses/MIT' },
+      destination_label: 'Dados locais do Hórus / whisper / small',
+    };
+
+    // Caso 1: erro 503 ao iniciar
+    await setupMockBackend(page, {
+      catalogModels: [catalogSmall],
+      downloadStartError: { status: 503, detail: 'Upstream unreachable' },
+    });
+
+    await page.getByTestId('whisper-download-btn-small').click();
+    await page.getByTestId('whisper-download-preview-small').getByRole('checkbox').check();
+    await page.getByTestId('whisper-confirm-download-btn-small').click();
+    await expect(page.getByTestId('whisper-models-action-error')).toContainText('Falha de conexão');
+
+    // Caso 2: job falha com erro de checksum
+    await setupMockBackend(page, {
+      catalogModels: [catalogSmall],
+      downloadOutcome: 'failed',
+      downloadFailureMessage: 'Checksum SHA-256 divergente',
+    });
+
+    await page.getByTestId('whisper-download-btn-small').click();
+    await page.getByTestId('whisper-download-preview-small').getByRole('checkbox').check();
+    await page.getByTestId('whisper-confirm-download-btn-small').click();
+    await expect(page.getByTestId('whisper-models-action-error')).toContainText('Checksum SHA-256 divergente');
+    await expect(page.getByTestId('whisper-models-action-error')).toContainText('importação de pasta local');
   });
 });
