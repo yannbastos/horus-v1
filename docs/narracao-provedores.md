@@ -21,6 +21,16 @@ pelo pedido padrão sem preferência; planos antigos mantêm o helper SAPI anter
 O worker chama `NarrationProvider.synthesize` uma vez por seção em um processo
 possuído, com timeout global de síntese de 1200 s e encerramento da árvore por
 cancelamento/timeout. SAPI/Piper têm limite de 60 s por comando; Kokoro tem 120 s por seção/prévia.
+
+O cliente reserva até 150 s para o POST de geração da prévia local: os 120 s
+da síntese Kokoro mais 30 s de margem para validação dos pesos/WAV, limpeza do
+processo e transporte. Consultas, preferências e download do WAV continuam com
+20 s; o prazo e o sinal de cancelamento permanecem ativos até ler o corpo da
+resposta. Estourar o prazo mostra orientação em português para conferir o
+backend/provedor e tentar novamente. Parar a prévia ou sair da tela cancela a
+espera no cliente sem exibir erro; uma resposta tardia não inicia reprodução.
+Isso não acrescenta cancelamento remoto da síntese em curso no servidor.
+
 SAPI reutiliza o helper COM existente; Piper usa seu executável separado. As cenas
 continuam no helper Windows. Não há download, Hermes ou troca de renderer.
 

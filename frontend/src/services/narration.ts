@@ -9,6 +9,9 @@ import type { FailureDetail } from './production';
 export const PREVIEW_MAX_CHARS = 300;
 export const DEFAULT_PREVIEW_TEXT = 'Esta é uma frase fictícia para ouvir a voz escolhida. Nenhum roteiro real é enviado.';
 export const DEFAULT_VOICE_PATH = '/v1/narration/preference';
+// Kokoro tem 120 s de síntese no servidor; os 30 s adicionais cobrem validação
+// dos pesos/WAV, encerramento do processo e transporte da resposta.
+const PREVIEW_TIMEOUT_MS = 150_000;
 
 export type ProviderKind = 'local' | 'paid_api';
 export type ProviderStatus = 'available' | 'not_installed' | 'not_configured' | 'disabled' | 'blocked';
@@ -125,12 +128,13 @@ function parseConfigured(raw: unknown): boolean {
   return c.configured;
 }
 
-async function request(connection: Connection, path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+async function request<T>(connection: Connection, path: string, read: (response: Response) => Promise<T>, init: RequestInit = {}, signal?: AbortSignal, timeoutMs = 20_000): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
-  const timeout = window.setTimeout(abort, 20000);
+  let timedOut = false;
+  const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     const response = await fetch(connection.baseUrl + path, {
       ...init, signal: controller.signal,
@@ -151,11 +155,24 @@ async function request(connection: Connection, path: string, init: RequestInit =
         `Não foi possível concluir a operação (${response.status}${code ? `, ${code}` : ''}).`;
       throw new NarrationError(message, response.status, code, failure);
     }
-    return response;
+    // Manter prazo e cancelamento ativos também enquanto o corpo é recebido.
+    return await read(response);
+  } catch (reason) {
+    if (signal?.aborted) throw new NarrationError('Operação de narração cancelada.', 0, 'client_cancelled');
+    if (timedOut) {
+      const message = path === '/v1/narration/preview'
+        ? 'A geração da prévia excedeu 150 segundos. Tente novamente; se persistir, confira o provedor e os recursos locais em Ajustes.'
+        : 'O serviço de narração demorou mais de 20 segundos para responder. Confira se o backend local está ativo e tente novamente.';
+      throw new NarrationError(message, 0, 'client_timeout');
+    }
+    if (reason instanceof Error && reason.name === 'AbortError') {
+      throw new NarrationError('A operação de narração foi interrompida. Tente novamente; se persistir, confira o backend local.', 0, 'request_aborted');
+    }
+    throw reason;
   } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); }
 }
-async function json(connection: Connection, path: string, init?: RequestInit, signal?: AbortSignal): Promise<unknown> {
-  return (await request(connection, path, init, signal)).json();
+async function json(connection: Connection, path: string, init?: RequestInit, signal?: AbortSignal, timeoutMs?: number): Promise<unknown> {
+  return request(connection, path, response => response.json(), init, signal, timeoutMs);
 }
 
 export async function getProviders(connection: Connection, signal?: AbortSignal) {
@@ -170,11 +187,11 @@ export async function estimateNarration(connection: Connection, body: EstimateRe
  */
 export async function previewNarration(connection: Connection, body: { provider: string; voice_id: string; text: string }, signal?: AbortSignal): Promise<Blob> {
   if (body.text.length > PREVIEW_MAX_CHARS) throw new Error(`O texto da prévia aceita até ${PREVIEW_MAX_CHARS} caracteres.`);
-  const created = obj(await json(connection, '/v1/narration/preview', { method: 'POST', body: JSON.stringify(body) }, signal), 'prévia');
+  const created = obj(await json(connection, '/v1/narration/preview', { method: 'POST', body: JSON.stringify(body) }, signal, PREVIEW_TIMEOUT_MS), 'prévia');
   const id = str(created.id, 'id da prévia');
   const url = str(created.url, 'endereço da prévia');
   if (url !== `/v1/narration/previews/${id}`) bad('endereço da prévia');
-  return (await request(connection, url, {}, signal)).blob();
+  return request(connection, url, response => response.blob(), {}, signal);
 }
 export async function setElevenLabsCredential(connection: Connection, key: string): Promise<boolean> {
   return parseConfigured(await json(connection, '/v1/narration/providers/elevenlabs/credential', { method: 'PUT', body: JSON.stringify({ key }) }));
