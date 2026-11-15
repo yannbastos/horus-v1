@@ -74,6 +74,36 @@ HKCU e usa uma pasta temporária exclusiva para a instalação.
 O ensaio no computador de desenvolvimento com PATH mínimo não equivale a uma
 VM limpa, nem valida atualização, migração ou rollback.
 
+## Atualização e rollback manual isolados
+
+Gere os instaladores N e N+1 sequencialmente (memória limitada), sem alterar
+manifestos versionados; N+1 muda somente o número no override Tauri local:
+
+```powershell
+powershell -NoProfile -File scripts/build-upgrade-installers.ps1
+powershell -NoProfile -File scripts/test-windows-installer.ps1 `
+  -Installer installer-test-artifacts/HORUS_0.1.0_x64-setup.exe `
+  -UpgradeInstaller installer-test-artifacts/HORUS_0.1.1_x64-setup.exe
+```
+
+O segundo parâmetro habilita N → N+1 → N na mesma pasta instalada, com o mesmo
+`HORUS_DATA_DIR` temporário exclusivo. Após iniciar N, o teste grava uma linha
+sintética em `media` e um arquivo; verifica ambos e `PRAGMA integrity_check`
+antes e depois de iniciar cada reinstalação. Os smokes autenticados verificam
+health, diagnostics e ausência de backend órfão após fechamento normal e queda.
+A desinstalação ocorre em `finally`, inclusive após falha do ensaio.
+
+Como as versões diferem só pelo número, ambas usam o mesmo schema: esse ciclo
+valida rollback manual compatível, sem migração real entre versões de schema.
+Um teste negativo separado copia o banco temporário, aumenta `user_version`
+em um e executa o backend instalado: exige saída com erro, nenhuma indicação
+`ready`, mensagem `Banco criado por uma versão mais recente do Hórus. Migração
+recusada.` e hash SHA-256 do banco inalterado. A mensagem é verificada no stderr
+do backend; isso não comprova apresentação desse erro na janela do desktop.
+Não há downgrade automático de schema: para uma versão antiga incompatível,
+é necessário recuperar backup compatível em procedimento separado e validado.
+Não há auto-update, assinatura, publicação nem acesso aos dados reais.
+
 ## Evidência local — 14/11/2026
 
 Windows x64, Python 3.12.16, PyInstaller 6.22.3, Tauri 2.12.5.
@@ -92,3 +122,21 @@ anterior levou 18,118 s. Tempos variam com cache e antivírus.
 API, snapshot OpenAPI e diagnóstico: **58 testes aprovados**, 123,38 s;
 um aviso de depreciação Starlette/httpx. O contrato da API permaneceu intacto.
 Não equivale à validação em máquina limpa nem ao aceite de atualização/rollback.
+
+### Ensaio adicional de atualização e rollback — 14/11/2026
+
+Na base `ac1759b`, os builds sequenciais geraram NSIS 0.1.0 de 16.347.013 bytes
+e 0.1.1 de 16.347.135 bytes; só o número Tauri foi alterado por override local.
+`test-windows-installer.ps1 -Installer …0.1.0… -UpgradeInstaller …0.1.1…`
+terminou com código zero: registro HKCU confirmou 0.1.0 → 0.1.1 → 0.1.0,
+linha sintética SQLite e arquivo preservados, integridade `ok`, sete smokes
+autenticados aprovados (quatro fechamentos normais e três quedas), sem backend
+ou descendentes órfãos. Inicialização após upgrade: 4,563 s; após rollback:
+2,001 s. Instalação inicial: 4,809 s; desinstalação: 1,295 s, com executável e
+entrada HKCU removidos ao fim.
+
+Ambos os backends instalados recusaram cópia com schema v10 (suportam v9),
+com mensagem explícita no stderr e SHA-256 do banco inalterado. Isso valida
+o guard de incompatibilidade, sem certificar uma migração real ou a mensagem
+na interface. Ensaio no computador de desenvolvimento, não em máquina limpa;
+os critérios mais amplos de instalação/migração em VM continuam pendentes.

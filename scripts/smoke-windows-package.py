@@ -5,6 +5,7 @@ Requer psutil somente no Python que executa o teste, nunca no aplicativo.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import ctypes
 from ctypes import wintypes
 import json
@@ -46,9 +47,10 @@ def close_window(pid):
     user32.EnumWindows(visit, 0)
 
 
-def smoke(executable, desktop=False, crash=False):
+def smoke(executable, desktop=False, crash=False, data_dir=None):
     started = time.perf_counter()
-    with tempfile.TemporaryDirectory(prefix="horus-package-smoke-") as folder:
+    with (nullcontext(str(data_dir)) if data_dir else tempfile.TemporaryDirectory(prefix="horus-package-smoke-")) as folder:
+        Path(folder).mkdir(parents=True, exist_ok=True)
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("HORUS_", "FABRICA_", "PYTHON", "UV_", "VIRTUAL_ENV"))}
         # Sem node, uv, Python, ffmpeg ou modelos descobertos pelo ambiente do operador.
@@ -101,6 +103,7 @@ def smoke(executable, desktop=False, crash=False):
             assert {"faster_whisper", "ctranslate2", "av", "ffmpeg", "node"} <= set(missing), missing
             assert not diagnostics["production"]["ready"]
             assert (Path(folder) / "horus.sqlite3").is_file()
+            descendants = psutil.Process(proc.pid).children(recursive=True)
             if desktop:
                 if crash:
                     proc.kill()
@@ -113,6 +116,8 @@ def smoke(executable, desktop=False, crash=False):
             while backend.is_running() and time.monotonic() < deadline:
                 time.sleep(.1)
             assert not backend.is_running(), "Backend órfão"
+            _, alive = psutil.wait_procs(descendants, timeout=10)
+            assert not alive, f"Processos descendentes órfãos: {[p.pid for p in alive]}"
             print(json.dumps(dict(mode="desktop-crash" if crash else "desktop" if desktop else "backend",
                                   ready_seconds=round(ready_seconds, 3), total_seconds=round(time.perf_counter()-started, 3),
                                   missing=missing, orphan_backend=False), ensure_ascii=False))
@@ -133,5 +138,6 @@ if __name__ == "__main__":
     parser.add_argument("executable", type=Path)
     parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--crash", action="store_true")
+    parser.add_argument("--data-dir", type=Path, help="Diretório descartável compartilhado entre versões")
     args = parser.parse_args()
-    smoke(args.executable.resolve(), args.desktop, args.crash)
+    smoke(args.executable.resolve(), args.desktop, args.crash, args.data_dir)
