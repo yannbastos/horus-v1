@@ -103,12 +103,16 @@ test.describe('Auditoria de UX — layout, foco e acessibilidade', () => {
         await expect(page.getByText('Análises editoriais e aprovações')).toBeVisible();
         await expect(page.getByText('PRÉVIA DE LAYOUT · EM PREPARAÇÃO')).toHaveCount(0);
 
-        // 6. Canais não repete bloco genérico de prévia; Histórico operacional mantém
+        // 6. Canais e Histórico operacional não repetem o placeholder antigo.
         await page.locator('.sidebar').getByRole('button', { name: 'Canais', exact: true }).click();
         await expect(page.getByText('Uma etapa por vez.')).toBeVisible();
         await expect(page.getByText('PRÉVIA DE LAYOUT · EM PREPARAÇÃO')).toHaveCount(0);
         await page.locator('.sidebar').getByRole('button', { name: 'Histórico operacional', exact: true }).click();
-        await expect(page.getByText('PRÉVIA DE LAYOUT · EM PREPARAÇÃO')).toBeVisible();
+        await expect(page.getByRole('heading', { level: 2, name: 'Central de erros' })).toBeVisible();
+        await expect(page.getByTestId('error-center-disconnected')).toBeVisible();
+        await expect(page.getByText('PRÉVIA DE LAYOUT · EM PREPARAÇÃO')).toHaveCount(0);
+        const historyAxe = await new AxeBuilder({ page }).analyze();
+        expect(historyAxe.violations).toEqual([]);
       });
     }
   }

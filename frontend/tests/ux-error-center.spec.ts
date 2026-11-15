@@ -112,13 +112,12 @@ async function installErrorCenterMocks(
   page: Page,
   options: {
     items?: MockErrorItem[];
-    failNextErrorsRequest?: boolean;
+    shouldFailErrorsRequest?: () => boolean;
     onErrorsRequest?: (url: URL) => void;
     onSummaryRequest?: (url: URL) => void;
   } = {},
 ) {
   const allItems = options.items ?? makeErrorFixtures();
-  let failOnce = Boolean(options.failNextErrorsRequest);
 
   await page.route('http://127.0.0.1:8765/v1/errors/summary**', async route => {
     const url = new URL(route.request().url());
@@ -160,8 +159,7 @@ async function installErrorCenterMocks(
     const url = new URL(route.request().url());
     options.onErrorsRequest?.(url);
 
-    if (failOnce) {
-      failOnce = false;
+    if (options.shouldFailErrorsRequest?.()) {
       await route.fulfill({
         status: 500,
         headers: { ...corsHeaders, 'content-type': 'application/json' },
@@ -315,10 +313,12 @@ test.describe('Central de erros (HOR-095)', () => {
 
   test('estados vazio e de erro com nova tentativa funcionam e passam no axe', async ({ page }) => {
     const state = newBackendState();
+    // StrictMode pode repetir a consulta inicial; a recuperação é controlada pelo teste.
+    let failErrorsRequests = true;
     await installBackend(page, state);
     await installErrorCenterMocks(page, {
       items: [],
-      failNextErrorsRequest: true,
+      shouldFailErrorsRequest: () => failErrorsRequests,
     });
 
     await connectSession(page);
@@ -329,6 +329,7 @@ test.describe('Central de erros (HOR-095)', () => {
     await runAxeInBothThemes(page, 'Central de erros em erro');
 
     // Tentar novamente carrega estado vazio
+    failErrorsRequests = false;
     await page.getByTestId('error-center-error').getByRole('button', { name: 'Tentar novamente' }).click();
     await expect(page.getByTestId('error-center-empty')).toBeVisible();
     await expect(page.getByTestId('error-center-empty')).toContainText('Nenhuma falha registrada');
