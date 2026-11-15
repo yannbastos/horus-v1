@@ -2041,6 +2041,9 @@ export default function ProductionRun({
 
           {videoArtifact && normalizedWordTimings && (
             <TimecodeReviewWorkspace
+              connection={connection}
+              productionId={activeProduction.id}
+              videoArtifactSha256={videoArtifact.sha256}
               currentTimeSeconds={currentTimeSeconds}
               scenes={sceneNavItems}
               subtitles={subtitleNavItems}
