@@ -141,7 +141,7 @@ test('verifica Hermes por ação explícita e atualiza o estado sem enviar promp
   await panel.getByRole('button', { name: 'VERIFICAR CONEXÃO HERMES', exact: true }).click();
   await expect(panel.getByText('O Hermes recusou a credencial local.')).toBeVisible();
   await expect(page.locator('.integration')).toContainText('CLI localizado');
-  expect(requests.every(request => ['GET /health', 'GET /v1/hermes', 'GET /v1/diagnostics', 'POST /v1/hermes/probe', 'GET /v1/transcription/models'].includes(request))).toBe(true);
+  expect(requests.every(request => ['GET /health', 'GET /v1/hermes', 'GET /v1/diagnostics', 'POST /v1/hermes/probe', 'GET /v1/transcription/models', 'GET /v1/notifications/unread-count'].includes(request))).toBe(true);
 });
 
 test('transcreve a fila, exige salvar antes de avançar e preserva o estado entre telas', async ({ page }) => {
