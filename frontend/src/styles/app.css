@@ -10,7 +10,7 @@ body { margin: 0; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-:focus-visible { outline: var(--FocusRingWidth) solid var(--FocusRingColor); outline-offset: var(--FocusRingOffset); }
+:focus-visible { outline: var(--FocusRingWidth) solid var(--FocusRingColor, var(--AccentInk)); outline-offset: var(--FocusRingOffset); }
 .horus { background: var(--Background); color: var(--Ink); font: var(--TextBody)/1.2 var(--FontSans); height: 100vh; display: grid; grid-template-columns: 216px minmax(0,1fr); }
 h1, h2, h3, .brand-name { font-family: var(--FontDisplay); font-weight: 600; color: var(--InkStrong); line-height: 1.1; }
 h1, h2, h3, p { margin: 0; }
