@@ -107,44 +107,46 @@ Continua exigindo autorização do usuário: inferência real, APIs pagas, crede
 
 Algumas entregas validadas ficam fora da `main` por decisão de integração (ex.: migrações enquanto o usuário testa). Antes de delegar, confira na Issue indicada:
 
-### F.1 Cadeia retida da linha Hermes (estado de 14/11/2026)
+### F.1 Linha retida do Hermes: UMA branch para integrar — `integ-hermes-line-v3` (14/11/2026)
 
-Todas as branches estão publicadas em `origin` e **nenhuma está na `main`**. Cada uma contém a anterior; migrações aditivas v10–v12.
+A `integ-hermes-line-v3` está publicada em `origin`, parte da `main` de 14/11/2026 e já traz, com merges normais e conflitos resolvidos preservando a `main` (modelos Whisper locais, CUDA, `file_access`, prévia Kokoro, UX), **toda** a linha retida. **Integre somente esta**; as demais são históricas e não devem ser mescladas separadamente.
 
-| Ordem | Branch | O que acrescenta | Migração | Issue de gestão |
+| Ordem de merge na v3 | Branch de origem | O que acrescenta | Migração | Issue |
 |---|---|---|---|---|
-| 1 | `yannbastos/integ-hermes-line-v2` | etapa `script` do Hermes (HOR-134) + conciliação + auditoria append-only de transmissões (HOR-115), já integradas entre si | v10 (`scripts.generator`), v11 (`transmissions`) | #121, #103 |
-| 2 | `feat-hor-111-egress-gateway` | gateway único de saída HTTP, deny by default, allowlist (`HORUS_EGRESS_ALLOW`), anti-rebinding, auditoria; allowlist de download derivada de `is_youtube_url` | — | #99 |
+| 1 | `yannbastos/integ-hermes-line-v2` | etapa `script` do Hermes (HOR-134), conciliação e auditoria append-only de transmissões (HOR-115) | v10 (`scripts.generator`), v11 (`transmissions`) | #121, #103 |
+| 2 | `feat-hor-111-egress-gateway` | gateway único de saída HTTP (deny by default, `HORUS_EGRESS_ALLOW`, anti-rebinding) | — | #99 |
 | 3 | `feat-hor-107-human-checkpoints` | checkpoints humanos para gastar e publicar, com barreira no backend | v12 (`human_checkpoints`) | #95 |
-| paralela | `yannbastos/feat-hor-115-transmissions-ui` | tela de transmissões (frontend); parte de `integ-hermes-line-v2`, **não** depende de 2 e 3 | — | #103 |
+| 4 | `test-hor-130-adversarial` | bateria adversarial integrada; descrição de checkpoint sem bidi/invisíveis | — | #117 |
+| 5 | `yannbastos/feat-hor-115-transmissions-ui` | tela de transmissões em Privacidade e Segurança | — | #103 |
+| 6 | `yannbastos/feat-hor-107-checkpoints-ui` | histórico e diálogo de checkpoints humanos | — | #95 |
 
-As branches originais `feat-hor-134-script-stage`, `fix-hor-134-script-stage-review` e `feat-hor-115-transmission-audit` já estão contidas na linha (não integre separadamente). A `integ-hermes-line` (v1) é anterior e foi substituída pela v2.
+Ajustes próprios da v3 (só testes/snapshots): snapshot OpenAPI consolidado e **aditivo** (+297 linhas, 0 removidas: `HermesScriptRequest`, `CheckpointRequest`, `GET /v1/security/transmissions`, `POST /v1/workflows/{id}/scripts/reconcile`, `POST/GET /v1/checkpoints`); snapshot das respostas do primeiro vídeo com o diagnóstico `cuda_runtime` (+14, aditivo); o teste de paginação de transmissões passou a comparar a sequência de cursores (o StrictMode duplica a busca inicial).
 
-**Contrato da API:** todo o aumento é aditivo e o snapshot (`backend/tests/snapshots/openapi.json`) já está atualizado nas branches. **Aprovado** para a integração desta linha após o teste do primeiro vídeo: `HermesScriptRequest`, `GET /v1/security/transmissions`, `POST /v1/workflows/{id}/scripts/reconcile` (ordem 1) e `POST/GET /v1/checkpoints` (ordem 3). Diferença extra no snapshot ao integrar = parar e avisar.
+**Validação feita na v3 (14/11/2026):** backend + `contracts/hermes`: 2490 passed, 36 skipped (as 2 falhas eram ambiente/snapshot, já tratadas: extra `transcription` ausente no venv e `cuda_runtime` fora do snapshot do primeiro vídeo); snapshot OpenAPI só aditivo; migração v9→v12 em cópia com backup verificado e idempotente; build do frontend verde; Playwright completo 236 passed, 4 skipped e 1 falha de teste corrigida (paginação de transmissões, spec reexecutado: 4 passed); jornada real com o backend do próprio worktree: teste 1 (Maria) passou em 4,8 min e a execução foi **interrompida por falta de memória do sistema** antes dos testes 2–4, que **não foram executados** nesta rodada (repetir na integração, com a máquina livre).
 
-**Quando integrar:** somente depois de o usuário testar o primeiro vídeo na `main` atual (o fluxo não deve mudar até lá), em lote, com a suíte completa uma única vez. Não use dados reais do usuário: `HORUS_DATA_DIR` temporário.
+**Quando integrar:** somente depois de o usuário testar o primeiro vídeo na `main` atual (o fluxo não deve mudar até lá), em lote. Não use dados reais do usuário: `HORUS_DATA_DIR` temporário. O snapshot aditivo da linha está **aprovado** para a integração; qualquer diferença adicional = parar e avisar.
 
-**Procedimento e validação (a partir de `origin/main` atualizada; merge normal, sem rebase nem force):**
+**Procedimento (merge normal, sem rebase nem force):**
 
 ```powershell
 git fetch origin
-git switch -c integ-linha-hermes origin/main
-git merge --no-ff origin/yannbastos/integ-hermes-line-v2      # 1; conflitos esperados em api.py (imports/handlers): manter o que a main já tem
-git merge --no-ff origin/feat-hor-111-egress-gateway          # 2
-git merge --no-ff origin/feat-hor-107-human-checkpoints       # 3
-uv sync --project backend --frozen --extra test
+git switch -c integ-linha-hermes-main origin/main
+git merge --no-ff origin/integ-hermes-line-v3                 # se a main andou, conflitos tendem a ser só testes/snapshots
+uv sync --project backend --frozen --extra test --extra transcription   # o extra transcription evita 1 falha de ambiente em test_transcription_error_paths
+npm --prefix frontend ci --ignore-scripts --userconfig frontend/.npmrc
 & backend/.venv/Scripts/python.exe -m pytest backend/tests contracts/hermes/tests -q      # uma vez
-$env:HORUS_UPDATE_API_SNAPSHOT = '1'; & backend/.venv/Scripts/python.exe -m pytest backend/tests/test_api_contract_snapshot.py -q; Remove-Item Env:HORUS_UPDATE_API_SNAPSHOT
-git diff --stat -- backend/tests/snapshots                    # só linhas adicionadas, nada removido
+$env:HORUS_UPDATE_API_SNAPSHOT = '1'; & backend/.venv/Scripts/python.exe -m pytest backend/tests/test_api_contract_snapshot.py backend/tests/test_first_video_response_shapes.py -q; Remove-Item Env:HORUS_UPDATE_API_SNAPSHOT
+git diff --stat -- backend/tests/snapshots                    # só linhas adicionadas
+npm --prefix frontend run build
+npm --prefix frontend test                                    # Playwright completo (HORUS_FRONTEND_PORT livre)
 ```
 
-Conflitos prováveis ao integrar na `main` de hoje: `backend/src/horus_backend/api.py` (imports e handlers de `script_call`), testes que fixam `user_version` (já usam `SCHEMA_VERSION` nas branches) e a allowlist de `test_network_inventory.py` (o gateway acrescenta F-20). Depois da suíte:
+Depois:
 
-1. **Migração v9→v12 em CÓPIA** de um banco de teste (nunca o real): criar o banco na v9, copiar, abrir a cópia com `horus_backend.migrations.migrate`, conferir `PRAGMA user_version = 12`, integridade, o backup automático `horus.backup-v9-*` (verificável com `python -m horus_backend.backups verify`) e que reabrir é idempotente. Antes de migrar o banco real do usuário, gerar o pacote verificável: `python -m horus_backend.local_data_export export <pasta-de-dados> --to <pacote.zip>` e `verify`.
-2. Frontend da ordem paralela (`feat-hor-115-transmissions-ui`): `npm --prefix frontend ci --ignore-scripts`, `npm --prefix frontend run build`, `npm --prefix frontend test` (Playwright). Integrar por último, com a identidade visual preservada.
-3. Jornada real opcional (`node frontend/scripts/e2e-backend.mjs run`, variáveis em [piloto-local.md](piloto-local.md)); com a máquina carregada os tempos sobem ~2,5× e a auditoria de rede do render já espera até 30 s pelo NetLog.
-4. Atualizar as Issues #121, #103, #99 e #95 (evidência + Status) e mover para Concluído.
+1. **Migração v9→v12 em CÓPIA** de um banco de teste (nunca o real): criar o banco na v9, copiar, abrir a cópia com `horus_backend.migrations.migrate`, conferir `PRAGMA user_version = 12`, integridade, as tabelas novas (`transmissions`, `human_checkpoints`), o backup automático `horus.backup-v9-*` (`python -m horus_backend.backups verify`) e que reabrir é idempotente. Antes de migrar o banco real, gerar e verificar o pacote: `python -m horus_backend.local_data_export export <pasta-de-dados> --to <pacote.zip>` e `verify`.
+2. Jornada real (`node frontend/scripts/e2e-backend.mjs run`, variáveis em [piloto-local.md](piloto-local.md)) com `HORUS_E2E_STRICT=1`; máquina carregada multiplica os tempos e a auditoria de rede do render já espera até 30 s pelo NetLog.
+3. Atualizar as Issues #121, #103, #99, #95 e #117 (evidência + Status) e mover para Concluído.
 
-Não ativar inferência real, provedores pagos nem publicação ao integrar: o gate de segurança e os checkpoints humanos continuam bloqueando por padrão.
+Não ativar inferência real, provedores pagos nem publicação ao integrar: o gate de segurança e os checkpoints humanos continuam bloqueando por padrão. A decisão pendente de provedor/modelo está em [avaliacao-provedores-hermes.md](avaliacao-provedores-hermes.md).
 
 Siga a seção "Eficiência de consumo" de [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md).
