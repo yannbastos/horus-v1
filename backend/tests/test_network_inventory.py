@@ -82,6 +82,7 @@ def scan_source(text: str) -> set[str]:
 
 # arquivo (relativo a horus_backend) -> {achado: ID do inventário}. Qualquer achado fora daqui reprova.
 ALLOWLIST: dict[str, dict[str, str]] = {
+    "worker_runtime.py": {"call:run_sync": "F-11", "dynamic_import:import_module": "F-11", "import:subprocess": "F-11"},
     "hermes.py": {  # F-01 diagnóstico loopback do Hermes
         "import:urllib.request": "F-01", "call:build_opener": "F-01"},
     "workflow_hermes.py": {  # F-02 execuções cognitivas (gate + autorização) em loopback

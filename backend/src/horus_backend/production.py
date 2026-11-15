@@ -9,7 +9,6 @@ import math
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
-import sys
 import uuid
 import time
 from typing import Literal
@@ -327,8 +326,9 @@ class ProductionService:
                     narration={k:saved['audio'][k] for k in ('provider','voice_id') if saved['audio'].get(k) is not None})
                 if digest(ProductionPlan.model_validate_json(plan).model_dump(mode="json")) != digest(expected_plan.model_dump(mode="json")):
                     raise WorkflowConflict("Plano não corresponde ao roteiro aprovado.")
-            if getattr(sys, "frozen", False):
-                raise WorkflowConflict("Worker de produção requer backend Python preparado; empacotamento ainda não homologado.")
+            from .worker_runtime import production_worker_available, worker_command
+            if not production_worker_available():
+                raise WorkflowConflict("Worker de produção instalado indisponível; repare o aplicativo e confira o diagnóstico.")
             root = self.root(production_id)
             # Nenhum retry escreve sobre arquivos de tentativa anterior.
             if root.exists():
@@ -339,7 +339,8 @@ class ProductionService:
             (root / "plan.json").write_text(plan, encoding="utf-8")
             self.store.update(job_id, "running", new_attempt=True, result={"stage": "prepare"})
             await manager.emit(job_id, "state", "running")
-            command = [sys.executable, str(Path(__file__).with_name("production_worker.py")), str(root)]
+            command = worker_command("production-worker", root,
+                development=[str(Path(__file__).with_name("production_worker.py"))])
             if row["mode"] in {"local_demo", "local_pilot"} and self.settings.factory_root:
                 command += ["--factory-source", str(self.settings.factory_root)]
             # Ambiente mínimo: nenhum token, .env, perfil ou credencial de operador.
