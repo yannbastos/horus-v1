@@ -249,7 +249,7 @@ export function ReadinessPanel({
 
       {connection && !loading && !error && report && (
         <>
-          <div className="card" style={{ gap: 10 }}>
+          <div className="card" style={{ gap: 'var(--Space4)' }}>
             <p className="eyebrow">JÁ FUNCIONA AGORA</p>
             <p className="muted">
               Interface local, Biblioteca de mídia, organização de produções e preparação de
@@ -269,7 +269,7 @@ export function ReadinessPanel({
               : `${missingItems.length} de ${COMPONENTS.length} componentes opcionais ainda não instalados (${missingItems.map(i => i.spec.title.split(' ')[0]).join(', ')}). Nenhum download automático é executado; siga as instruções abaixo para instalar localmente.`}
           </StatusMessage>
 
-          <div className="readiness-components-grid" style={{ display: 'grid', gap: 12 }}>
+          <div className="readiness-components-grid" style={{ display: 'grid', gap: 'var(--Space5)' }}>
             {items.map(({ spec, available }) => {
               const savedPath = selectedPaths[spec.id];
               const isEditing = editingId === spec.id;
@@ -289,7 +289,7 @@ export function ReadinessPanel({
                   {!available && (
                     <>
                       <p className="small-text">{spec.installSteps}</p>
-                      <div className="row spread" style={{ flexWrap: 'wrap', gap: 8 }}>
+                      <div className="row spread" style={{ flexWrap: 'wrap', gap: 'var(--Space3)' }}>
                         <code className="eyebrow" style={{ letterSpacing: 0.4 }}>
                           {spec.commandHint}
                         </code>

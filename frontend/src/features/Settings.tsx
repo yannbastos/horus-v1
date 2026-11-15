@@ -107,16 +107,16 @@ function EnvironmentDiagnostics({ connection }: { connection: Connection }) {
               ? `Falta configurar (${missingNames.length}): ${missingNames.join(', ')}.`
               : 'Falta concluir a configuração das ferramentas obrigatórias para produzir.'}
         </StatusMessage>
-        <ul className="readiness-checks" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}>
+        <ul className="readiness-checks" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 'var(--Space4)' }}>
           {production.checks.map(check => (
             <li
               key={check.id}
               data-testid={`production-check-${check.id}`}
-              style={{ padding: 12, border: '1px solid var(--Line)', background: 'var(--Background)', display: 'grid', gap: 6 }}
+              style={{ padding: 'var(--Space5)', border: '1px solid var(--Line)', background: 'var(--Background)', display: 'grid', gap: 'var(--Space2)' }}
             >
               <div className="row spread">
                 <strong>{check.name}</strong>
-                <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <div className="row" style={{ gap: 'var(--Space2)', flexWrap: 'wrap' }}>
                   <span className="tag" data-testid={`production-check-purpose-${check.id}`}>
                     Para: {formatRequiredFor(check.required_for)}
                   </span>
