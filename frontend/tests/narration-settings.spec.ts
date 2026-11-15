@@ -242,3 +242,113 @@ test('resposta fora do contrato mostra erro e nenhuma voz', async ({ page }) => 
   await setup(page, { providers: [{ id: 'x', name: 'Quebrado', kind: 'local', status: 'inventado', reason: '', voices: [] }] }).catch(() => undefined);
   await expect(page.getByRole('alert')).toContainText('Resposta de narração inválida');
 });
+
+// Retém somente o POST de síntese; o relógio virtual reproduz Kokoro lento sem
+// inferência, rede externa ou espera de minutos no teste de regressão.
+async function holdPreview(page: Page) {
+  let release!: () => void; let arrived!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const received = new Promise<void>(resolve => { arrived = resolve; });
+  await page.route('http://127.0.0.1:8765/v1/narration/preview', async route => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    arrived();
+    await held;
+    await route.fulfill({ headers: cors, json: { id: 'slow', url: '/v1/narration/previews/slow', expires_in_seconds: 300 } }).catch(() => undefined);
+  });
+  await page.route('http://127.0.0.1:8765/v1/narration/previews/slow', route => route.fulfill({
+    headers: { ...cors, 'Content-Type': 'audio/wav' }, body: wavFixture(),
+  }));
+  return { release, received };
+}
+
+test('prévia Kokoro de 69 segundos não é abortada pelo prazo de chamadas rápidas', async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { providers: providers(['available', 'available']) });
+  const pending = await holdPreview(page);
+  const item = page.getByRole('listitem', { name: 'pf_dora (Kokoro-82M)', exact: true });
+  try {
+    await item.getByRole('button', { name: /Ouvir prévia/ }).click();
+    await pending.received;
+    await page.clock.fastForward(69_000);
+    await expect(item.getByRole('status')).toContainText('gerando áudio');
+    await expect(item.getByRole('alert')).toHaveCount(0);
+    pending.release();
+    await expect(item.getByLabel('Prévia de pf_dora (Kokoro-82M)', { exact: true })).toBeVisible();
+  } finally { pending.release(); }
+});
+
+test('prazo esgotado da prévia mostra orientação em português sem AbortError cru', async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { providers: providers(['available', 'available']) });
+  const pending = await holdPreview(page);
+  const item = page.getByRole('listitem', { name: 'pf_dora (Kokoro-82M)', exact: true });
+  try {
+    await item.getByRole('button', { name: /Ouvir prévia/ }).click();
+    await pending.received;
+    await page.clock.fastForward(150_001);
+    await expect(item.getByRole('alert')).toContainText('A geração da prévia excedeu 150 segundos. Tente novamente');
+    await expect(item.getByRole('alert')).not.toContainText(/aborted|AbortError/);
+    await expect(item.getByLabel('Prévia de pf_dora (Kokoro-82M)', { exact: true })).toHaveCount(0);
+  } finally { pending.release(); }
+});
+
+test('parar prévia lenta cancela sem erro e ignora resposta tardia', async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { providers: providers(['available', 'available']) });
+  const pending = await holdPreview(page);
+  const item = page.getByRole('listitem', { name: 'pf_dora (Kokoro-82M)', exact: true });
+  try {
+    await item.getByRole('button', { name: /Ouvir prévia/ }).click();
+    await pending.received;
+    await page.clock.fastForward(25_000);
+    await item.getByRole('button', { name: /Parar prévia/ }).click();
+    pending.release();
+    await expect(item.getByRole('button', { name: /Ouvir prévia/ })).toBeEnabled();
+    await expect(item.getByRole('alert')).toHaveCount(0);
+    await expect(item.getByLabel('Prévia de pf_dora (Kokoro-82M)', { exact: true })).toHaveCount(0);
+  } finally { pending.release(); }
+});
+
+test('consultas de narração mantêm limite de 20 segundos e erro acionável', async ({ page }) => {
+  await page.clock.install();
+  await setup(page);
+  let release!: () => void; let arrived!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const received = new Promise<void>(resolve => { arrived = resolve; });
+  await page.route('http://127.0.0.1:8765/v1/narration/providers', async route => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    arrived(); await held;
+    await route.fulfill({ headers: cors, json: providers() }).catch(() => undefined);
+  });
+  try {
+    await page.getByRole('button', { name: 'ATUALIZAR', exact: true }).click();
+    await received;
+    await page.clock.fastForward(20_001);
+    await expect(page.getByRole('alert')).toContainText('mais de 20 segundos');
+    await expect(page.getByRole('alert')).toContainText('backend local está ativo');
+  } finally { release(); }
+});
+
+test('receber cabeçalhos do WAV não desativa o prazo de download do corpo', async ({ page }) => {
+  await page.clock.install();
+  await setup(page);
+  await page.evaluate(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      if (String(input).includes('/v1/narration/previews/')) {
+        (window as any).__wavBodyStarted = true;
+        return new Response(new ReadableStream({ start(controller) {
+          init?.signal?.addEventListener('abort', () => controller.error(new DOMException('signal is aborted without reason', 'AbortError')), { once: true });
+        } }), { headers: { 'Content-Type': 'audio/wav' } });
+      }
+      return original(input, init);
+    };
+  });
+  const item = page.getByRole('listitem', { name: 'Maria (Windows SAPI)', exact: true });
+  await item.getByRole('button', { name: /Ouvir prévia/ }).click();
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__wavBodyStarted))).toBe(true);
+  await page.clock.fastForward(20_001);
+  await expect(item.getByRole('alert')).toContainText('mais de 20 segundos');
+  await expect(item.getByRole('alert')).not.toContainText(/aborted|AbortError/);
+  await expect(item.locator('audio')).toHaveCount(0);
+});

@@ -445,7 +445,8 @@ test.describe('Jornada de produção — backend real', () => {
         await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.readyState)).toBeGreaterThanOrEqual(2);
         expect(await audio.evaluate((el: HTMLAudioElement) => el.duration)).toBeGreaterThan(0);
         await voice.getByRole('button', { name: 'Parar prévia de pf_dora (Kokoro-82M)', exact: true }).click();
-        await voice.getByRole('button', { name: 'Usar pf_dora (Kokoro-82M) como voz padrão', exact: true }).click();
+        // A base isolada ainda não tem voz padrão; o botão inclui o sufixo da ação.
+        await voice.getByRole('button', { name: /^Usar pf_dora \(Kokoro-82M\) como voz padrão/ }).click();
         await expect(narration.getByText(/Voz padrão salva: pf_dora/)).toBeVisible();
         await shot(page, 'final-01-voz-preferida');
       });
