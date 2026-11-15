@@ -148,3 +148,11 @@ Conflitos prováveis ao integrar na `main` de hoje: `backend/src/horus_backend/a
 Não ativar inferência real, provedores pagos nem publicação ao integrar: o gate de segurança e os checkpoints humanos continuam bloqueando por padrão.
 
 Siga a seção "Eficiência de consumo" de [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md).
+
+## G. Ponto de pausa (14/11/2026, noite)
+
+Pausa pedida pelo usuário. `main` publicada e validada (backend completo 2124 passed em e5d7c17; jornada real 3/3 sobre a produção no app instalado; Playwright completo 234/235 com a única falha corrigida em seguida). Nenhum agente em execução.
+
+- Aguardando o usuário: teste humano do primeiro vídeo (guia completo, inclusive prévia Kokoro); autorização específica para integrar `integ-hermes-line-v3` (§F.1); decisão sobre download automático do modelo Whisper; exclusão de dados locais (desenho em docs/seguranca-dados.md).
+- Retomar: revisão independente de docs/avaliacao-provedores-hermes.md (Issue #104, branch `review-hor-116-providers` se existir); variante Final da jornada (HORUS_E2E_FINAL=1) a repetir na `main` atual; UI das notificações e da importação já estão na `main`.
+- Regras de despacho: um Codex por vez (pedido do usuário); Antigravity sempre em worker novo com `--model gemini-4-hydrogen-medium`; confirmar `activity=working` após cada despacho.
