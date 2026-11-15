@@ -45,6 +45,17 @@ export async function selectSavePath(suggested: string): Promise<string | null> 
   return save({ title: 'Salvar transcrição', defaultPath: suggested, filters: [{ name: 'Texto', extensions: ['txt'] }] });
 }
 
+export async function selectZipPackage(): Promise<string | null> {
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    title: 'Importar pacote de projeto (.zip)',
+    filters: [{ name: 'Pacote Horus (.zip)', extensions: ['zip'] }],
+  });
+  return typeof selected === 'string' ? selected : null;
+}
+
 /** Arquivos soltos na janela desktop; o WebView não fornece caminhos ao HTML5 drag and drop. */
 export async function onFileDrop(handler: (event: { hovering: boolean; paths: string[] }) => void): Promise<() => void> {
   if (!nativeDesktop) return () => undefined;
