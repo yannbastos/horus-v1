@@ -7,6 +7,7 @@ from .narration.kokoro import Kokoro
 from .narration.providers import WindowsSapi, NarrationError
 from .speech_alignment import resolve_model_path
 from .cuda_runtime import inspect_runtime
+from .disk_space import disk_space_check
 
 
 def production_diagnostics(settings: Settings):
@@ -63,6 +64,7 @@ def production_diagnostics(settings: Settings):
     font = Path(configured) if configured else local or Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts/ariblk.ttf'
     add('subtitle_font', 'Fonte das legendas', font.is_file() and font.name in {'ArchivoExpanded-SemiBold.ttf', 'ariblk.ttf'},
         'Configure HORUS_SUBTITLE_FONT com ArchivoExpanded-SemiBold.ttf ou ariblk.ttf existente, ou prepare a fonte padrão do aplicativo.')
+    checks.append(disk_space_check(settings))
     missing = [c['id'] for c in checks if not c['available']]
     common_ready = not any(not c['available'] for c in checks if 'draft' in c['required_for'])
     return dict(checks=checks, ready=common_ready and bool(sapi or kokoro), missing=missing)
