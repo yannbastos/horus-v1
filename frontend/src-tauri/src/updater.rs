@@ -65,6 +65,7 @@ pub struct UpdaterState {
     operation: tauri::async_runtime::Mutex<()>,
     directory: PathBuf,
     installing: AtomicBool,
+    verifying: AtomicBool,
 }
 impl UpdaterState {
     pub fn installing(&self) -> bool {
@@ -161,13 +162,53 @@ fn configured(config: Option<&Value>) -> bool {
             })
     })
 }
+// Somente overlays locais de E2E podem fixar o sandbox: o NSIS pode reiniciar
+// via shell sem preservar variáveis do processo que iniciou o ensaio.
+pub fn e2e_root(app: &AppHandle) -> Option<PathBuf> {
+    if !configured(app.config().plugins.0.get("updater")) {
+        return None;
+    }
+    let raw = app
+        .config()
+        .plugins
+        .0
+        .get("horusUpdaterTest")?
+        .get("root")?
+        .as_str()?;
+    e2e_path(raw)
+}
+fn e2e_path(raw: &str) -> Option<PathBuf> {
+    let original = PathBuf::from(raw);
+    if !original.is_absolute() {
+        return None;
+    }
+    let root = original.canonicalize().ok()?;
+    let temp = std::env::temp_dir().canonicalize().ok()?;
+    if root.starts_with(temp)
+        && root
+            .file_name()?
+            .to_str()?
+            .starts_with("horus-updater-e2e-")
+    {
+        // canonicalize no Windows acrescenta \\?\, que não deve atravessar
+        // HORUS_DATA_DIR: Python/SQLite transformam isso em URI com autoridade.
+        Some(original)
+    } else {
+        None
+    }
+}
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let enabled = configured(app.config().plugins.0.get("updater"));
-    let directory = std::env::var_os("HORUS_DATA_DIR")
-        .map(PathBuf::from)
+    let directory = e2e_root(app.handle())
+        .map(|p| p.join("data"))
+        .or_else(|| std::env::var_os("HORUS_DATA_DIR").map(PathBuf::from))
         .unwrap_or(app.path().app_local_data_dir()?.join("workspace"))
         .join("updater");
     let auto_check = preference(&directory);
+    let pending = std::fs::read(directory.join("pending-health.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .filter(|_| enabled);
     if enabled {
         app.handle()
             .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -175,6 +216,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(UpdaterState {
         directory,
         installing: AtomicBool::new(false),
+        verifying: AtomicBool::new(pending.is_some()),
         operation: Default::default(),
         model: Mutex::new(Model {
             state: UpdateState::initial(
@@ -185,7 +227,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             update: None,
         }),
     });
-    if should_auto_check(enabled, auto_check) {
+    if let Some(pending) = pending {
+        phase(app.handle(), "installing");
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            verify_restart(handle, pending).await;
+        });
+    } else if should_auto_check(enabled, auto_check) {
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
             update_check(handle).await;
@@ -208,6 +256,9 @@ pub async fn update_set_auto_check(app: AppHandle, enabled: bool) -> UpdateState
 #[tauri::command(rename_all = "snake_case")]
 pub async fn update_check(app: AppHandle) -> UpdateState {
     let managed = app.state::<UpdaterState>();
+    if managed.verifying.load(Ordering::Acquire) {
+        return snapshot(&app);
+    }
     let Ok(_guard) = managed.operation.try_lock() else {
         return snapshot(&app);
     };
@@ -378,6 +429,9 @@ impl GuardBackend for LiveBackend<'_> {
 #[tauri::command(rename_all = "snake_case")]
 pub async fn update_install(app: AppHandle, confirmed_version: String) -> UpdateState {
     let managed = app.state::<UpdaterState>();
+    if managed.verifying.load(Ordering::Acquire) {
+        return snapshot(&app);
+    }
     let Ok(_guard) = managed.operation.try_lock() else {
         return snapshot(&app);
     };
@@ -524,7 +578,71 @@ impl PayloadBackend for LivePayload<'_> {
         }
     }
     fn install(&self, bytes: &[u8]) -> Result<(), &'static str> {
-        self.update.install(bytes).map_err(|_| "install_failed")
+        let directory = &self.backend.app.state::<UpdaterState>().directory;
+        let receipt = directory.join("pending-health.json");
+        std::fs::write(
+            &receipt,
+            json!({"target_version":self.update.version}).to_string(),
+        )
+        .map_err(|_| "install_failed")?;
+        self.update.install(bytes).map_err(|_| {
+            let _ = std::fs::remove_file(receipt);
+            "install_failed"
+        })
+    }
+}
+fn finish_health(
+    directory: &std::path::Path,
+    target: &str,
+    current: &str,
+    health: Option<&Value>,
+) -> std::io::Result<bool> {
+    let healthy = target == current
+        && health.is_some_and(|h| h["ok"] == true && h["integrity_check"] == "ok");
+    std::fs::write(directory.join("last-update-result.json"),json!({"target_version":target,"current_version":current,"healthy":healthy,"checked_at":timestamp()}).to_string())?;
+    if healthy {
+        std::fs::remove_file(directory.join("pending-health.json"))?;
+    }
+    Ok(healthy)
+}
+async fn verify_restart(app: AppHandle, pending: Value) {
+    let managed = app.state::<UpdaterState>();
+    let _guard = managed.operation.lock().await;
+    let connection = super::backend_connection(app.clone(), app.state::<BackendState>()).await;
+    let health = if let Ok(connection) = connection {
+        if let Ok(client) = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30))
+            .build()
+        {
+            backend(
+                &client,
+                &connection,
+                reqwest::Method::GET,
+                "/v1/update/health",
+            )
+            .await
+            .ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let target = pending["target_version"].as_str().unwrap_or("");
+    let healthy = finish_health(
+        &managed.directory,
+        target,
+        &snapshot(&app).current_version,
+        health.as_ref(),
+    )
+    .unwrap_or(false);
+    managed.verifying.store(false, Ordering::Release);
+    if healthy {
+        phase(&app, "idle");
+    } else {
+        failure(&app, "install_failed");
     }
 }
 async fn install_reserved(
@@ -562,6 +680,38 @@ fn download_error(error: &tauri_plugin_updater::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn success_receipt_requires_new_version_and_authenticated_integrity_health() {
+        let root =
+            std::env::temp_dir().join(format!("horus-updater-health-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("pending-health.json"), "{}").unwrap();
+        let good = json!({"ok":true,"integrity_check":"ok"});
+        for (current, health) in [("1.0.0", Some(&good)), ("1.1.0", None)] {
+            assert!(!finish_health(&root, "1.1.0", current, health).unwrap());
+            assert!(root.join("pending-health.json").exists());
+            let stored: Value = serde_json::from_slice(
+                &std::fs::read(root.join("last-update-result.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(stored["healthy"], false);
+        }
+        assert!(finish_health(&root, "1.1.0", "1.1.0", Some(&good)).unwrap());
+        assert!(!root.join("pending-health.json").exists());
+        std::fs::remove_file(root.join("last-update-result.json")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn e2e_path_keeps_sqlite_compatible_lexical_path_and_rejects_other_roots() {
+        let root = std::env::temp_dir().join(format!("horus-updater-e2e-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let selected = e2e_path(root.to_str().unwrap()).unwrap();
+        assert_eq!(selected, root);
+        assert!(!selected.to_string_lossy().starts_with(r"\\?\"));
+        assert!(e2e_path("relative-path").is_none());
+        assert!(e2e_path(std::env::temp_dir().to_str().unwrap()).is_none());
+        std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn preference_survives_restart_and_auto_check_requires_both_flags() {
         let directory =

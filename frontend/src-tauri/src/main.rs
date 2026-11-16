@@ -122,6 +122,12 @@ fn launch_backend(app: &AppHandle) -> Result<OwnedBackend, String> {
         .env("HORUS_DATA_DIR", std::env::var_os("HORUS_DATA_DIR").map(PathBuf::from).unwrap_or(data_dir))
         .env("PYTHONUNBUFFERED", "1").env("PYTHONUTF8", "1")
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(root)=updater::e2e_root(app) {
+        command.env("HORUS_DATA_DIR",root.join("data"))
+            .env("HORUS_HERMES_CONFIG",root.join("missing-hermes.json"))
+            .env("HORUS_HERMES_PROFILE",root.join("hermes-profile"))
+            .env("FABRICA_HOME",root.join("factory"));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -191,13 +197,14 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Não foi possível iniciar o Hórus desktop")
         .run(|handle, event| {
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                // Fechar a última janela deve encerrar também quando a inicialização
+                // do backend falhou. O exit explícito (code=Some) não é interceptado.
+                if code.is_some() { return; }
+                api.prevent_exit();
                 let owned = handle.state::<BackendState>().inner().0.lock().ok().and_then(|mut state| state.take());
-                if let Some(backend) = owned {
-                    api.prevent_exit();
-                    let app = handle.clone();
-                    std::thread::spawn(move || { backend.shutdown(); app.exit(0); });
-                }
+                let app = handle.clone();
+                std::thread::spawn(move || { if let Some(backend)=owned { backend.shutdown(); } app.exit(0); });
             }
         });
 }

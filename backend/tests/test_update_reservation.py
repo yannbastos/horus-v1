@@ -51,3 +51,12 @@ def test_worker_terminal_cleanup_still_blocks_update(tmp_path):
     assert client.post('/v1/update/backup',headers=headers).status_code==409
     app.state.manager.active_id=None
     assert not client.get('/v1/update/activity',headers=headers).json()['busy']
+
+
+def test_post_restart_health_requires_authentication_and_checks_real_database(tmp_path):
+    app=create_app(Settings(token='x'*32,data_dir=tmp_path/'workspace',factory_root=None,hermes_executable=None))
+    client=TestClient(app,base_url='http://127.0.0.1')
+    assert client.get('/v1/update/health').status_code==401
+    result=client.get('/v1/update/health',headers={'Authorization':'Bearer '+'x'*32})
+    assert result.status_code==200
+    assert result.json()['ok'] and result.json()['integrity_check']=='ok'

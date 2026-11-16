@@ -64,6 +64,36 @@ def test_missing_database_refused(tmp_path):
         create_update_backup(data)
 
 
+def test_concurrent_wal_writer_backup_restores_a_consistent_committed_snapshot(tmp_path):
+    import threading
+    data=tmp_path/'workspace'
+    Store(data/'horus.sqlite3')
+    ready,stop=threading.Event(),threading.Event()
+    committed=[]
+    def writer():
+        with closing(sqlite3.connect(data/'horus.sqlite3')) as db:
+            db.execute('PRAGMA journal_mode=WAL')
+            while not stop.is_set():
+                index=len(committed)
+                db.execute('INSERT INTO media VALUES(?,?,?,?,?,?)',(f'writer-{index}',str(data/f'fixture-{index}.mp4'),'fixture',1,1,'2026-11-16'))
+                db.commit();committed.append(index);ready.set()
+    thread=threading.Thread(target=writer);thread.start()
+    try:
+        assert ready.wait(5)
+        assert (data/'horus.sqlite3-wal').stat().st_size>0
+        result=create_update_backup(data)
+    finally:
+        stop.set();thread.join(timeout=10)
+    assert not thread.is_alive()
+    target=tmp_path/'restored-concurrent'
+    assert restore_local_data(tmp_path/'update-backups'/result['label'],target)['ok']
+    with closing(sqlite3.connect(target/'horus.sqlite3')) as db:
+        assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+        copied=sorted(int(row[0].split('-')[1]) for row in db.execute('SELECT id FROM media'))
+    assert copied and copied==list(range(len(copied)))
+    assert len(copied)<=len(committed)
+
+
 def test_invalid_preference_refuses_incomplete_backup(tmp_path):
     data = tmp_path / 'workspace'
     Store(data / 'horus.sqlite3')

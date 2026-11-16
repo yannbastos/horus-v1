@@ -4541,6 +4541,22 @@
         "summary": "Update Backup"
       }
     },
+    "/v1/update/health": {
+      "get": {
+        "operationId": "update_health_v1_update_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Update Health"
+      }
+    },
     "/v1/update/reservation": {
       "delete": {
         "operationId": "release_update_v1_update_reservation_delete",

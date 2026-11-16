@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$Version,
     [int]$Port = 19420,
-    [string]$OutputDirectory = ''
+    [string]$OutputDirectory = '',
+    [string]$E2eRoot = '',
+    [int]$DebugPort = 19431
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -34,6 +36,18 @@ $configuration = @{
         requireSignedVersion=$true
         windows=@{installMode='passive'}
     }}
+}
+if ($E2eRoot) {
+    $sandbox=[IO.Path]::GetFullPath($E2eRoot)
+    $temp=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
+    if (-not $sandbox.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or (Split-Path $sandbox -Leaf) -notlike 'horus-updater-e2e-*') {throw 'Sandbox E2E deve ser exclusivo sob TEMP.'}
+    if ($DebugPort -in @(1420,8765,$Port) -or $DebugPort -lt 1024 -or $DebugPort -gt 65535) {throw 'Porta CDP inválida.'}
+    New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+    if ((Get-Item -LiteralPath $sandbox).Attributes -band [IO.FileAttributes]::ReparsePoint) {throw 'Sandbox não pode ser link.'}
+    $configuration.plugins.horusUpdaterTest=@{root=$sandbox}
+    $window=(Get-Content (Join-Path $root 'frontend/src-tauri/tauri.conf.json') -Raw|ConvertFrom-Json).app.windows[0]
+    $window|Add-Member -NotePropertyName additionalBrowserArgs -NotePropertyValue "--remote-debugging-port=$DebugPort" -Force
+    $configuration.app=@{windows=@($window);appDirectoriesOverride=(Join-Path $sandbox 'tauri')}
 }
 [IO.File]::WriteAllText($overlay,($configuration | ConvertTo-Json -Depth 10))
 $oldKey=$env:TAURI_SIGNING_PRIVATE_KEY

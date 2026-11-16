@@ -17,6 +17,12 @@ sem desabilitar verificação TLS. Capabilities não expõem plugin ao JavaScrip
 Estado: implementação do protótipo; ensaio instalado pelo updater reservado à etapa 3.
 Trava: `test_updater_network_is_explicit_local_build_only`, em `test_network_inventory.py`.
 
+Etapa 3: após reiniciar, o recibo pendente exige saúde autenticada do backend
+possuído (`GET /v1/update/health`, incluindo integridade SQLite) antes de registrar
+sucesso. Esse tráfego também é loopback, sem proxy/redirect e sem dados enviados
+a terceiros. CDP em porta local só existe no overlay E2E temporário, nunca no build
+padrão; ensaio instalado e limites estão no ADR do atualizador.
+
 - **Destino:** `loopback` (127.0.0.1/::1), `externo` (sai da máquina) ou `nenhum` (processo local sem rede).
 - **Estado:** `ativo` (roda no uso normal), `desligado` (existe, exige opt-in) ou `bloqueado` (existe, mas sem transporte/gate aberto).
 - **Verificado** = lido no código desta revisão; **suposição** = não confirmado aqui (código de terceiros, binários, fábrica externa). Cada linha marca o que é suposição.
