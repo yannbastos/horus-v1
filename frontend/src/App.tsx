@@ -279,7 +279,12 @@ export default function App() {
           : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} shortcutPrefs={shortcutPrefs} onChangeShortcutPrefs={handleShortcutPrefsChange} />
           : page === 'library' ? <Library connection={connection} searchFocusNonce={librarySearchNonce} searchShortcutBinding={shortcutPrefs.enabled ? shortcutPrefs.bindings['library.search'] : undefined} />
           : page === 'transcription' ? null
-          : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={() => setPage('production')} onOpenSettings={() => setPage('settings')} /></div>
+          : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={stepId => {
+              if (stepId) {
+                setNotificationFocusTarget({ kind: 'guide_step', id: stepId, nonce: Date.now() });
+              }
+              setPage('production');
+            }} onOpenSettings={() => setPage('settings')} /></div>
           : page === 'radar' ? <div className="page"><SectionHeader section={sections.radar} /><Radar connection={connection} onOpenProduction={() => setPage('production')} /></div>
           : <div className="page"><SectionHeader section={sections[page]} />{page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} focusTarget={notificationFocusTarget} />}{(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} focusJobId={focusJobId} />}{page === 'history' && <ErrorCenter connection={connection} onNavigateItem={handleNavigateFromError} focusNonce={errorCenterFocusNonce} />}</div>}
         {(transcriptionOpened || page === 'transcription') && (

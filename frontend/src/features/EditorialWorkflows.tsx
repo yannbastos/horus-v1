@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import type {
   AnalysisArtifactContent,
   Connection,
@@ -10,6 +11,7 @@ import type {
 import {
   authorizeWorkflow,
   cancelWorkflow,
+  createManualWorkflow,
   getWorkflow,
   getWorkflows,
   reconcileWorkflow,
@@ -18,7 +20,7 @@ import {
 } from '../services/api';
 import { StatusMessage } from '../components/StatusMessage';
 import ProposalComparePanel, { type ProposalCompareItem } from './proposal-compare/ProposalComparePanel';
-import ScriptReview from './ScriptReview';
+import ScriptReview, { type AutoOpenEditorRequest } from './ScriptReview';
 
 const STATUS_LABELS: Record<string, string> = {
   queued: 'Na fila',
@@ -83,10 +85,21 @@ export default function EditorialWorkflows({
     baseId: string;
     targetId: string;
   } | null>(null);
+  const [listLoaded, setListLoaded] = useState(false);
+  const [manualFormOpen, setManualFormOpen] = useState(false);
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualError, setManualError] = useState('');
+  const [creatingManual, setCreatingManual] = useState(false);
+  const [autoOpenEditor, setAutoOpenEditor] = useState<AutoOpenEditorRequest | null>(null);
+  const [scriptFocusNonce, setScriptFocusNonce] = useState(0);
+  const manualTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   // Initial fetch and when connection changes
   async function refreshList(selectFirst = false) {
-    if (!connection) return;
+    if (!connection) {
+      setListLoaded(false);
+      return;
+    }
     try {
       const list = await getWorkflows(connection);
       setWorkflows(list);
@@ -95,6 +108,8 @@ export default function EditorialWorkflows({
       }
     } catch {
       // Background list polling does not spam alerts
+    } finally {
+      setListLoaded(true);
     }
   }
 
@@ -103,10 +118,68 @@ export default function EditorialWorkflows({
   }, [connection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (focusTarget?.kind === 'workflow' && focusTarget.id) {
+    if (!focusTarget) return;
+    if (focusTarget.kind === 'workflow' && focusTarget.id) {
       setSelectedId(focusTarget.id);
+      return;
     }
-  }, [focusTarget]);
+    if (focusTarget.kind === 'guide_step') {
+      if (focusTarget.id === 'write_script') {
+        setManualFormOpen(true);
+        setManualError('');
+        requestAnimationFrame(() => {
+          manualTitleInputRef.current?.focus();
+          manualTitleInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+        return;
+      }
+      if (
+        focusTarget.id === 'approve_script' ||
+        focusTarget.id === 'produce_final' ||
+        focusTarget.id === 'review_approve'
+      ) {
+        const approved = workflows.find(wf => wf.status === 'approved');
+        if (approved && selectedId !== approved.id) {
+          setSelectedId(approved.id);
+        }
+        setScriptFocusNonce(focusTarget.nonce);
+      }
+    }
+  }, [focusTarget]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleCreateManualWorkflow(event: FormEvent) {
+    event.preventDefault();
+    if (!connection || creatingManual) return;
+    const trimmedTitle = manualTitle.trim();
+    if (!trimmedTitle) {
+      setManualError('Informe um título para o roteiro.');
+      manualTitleInputRef.current?.focus();
+      return;
+    }
+    setCreatingManual(true);
+    setManualError('');
+    try {
+      const created = await createManualWorkflow(connection, { title: trimmedTitle });
+      await refreshList(false);
+      setSelectedId(created.workflow_id);
+      const detail = await getWorkflow(connection, created.workflow_id);
+      setCurrent({
+        ...detail,
+        current_artifact_id: detail.current_artifact_id ?? created.proposal_artifact_id,
+      });
+      setManualFormOpen(false);
+      setManualTitle('');
+      setAutoOpenEditor({
+        workflowId: created.workflow_id,
+        title: trimmedTitle,
+        nonce: Date.now(),
+      });
+    } catch (reason) {
+      setManualError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCreatingManual(false);
+    }
+  }
 
   // Polling: updates list and current workflow every 1.5s until terminal or unmount
   useEffect(() => {
@@ -303,11 +376,29 @@ export default function EditorialWorkflows({
             <p className="eyebrow accent">PIPELINE EDITORIAL</p>
             <h2>Análises editoriais e aprovações</h2>
           </div>
-          <span className="tag">MÓDULO EDITORIAL</span>
+          <div className="row" style={{ gap: '8px', flexWrap: 'wrap' }}>
+            {connection && workflows.length > 0 && !manualFormOpen && (
+              <button
+                type="button"
+                className="button"
+                data-testid="new-manual-script-button"
+                onClick={() => {
+                  setManualFormOpen(true);
+                  setManualError('');
+                  requestAnimationFrame(() => {
+                    manualTitleInputRef.current?.focus();
+                  });
+                }}
+              >
+                Novo roteiro do zero
+              </button>
+            )}
+            <span className="tag">MÓDULO EDITORIAL</span>
+          </div>
         </div>
         <p className="muted">
-          Acompanhamento de fluxos de análise com validação de evidências, autorização explícita e aprovação humana
-          de propostas.
+          Fluxo principal do primeiro vídeo (local_pilot): escreva seu roteiro do zero ou acompanhe análises
+          editoriais com aprovação humana.
         </p>
 
         {error && (
@@ -316,6 +407,88 @@ export default function EditorialWorkflows({
           </StatusMessage>
         )}
       </div>
+
+      {!connection && (
+        <StatusMessage state="empty" role="status">
+          Conecte o backend local em Ajustes para escrever roteiros do zero e acompanhar aprovações.
+        </StatusMessage>
+      )}
+
+      {connection && manualFormOpen && (
+        <form
+          className="card sunken"
+          aria-label="Criar roteiro manual do zero"
+          data-testid="manual-script-create-form"
+          onSubmit={event => void handleCreateManualWorkflow(event)}
+        >
+          <p className="eyebrow accent">ROTEIRO MANUAL (SEM PROPOSTA PRÉVIA)</p>
+          <h3>Escrever roteiro do zero</h3>
+          <p className="muted">
+            Informe apenas o título do vídeo para iniciar o fluxo manual e abrir o editor de roteiro por seções.
+          </p>
+          <label>
+            Título do roteiro
+            <input
+              ref={manualTitleInputRef}
+              type="text"
+              value={manualTitle}
+              onChange={event => {
+                setManualTitle(event.target.value);
+                if (manualError) setManualError('');
+              }}
+              placeholder="Ex.: Como gravar seu primeiro vídeo local"
+              maxLength={200}
+              disabled={creatingManual}
+            />
+          </label>
+          {manualError && <StatusMessage state="error">{manualError}</StatusMessage>}
+          <div className="actions">
+            <button
+              type="submit"
+              className="button primary"
+              disabled={creatingManual || !manualTitle.trim()}
+            >
+              {creatingManual ? 'Criando…' : 'Criar e abrir editor'}
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={creatingManual}
+              onClick={() => {
+                setManualFormOpen(false);
+                setManualError('');
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
+        </form>
+      )}
+
+      {connection && listLoaded && workflows.length === 0 && !manualFormOpen && (
+        <article className="card sunken" data-testid="editorial-empty-state">
+          <p className="eyebrow accent">PRIMEIRO VÍDEO · ROTEIRO MANUAL</p>
+          <h3>Nenhum roteiro criado ainda.</h3>
+          <p className="muted">
+            Você pode escrever seu roteiro do zero agora mesmo, sem precisar de análise ou proposta prévia de IA.
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => {
+                setManualFormOpen(true);
+                setManualError('');
+                requestAnimationFrame(() => {
+                  manualTitleInputRef.current?.focus();
+                });
+              }}
+            >
+              Escrever roteiro do zero
+            </button>
+          </div>
+        </article>
+      )}
 
       {workflows.length > 0 && (
         <div className="editorial-grid">
@@ -366,10 +539,12 @@ export default function EditorialWorkflows({
                     Criado em: {formatDate(current.created_at)}
                   </p>
 
-                  <div>
-                    <p className="eyebrow">OBJETIVO</p>
-                    <p style={{ marginTop: '4px' }}>{current.request.objective}</p>
-                  </div>
+                  {current.request?.objective && (
+                    <div>
+                      <p className="eyebrow">OBJETIVO</p>
+                      <p style={{ marginTop: '4px' }}>{current.request.objective}</p>
+                    </div>
+                  )}
 
                   <div>
                     <p className="eyebrow">ETAPAS DO FLUXO</p>
@@ -741,6 +916,9 @@ export default function EditorialWorkflows({
                   connection={connection}
                   workflow={current}
                   proposalArtifact={proposalArtifact}
+                  autoOpenEditor={autoOpenEditor}
+                  onAutoOpenConsumed={() => setAutoOpenEditor(null)}
+                  focusNonce={scriptFocusNonce}
                 />
               </>
             )}

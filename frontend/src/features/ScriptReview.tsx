@@ -123,14 +123,26 @@ function resolveProposalArtifactId(
   return null;
 }
 
+export type AutoOpenEditorRequest = {
+  workflowId: string;
+  title?: string;
+  nonce: number;
+};
+
 export default function ScriptReview({
   connection,
   workflow,
   proposalArtifact,
+  autoOpenEditor,
+  onAutoOpenConsumed,
+  focusNonce,
 }: {
   connection: Connection | null;
   workflow: WorkflowDetail;
   proposalArtifact?: WorkflowArtifact;
+  autoOpenEditor?: AutoOpenEditorRequest | null;
+  onAutoOpenConsumed?: () => void;
+  focusNonce?: number;
 }) {
   const [scripts, setScripts] = useState<ScriptRecord[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -212,6 +224,7 @@ export default function ScriptReview({
     idempotencyCacheRef.current = null;
     return () => {
       cancelPendingInspect();
+      consumedAutoOpenNonceRef.current = null;
     };
   }, [workflow.id]);
 
@@ -268,6 +281,53 @@ export default function ScriptReview({
     !loading &&
     !submitting &&
     !editorSession;
+
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const consumedAutoOpenNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!focusNonce) return;
+    requestAnimationFrame(() => {
+      sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [focusNonce]);
+
+  useEffect(() => {
+    if (
+      !autoOpenEditor ||
+      autoOpenEditor.workflowId !== workflow.id ||
+      consumedAutoOpenNonceRef.current === autoOpenEditor.nonce
+    ) {
+      return;
+    }
+    if (!isProposalApproved || loading || submitting || editorSession || scripts.length > 0) {
+      return;
+    }
+    consumedAutoOpenNonceRef.current = autoOpenEditor.nonce;
+    const initialDocument = createBlankHumanDocument();
+    if (autoOpenEditor.title?.trim()) {
+      initialDocument.title = autoOpenEditor.title.trim();
+    }
+    setError('');
+    setEditorError('');
+    setEditorConflict(false);
+    setEditorSession({
+      mode: 'create',
+      initialDocument,
+    });
+    requestAnimationFrame(() => {
+      sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [
+    autoOpenEditor,
+    editorSession,
+    isProposalApproved,
+    loading,
+    onAutoOpenConsumed,
+    scripts.length,
+    submitting,
+    workflow.id,
+  ]);
 
   async function handleRefreshList(selectLatest = false) {
     if (!connection || inFlightRef.current || submitting) return;
@@ -545,7 +605,7 @@ export default function ScriptReview({
   const isHumanContext = activeOrigin === 'human' || editorSession !== null;
 
   return (
-    <article className="card" role="region" aria-label="Roteiro e revisão humana">
+    <article ref={sectionRef} className="card" role="region" aria-label="Roteiro e revisão humana">
       <div className="row spread">
         <div>
           <p className="eyebrow accent">ETAPA DE ROTEIRIZAÇÃO (M3)</p>
@@ -689,6 +749,7 @@ export default function ScriptReview({
               setEditorSession(null);
               setEditorError('');
               setEditorConflict(false);
+              onAutoOpenConsumed?.();
             }}
           />
         </>

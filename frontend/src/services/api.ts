@@ -440,6 +440,29 @@ export async function createRadarWorkflow(
   });
 }
 
+export type CreateManualWorkflowRequest = {
+  title: string;
+  objective?: string;
+};
+
+export type CreateManualWorkflowResponse = {
+  workflow_id: string;
+  status: 'approved';
+  proposal_artifact_id: string;
+};
+
+export async function createManualWorkflow(
+  connection: Connection,
+  payload: CreateManualWorkflowRequest,
+  idempotencyKey = crypto.randomUUID()
+): Promise<CreateManualWorkflowResponse> {
+  return api<CreateManualWorkflowResponse>(connection, '/v1/workflows/manual', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify(payload),
+  });
+}
+
 // --- Workflow API calls ---
 export async function getWorkflows(connection: Connection): Promise<WorkflowSummary[]> {
   return api<WorkflowSummary[]>(connection, '/v1/workflows');

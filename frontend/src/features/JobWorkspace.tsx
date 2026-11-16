@@ -69,8 +69,12 @@ export default function JobWorkspace({
   const [video, setVideo] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(Boolean(focusJobId));
   useEffect(() => {
-    if (focusJobId) setSelected(focusJobId);
+    if (focusJobId) {
+      setSelected(focusJobId);
+      setAdvancedOpen(true);
+    }
   }, [focusJobId]);
   async function refresh() {
     if (!connection) return;
@@ -93,12 +97,28 @@ export default function JobWorkspace({
     finally { setBusy(false); }
   }
   const current = jobs.find(job => job.id === selected);
-  return <section className="workspace" aria-label="Operações locais da fábrica">
-    <div className="card"><p className="eyebrow accent">OPERAÇÃO LOCAL</p><h2>Uma etapa por vez.</h2><p className="muted">Consulta de perfil e render de rascunho pelo CLI existente. Nenhuma geração de voz ou publicação é acionada aqui.</p>
-      <div className="form-row"><label>Canal<input value={channel} onChange={e => setChannel(e.target.value)} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" maxLength={64} /></label><label>Vídeo para rascunho<input value={video} onChange={e => setVideo(e.target.value)} placeholder="Identificador da pasta do vídeo" maxLength={128} /></label></div>
-      <div className="actions"><button className="button primary" disabled={!connection || busy || !channel} onClick={() => void submit('factory.profile')}>CONSULTAR PERFIL</button><button className="button" disabled={!connection || busy || !channel || !video} onClick={() => void submit('factory.render.preview')}>RENDERIZAR RASCUNHO</button></div>
-      {!connection && <StatusMessage state="empty" role="status">{nativeDesktop ? 'Backend local indisponível. Use RECONECTAR BACKEND em Ajustes.' : 'Conecte o backend local em Ajustes para executar operações.'}</StatusMessage>}{error && <StatusMessage state="error">{error}</StatusMessage>}
-    </div>
-    {jobs.length > 0 && <div className="job-grid"><div className="job-list" aria-label="Histórico de tarefas">{jobs.map(job => <button key={job.id} className={`job-item ${job.id === selected ? 'selected' : ''}`} onClick={() => setSelected(job.id)}><span>{job.payload.operation === 'factory.profile' ? 'Consulta de perfil' : 'Render de rascunho'}</span><small>{job.payload.channel_id} · {statusLabels[job.status]}</small></button>)}</div>{current && connection && <JobDetails job={current} connection={connection} refresh={refresh} />}</div>}
+  return <section className="workspace" aria-label="Recursos avançados da fábrica CLI legada">
+    <details
+      className="card"
+      data-testid="legacy-factory-advanced"
+      open={advancedOpen}
+      onToggle={event => setAdvancedOpen(event.currentTarget.open)}
+    >
+      <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+        Recursos avançados · Fábrica CLI legada (opcional)
+      </summary>
+      <div style={{ display: 'grid', gap: '12px', marginTop: '12px' }}>
+        <p className="eyebrow">FÁBRICA LEGADA · CLI EXTERNO (FABRICA_HOME)</p>
+        <p className="muted">
+          O fluxo suportado do primeiro vídeo (<strong>local_pilot</strong>) acontece acima, no editor de roteiro e
+          produção local, sem precisar configurar <code>FABRICA_HOME</code>. Consulta de perfil e render de rascunho
+          são ferramentas opcionais para quem usa o CLI legado da fábrica.
+        </p>
+        <div className="form-row"><label>Canal<input value={channel} onChange={e => setChannel(e.target.value)} pattern="[A-Za-z0-9][A-Za-z0-9_-]*" maxLength={64} /></label><label>Vídeo para rascunho<input value={video} onChange={e => setVideo(e.target.value)} placeholder="Identificador da pasta do vídeo" maxLength={128} /></label></div>
+        <div className="actions"><button className="button" disabled={!connection || busy || !channel} onClick={() => void submit('factory.profile')}>CONSULTAR PERFIL</button><button className="button" disabled={!connection || busy || !channel || !video} onClick={() => void submit('factory.render.preview')}>RENDERIZAR RASCUNHO</button></div>
+        {!connection && <StatusMessage state="empty" role="status">{nativeDesktop ? 'Backend local indisponível. Use RECONECTAR BACKEND em Ajustes.' : 'Conecte o backend local em Ajustes para executar operações legadas.'}</StatusMessage>}{error && <StatusMessage state="error">{error}</StatusMessage>}
+        {jobs.length > 0 && <div className="job-grid"><div className="job-list" aria-label="Histórico de tarefas">{jobs.map(job => <button key={job.id} className={`job-item ${job.id === selected ? 'selected' : ''}`} onClick={() => setSelected(job.id)}><span>{job.payload.operation === 'factory.profile' ? 'Consulta de perfil' : 'Render de rascunho'}</span><small>{job.payload.channel_id} · {statusLabels[job.status]}</small></button>)}</div>{current && connection && <JobDetails job={current} connection={connection} refresh={refresh} />}</div>}
+      </div>
+    </details>
   </section>;
 }

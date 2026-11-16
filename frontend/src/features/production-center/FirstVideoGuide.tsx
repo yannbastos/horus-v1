@@ -4,7 +4,7 @@ import {
   GUIDE_STATUS_LABEL,
   loadFirstVideoGuide,
 } from '../../services/firstVideoGuide';
-import type { FirstVideoGuideState, GuideStepStatus } from '../../services/firstVideoGuide';
+import type { FirstVideoGuideState, GuideStepId, GuideStepStatus } from '../../services/firstVideoGuide';
 
 const COLLAPSED_STORAGE_KEY = 'horus.first_video_guide.collapsed';
 
@@ -40,7 +40,7 @@ export default function FirstVideoGuide({
   connection: Connection | null;
   refreshKey?: number;
   onOpenSettings: () => void;
-  onOpenProduction: () => void;
+  onOpenProduction: (stepId?: GuideStepId) => void;
 }) {
   const [state, setState] = useState<FirstVideoGuideState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -164,7 +164,7 @@ export default function FirstVideoGuide({
                   <button
                     type="button"
                     className="button"
-                    onClick={step.target === 'settings' ? onOpenSettings : onOpenProduction}
+                    onClick={step.target === 'settings' ? onOpenSettings : () => onOpenProduction(step.id)}
                     aria-label={`${step.actionLabel}: ${step.title}`}
                   >
                     {step.actionLabel.toUpperCase()}
