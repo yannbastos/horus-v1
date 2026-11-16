@@ -116,4 +116,136 @@ test.describe('Auditoria de UX — layout, foco e acessibilidade', () => {
       });
     }
   }
+
+  test('HOR-146: landmarks únicos, rotulagem atualizada e atalho para Ajustes quando desconectado', async ({
+    page,
+  }) => {
+    const workflowId = '11111111000000000000000000000000';
+    await page.route('http://127.0.0.1:8765/**', async route => {
+      const url = new URL(route.request().url());
+      const headers = CORS_HEADERS();
+      if (route.request().method() === 'OPTIONS') {
+        return route.fulfill({ status: 204, headers });
+      }
+      if (url.pathname === '/health') return route.fulfill({ status: 200, headers, json: { status: 'ready' } });
+      if (url.pathname === '/v1/hermes') {
+        return route.fulfill({
+          status: 200,
+          headers,
+          json: { state: 'not_checked', connected: false, cli_available: true, configured: false, features: [] },
+        });
+      }
+      if (url.pathname === '/v1/diagnostics') {
+        return route.fulfill({ status: 200, headers, json: { checks: [], notice: 'OK' } });
+      }
+      if (url.pathname === '/v1/workflows') {
+        return route.fulfill({
+          status: 200,
+          headers,
+          json: [
+            {
+              id: workflowId,
+              status: 'approved',
+              revision: 1,
+              created_at: '2026-11-16T10:00:00Z',
+              updated_at: '2026-11-16T10:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url.pathname === `/v1/workflows/${workflowId}`) {
+        return route.fulfill({
+          status: 200,
+          headers,
+          json: {
+            id: workflowId,
+            status: 'approved',
+            revision: 1,
+            created_at: '2026-11-16T10:00:00Z',
+            updated_at: '2026-11-16T10:00:00Z',
+            current_artifact_id: 'aaaa1111',
+            artifacts: [],
+            approvals: [],
+          },
+        });
+      }
+      if (url.pathname === `/v1/workflows/${workflowId}/scripts`) {
+        return route.fulfill({ status: 200, headers, json: { items: [] } });
+      }
+      if (url.pathname === '/v1/radar/datasets') {
+        return route.fulfill({
+          status: 200,
+          headers,
+          json: [
+            {
+              snapshot_id: 'snap-1',
+              revision: 1,
+              origin: 'operator_fixture',
+              videos: 1,
+              eligible_videos: 1,
+              records: 1,
+              collected_at: '2026-11-16T10:00:00Z',
+              expires_at: '2026-11-23T10:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url.pathname === '/v1/radar/datasets/snap-1/1') {
+        return route.fulfill({
+          status: 200,
+          headers,
+          json: {
+            dataset: {
+              snapshot_id: 'snap-1',
+              revision: 1,
+              origin: 'operator_fixture',
+              status: 'ready',
+              collected_at: '2026-11-16T10:00:00Z',
+              expires_at: '2026-11-23T10:00:00Z',
+              records: [],
+            },
+            eligibility: {},
+          },
+        });
+      }
+      return route.fulfill({ status: 200, headers, json: [] });
+    });
+
+    await page.goto('/');
+
+    // 1. Visão geral com rotulagem atualizada (sem "PLANEJAMENTO · EM PREPARAÇÃO" / "PRODUÇÃO · EM PREPARAÇÃO")
+    await expect(page.getByText('PLANEJAMENTO · ROTEIRO E REVISÃO')).toBeVisible();
+    await expect(page.getByText('PRODUÇÃO · PILOTO LOCAL')).toBeVisible();
+    await expect(page.getByText('PLANEJAMENTO · EM PREPARAÇÃO')).toHaveCount(0);
+    await expect(page.getByText('PRODUÇÃO · EM PREPARAÇÃO')).toHaveCount(0);
+
+    // 2. Central de Produção desconectada oferece atalho direto para Ajustes
+    await page.getByRole('button', { name: 'Central de Produção', exact: true }).click();
+    const openSettingsBtn = page.locator('.page').getByRole('button', { name: 'ABRIR AJUSTES', exact: true });
+    await expect(openSettingsBtn).toBeVisible();
+    await openSettingsBtn.click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Aparência' })).toBeVisible();
+
+    // Conecta sessão local para testar landmarks únicos em Produção e Radar e estado sem roteiro
+    await page.getByLabel('Token da sessão').fill('horus-test-token-1234567890abcdef');
+    await page.getByRole('button', { name: 'CONECTAR BACKEND' }).click();
+    await expect(page.getByText('Backend local conectado.')).toBeVisible();
+
+    // 3. Central de Produção conectada exibe orientação atualizada do passo "Escrever roteiro"
+    await page.getByRole('button', { name: 'Central de Produção', exact: true }).click();
+    await expect(
+      page.getByText('Escreva seu roteiro manual do zero (ou a partir de uma proposta aprovada).'),
+    ).toBeVisible();
+
+    // 4. Produção com workflow aprovado e sem roteiro: apenas 1 <main> e sem tag SIMULADO prematura
+    await page.locator('.sidebar').getByRole('button', { name: 'Produção', exact: true }).click();
+    await expect(page.getByText('Roteiro estruturado e revisão humana')).toBeVisible();
+    expect(await page.locator('main').count()).toBe(1);
+    await expect(page.locator('.tag.simulated', { hasText: 'SIMULADO' })).toHaveCount(0);
+
+    // 5. Radar com dataset carregado: apenas 1 <main>
+    await page.locator('.sidebar').getByRole('button', { name: 'Radar', exact: true }).click();
+    await expect(page.getByText('SNAPSHOT SELECIONADO')).toBeVisible();
+    expect(await page.locator('main').count()).toBe(1);
+  });
 });

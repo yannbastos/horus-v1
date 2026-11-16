@@ -302,7 +302,7 @@ export default function App() {
           />
         )}
       </Suspense></main>
-      <footer><span>{backendError ? `Backend indisponível: ${backendError}` : connection ? 'Backend local conectado' : nativeDesktop ? 'Preparando backend local…' : 'Prévia no navegador'}</span><span>Transcrição local com Whisper · Orquestração e módulos editoriais em preparação.</span></footer>
+      <footer><span>{backendError ? `Backend indisponível: ${backendError}` : connection ? 'Backend local conectado' : nativeDesktop ? 'Preparando backend local…' : 'Prévia no navegador'}</span><span>Transcrição local com Whisper · Roteiro manual e produção local ativos.</span></footer>
     </div>
     {showNotificationsBell && (
       <NotificationsPanel

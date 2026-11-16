@@ -239,7 +239,7 @@ export default function Radar({
               <p className="eyebrow accent">DATASETS DISPONÍVEIS</p>
               <button
                 className="button"
-                style={{ minHeight: '28px', padding: '4px 10px', fontSize: '10px' }}
+                style={{ minHeight: '28px', padding: 'var(--Space1) var(--Space4)', fontSize: 'var(--TextSm)' }}
                 disabled={busy}
                 onClick={() => void handleLoadDemo()}
                 title="Carregar novo conjunto de demonstração"
@@ -276,7 +276,7 @@ export default function Radar({
             })}
           </aside>
 
-          <main className="radar-detail" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="radar-detail" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--Space7)' }}>
             {loadingDetail && <StatusMessage state="loading">Carregando detalhes do dataset…</StatusMessage>}
 
             {detail && !loadingDetail && (
@@ -299,7 +299,7 @@ export default function Radar({
                     </p>
                     <button
                       className="button"
-                      style={{ minHeight: '30px', padding: '4px 12px', fontSize: '10px' }}
+                      style={{ minHeight: '30px', padding: 'var(--Space1) var(--Space5)', fontSize: 'var(--TextSm)' }}
                       onClick={toggleAllEligible}
                     >
                       {allEligibleSelected ? 'Desmarcar todos' : 'Selecionar todos os elegíveis'}
@@ -350,7 +350,7 @@ export default function Radar({
                               <td>{record.channel_title || record.channel_id || '—'}</td>
                               <td>{formatDate(record.published_at)}</td>
                               <td>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '11px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: 'var(--TextCode)' }}>
                                   <span>{record.views != null ? `${record.views.toLocaleString('pt-BR')} views` : '—'}</span>
                                   <span>{record.likes != null ? `${record.likes.toLocaleString('pt-BR')} likes` : '—'}</span>
                                   <span>{record.comments != null ? `${record.comments.toLocaleString('pt-BR')} com.` : '—'}</span>
@@ -482,7 +482,7 @@ export default function Radar({
                 )}
               </>
             )}
-          </main>
+          </div>
         </div>
       )}
     </section>

@@ -520,7 +520,7 @@ export default function EditorialWorkflows({
             })}
           </aside>
 
-          <main className="editorial-detail" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="editorial-detail" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--Space7)' }}>
             {loading && <StatusMessage state="loading">Carregando análise…</StatusMessage>}
 
             {current && !loading && (
@@ -925,7 +925,7 @@ export default function EditorialWorkflows({
                 />
               </>
             )}
-          </main>
+          </div>
         </div>
       )}
     </section>

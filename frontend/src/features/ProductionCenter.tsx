@@ -59,7 +59,16 @@ export default function ProductionCenter({ connection, onOpenProduction, onOpenS
         onOpenSettings={onOpenSettings ?? (() => {})}
         onOpenProduction={onOpenProduction}
       />
-      {!connection && <StatusMessage state="empty" role="status">Conecte o backend local em Ajustes para ver a Central de Produção.</StatusMessage>}
+      {!connection && (
+        <div className="row spread" style={{ flexWrap: 'wrap', gap: 'var(--Space3)' }}>
+          <StatusMessage state="empty" role="status">Conecte o backend local em Ajustes para ver a Central de Produção.</StatusMessage>
+          {onOpenSettings && (
+            <button type="button" className="button" onClick={onOpenSettings}>
+              ABRIR AJUSTES
+            </button>
+          )}
+        </div>
+      )}
       {connection && loading && <StatusMessage state="loading">Carregando vídeos…</StatusMessage>}
       {error && <StatusMessage state="error">{error}</StatusMessage>}
       {connection && rows && (
