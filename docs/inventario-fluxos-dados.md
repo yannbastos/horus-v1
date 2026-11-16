@@ -4,6 +4,19 @@ Issue de gestão: [HOR-110](https://github.com/yannbastos/horus-management/issue
 
 ## Como ler
 
+**F-21 — protótipo local do atualizador (HOR-100, 16/11/2026):**
+`frontend/src-tauri/src/updater.rs`, `tauri-plugin-updater` e `reqwest` consultam
+manifesto e instalador em `http://127.0.0.1:<porta>` definido no build de teste;
+informam versão/plataforma/arquitetura, sem token GitHub, roteiro, áudio ou credenciais.
+O token local só acompanha chamadas ao backend possuído (atividade, reserva, backup,
+shutdown). Build padrão sem canal não inicializa plugin nem faz requisição.
+Verificação uma vez ao iniciar quando habilitada ou ação manual; download/instalação
+exigem versão confirmada, reserva sem jobs, backup e assinatura minisign vinculada
+à versão. Proxy e redirects desabilitados; HTTP só no overlay local explícito,
+sem desabilitar verificação TLS. Capabilities não expõem plugin ao JavaScript.
+Estado: implementação do protótipo; ensaio instalado pelo updater reservado à etapa 3.
+Trava: `test_updater_network_is_explicit_local_build_only`, em `test_network_inventory.py`.
+
 - **Destino:** `loopback` (127.0.0.1/::1), `externo` (sai da máquina) ou `nenhum` (processo local sem rede).
 - **Estado:** `ativo` (roda no uso normal), `desligado` (existe, exige opt-in) ou `bloqueado` (existe, mas sem transporte/gate aberto).
 - **Verificado** = lido no código desta revisão; **suposição** = não confirmado aqui (código de terceiros, binários, fábrica externa). Cada linha marca o que é suposição.

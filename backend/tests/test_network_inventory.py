@@ -205,3 +205,18 @@ def test_frontend_fetch_is_limited_to_service_clients():
         if re.search(r"(?<![\w.])(?:fetch\(|XMLHttpRequest|new WebSocket|EventSource\(|sendBeacon)", text) and relative not in FRONTEND_FETCH_FILES:
             offenders.append(relative)
     assert not offenders, f"Chamada de rede fora dos clientes de serviço (documente em F-14): {offenders}"
+
+
+def test_updater_network_is_explicit_local_build_only():
+    import json
+    source=(ROOT/'frontend/src-tauri/src/updater.rs').read_text(encoding='utf-8')
+    default=json.loads((ROOT/'frontend/src-tauri/tauri.conf.json').read_text(encoding='utf-8'))
+    assert 'updater' not in default.get('plugins',{})
+    assert not default['bundle'].get('createUpdaterArtifacts',False)
+    assert 'F-21' in INVENTORY.read_text(encoding='utf-8')
+    assert 'if !snapshot(&app).configured' in source
+    assert 'u.host_str() == Some("127.0.0.1")' in source
+    assert '.no_proxy()' in source and 'Policy::none()' in source
+    assert 'dangerousAcceptInvalidCerts' in source and 'requireSignedVersion' in source
+    caps=json.loads((ROOT/'frontend/src-tauri/capabilities/main.json').read_text(encoding='utf-8'))
+    assert not any(p.startswith(('updater:','process:','http:')) for p in caps['permissions'])

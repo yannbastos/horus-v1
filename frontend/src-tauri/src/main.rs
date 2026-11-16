@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
+mod updater;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,7 +129,7 @@ fn launch_backend(app: &AppHandle) -> Result<OwnedBackend, String> {
     }
     let mut child = command.spawn().map_err(|e| format!("Não foi possível iniciar o backend: {e}"))?;
     #[cfg(windows)]
-    let native_job = WindowsJob::attach(&child).map_err(|error| { let _ = child.kill(); error })?;
+    let native_job = WindowsJob::attach(&child).inspect_err(|_| { let _ = child.kill(); })?;
     let stdout = child.stdout.take().ok_or("Backend sem canal de inicialização.")?;
     let stderr = child.stderr.take().ok_or("Backend sem canal de diagnóstico.")?;
     // Drenar pipes evita bloquear o processo. Nunca repassar tokens/ambiente ao console da UI.
@@ -157,9 +158,16 @@ fn launch_backend(app: &AppHandle) -> Result<OwnedBackend, String> {
 
 #[tauri::command]
 async fn backend_connection(app: AppHandle, state: tauri::State<'_, BackendState>) -> Result<Connection, String> {
+    if app.state::<updater::UpdaterState>().installing() {
+        return Err("Atualização em andamento.".into());
+    }
     let inner = Arc::clone(&state.inner().0);
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = inner.lock().map_err(|_| "Estado do backend indisponível.")?;
+        // Reconsultar sob o lock: a tarefa pode ter esperado na fila antes da reserva.
+        if app.state::<updater::UpdaterState>().installing() {
+            return Err("Atualização em andamento.".into());
+        }
         if let Some(backend) = guard.as_mut() {
             if backend.child.try_wait().map_err(|e| e.to_string())?.is_none() {
                 return Ok(backend.connection.clone());
@@ -177,7 +185,9 @@ fn main() {
     tauri::Builder::default()
         .manage(BackendState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![backend_connection])
+        .setup(updater::setup)
+        .invoke_handler(tauri::generate_handler![backend_connection, updater::update_get_state,
+            updater::update_set_auto_check, updater::update_check, updater::update_install])
         .build(tauri::generate_context!())
         .expect("Não foi possível iniciar o Hórus desktop")
         .run(|handle, event| {

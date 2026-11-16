@@ -1,4 +1,7 @@
 # Build output
+*.key
+*.key.pub
+tauri-updater-test.generated.json
 bin/
 obj/
 artifacts/

@@ -1,6 +1,6 @@
 # ADR — atualizador do desktop Windows (HOR-100)
 
-**Estado: protótipo local autorizado em 16/11/2026; etapa 1 descrita abaixo.** Issue de gestão: `yannbastos/horus-management#88` (HOR-100). As decisões de distribuição e custódia continuam pendentes; não há publicação autorizada.
+**Estado: protótipo local autorizado em 16/11/2026; etapas 1 e 2 descritas abaixo.** Issue de gestão: `yannbastos/horus-management#88` (HOR-100). As decisões de distribuição e custódia continuam pendentes; não há publicação autorizada.
 
 ## Contexto
 
@@ -20,7 +20,7 @@ O Hórus distribui no Windows um aplicativo desktop Tauri 2 com instalador NSIS 
 - O canal de atualização não pode depender de token do GitHub embutido no aplicativo; portanto, não pode consumir GitHub Releases de repositório privado diretamente pelo app.
 - A verificação de atualização introduz um novo fluxo de rede no desktop, que exigirá registro de entrada `F-xx` em [inventario-fluxos-dados.md](inventario-fluxos-dados.md) e cobertura na trava estática de rede quando a implementação for autorizada (nenhuma entrada foi criada agora).
 
-## Direção recomendada pelo Maestro (proposta — ainda NÃO aprovada)
+## Direção técnica (protótipo local autorizado; distribuição pendente)
 
 - Adotar o updater nativo do Tauri 2 (`tauri-plugin-updater` + `tauri-plugin-process`) com manifesto estático e pacote assinado via **minisign**, mantendo confirmação explícita, bloqueio durante trabalhos críticos e encerramento limpo do backend antes de instalar.
 - Preservar dados do usuário fora da pasta de instalação, manter backup verificável do SQLite antes de migrações e guardar o instalador da versão anterior em disco para possibilitar rollback.
@@ -163,3 +163,93 @@ após desinstalar silenciosamente; guardas backend/testes e snapshot aditivo. N�
 atualização pelo plugin, assinatura real, instalação com backend ocupado, recuperação de
 falha de energia, Windows limpo, perfis grandes ou migração entre schemas diferentes.
 Evidências detalhadas e contagens: relatório local `%LOCALAPPDATA%\Horus\dev-reports\HOR-100-A.md`.
+
+## Protótipo local — etapa 2
+
+Implementado em branch própria sobre `origin/main` `5b65034`, sem publicação ou instalação:
+
+- Rust usa `tauri-plugin-updater =2.14.1`, `semver =1.0.28`, `reqwest =0.13.5`
+  (JSON) e `time =0.3.55` (RFC3339). Versões e checksums estão no Cargo.lock e na
+  allowlist de supply chain. Não é necessário plugin de processo: no Windows o
+  updater lança NSIS e sai; NSIS reinicia via `/R` no modo escolhido.
+- Os quatro comandos `update_*` preservam o contrato snake_case e publicam
+  `update://state`. Preferência atômica em `<HORUS_DATA_DIR>/updater/preferences.json`
+  ou `<app_local_data_dir>/workspace/updater/preferences.json`, padrão `true`;
+  configuração sem canal produz `disabled` e nenhuma consulta. A única consulta
+  automática ocorre no setup, se os dois indicadores estiverem habilitados.
+- Capabilities permanecem sem `updater:*`, `http:*` ou `process:*`: somente Rust
+  acessa o plugin. Nenhum endpoint ou chave consta do build padrão. O protótipo
+  só aceita canal HTTP **explicitamente** em `127.0.0.1`, com chave pública,
+  `dangerousInsecureTransportProtocol` e `requireSignedVersion=true` no overlay;
+  recusa credenciais na URL, certificados/hostnames inválidos, proxy e redirects.
+  Não é configuração de distribuição: HTTPS/canal privado continuam pendentes.
+- `update_install` serializa operações e compara confirmação/versão antes de efeitos;
+  exige backend possuído disponível e ocioso, reserva, reconsulta e backup verificado.
+  Falhas interrompem a sequência antes do download/instalação correspondente.
+  Download do plugin valida minisign **e a versão no comentário assinado**;
+  erros de assinatura são distintos de rede e não executam instalador.
+- Reserva autenticada em memória (`POST /v1/update/reservation`, liberação por
+  `DELETE`) bloqueia novas mutações da API e recusa requisições mutáveis já em curso;
+  leituras, backup e shutdown continuam disponíveis. O worker existente é coberto
+  pela reconsulta de todos os jobs, incluindo fila/cancelamento/prévia. Nenhuma
+  migração de schema. A reserva é liberada em erros normais e some ao reiniciar o
+  backend; falha de comunicação ao liberar exige reiniciar o backend possuído.
+- Antes do NSIS, faz `/v1/shutdown` autenticado e aguarda até 15 segundos por saída
+  com sucesso do processo possuído, fechando seu Job Object. Falha/timeout impedem
+  instalação. Uma guarda independente da fase visual impede `backend_connection`
+  de iniciar outro backend durante a operação. Não mata processos por nome.
+
+### Instalação Windows e recuperação
+
+Modo escolhido: **passive**, após confirmação humana; mostra progresso e evita
+perguntas redundantes do instalador. A implementação Windows do plugin fixado
+`tauri-plugin-updater-2.14.1/src/updater.rs` acrescenta `/UPDATE`, `/P` e `/R` para
+NSIS, aguardando o fim do desktop antes de sobrescrever. `/UPDATE` impede o bloco
+de exclusão de dados no template NSIS atual. Referência:
+[updater oficial](https://v2.tauri.app/plugin/updater/).
+Isso foi conferido no código do plugin; a instalação real é a etapa 3.
+
+Cada instalador **baixado e validado** fica em
+`workspace/updater/installers/<versão>/setup.exe` com `setup.exe.sig`, sem remoção
+automática. Portanto o instalador da versão atual fica disponível como anterior
+após ela ter sido recebida por esse fluxo. **A primeira instalação não fornece
+automaticamente uma cópia de seu próprio instalador**: para esse primeiro rollback,
+o operador precisa guardar o NSIS original fora da instalação, junto do hash.
+O cache está no mesmo disco e não substitui cópia separada ou backup de dados.
+O ZIP estruturado da etapa 1 não inclui `updater/` (preferência e cache); esses
+arquivos permanecem no lugar durante instalação, e sua inclusão no backup pode
+ser decidida com a ampliação da cobertura.
+Versões anteriores permanecem para recuperação **manual**; não há downgrade de
+schema nem restauração automática, e o updater continua recusando versões <= atual.
+Retenção e inclusão de WebView/segredos no backup não foram decididas nesta etapa.
+
+### Scripts para a etapa 3
+
+```powershell
+$env:UV_NATIVE_TLS = '1'
+$env:NODE_OPTIONS = '--use-system-ca'
+powershell -NoProfile -File scripts/build-updater-test.ps1 -Version 0.1.1 -Port 19420
+& backend/.venv/Scripts/python.exe scripts/serve-updater-test.py `
+  "$env:LOCALAPPDATA/Horus/dev-updater-test/channel" --port 19420
+```
+
+O build gera chave **exclusiva de teste** se faltar, em
+`%LOCALAPPDATA%\Horus\dev-updater-test\horus-updater-test.key`, descarta a saída do
+gerador (que pode conter a chave) e nunca reutiliza credencial de produção.
+Chave privada/senha não entram em relatório, log ou Git; o script restaura as
+variáveis de assinatura anteriores. O overlay gerado fica fora do repositório,
+habilita `createUpdaterArtifacts`, assinatura vinculada à versão e canal local;
+manifesto/NSIS/assinatura ficam em `channel/`, sem mudar versões versionadas.
+O servidor só escuta loopback e só serve `latest.json` e artefatos versionados;
+não serve listagens nem arquivos de chave. Portas 1420 e 8765 são recusadas.
+Preservar um canal por ensaio e não executar dois builds sobre o mesmo overlay.
+
+Verificado nesta etapa: testes Rust da máquina de estados/preferência/guardas,
+ordem reserva→reconsulta→backup→download/assinatura→cache→shutdown→instalação com
+backends simulados; reserva real em bancos temporários; snapshot aditivo e
+travas de rede/supply chain; frontend e testes da UI em porta alternativa;
+compilação padrão sem canal e geração local de NSIS assinado de teste.
+**Não verificado:** instalação pelo updater N→N+1, reinício real, arquivos bloqueados
+durante instalação, antivírus/Windows limpo, queda de energia, recuperação e
+rollback instalado. Não executar esses passos até a etapa 3.
+Relatório e contagens: `%LOCALAPPDATA%\Horus\dev-reports\HOR-100-B.md`.

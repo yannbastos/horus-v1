@@ -16,6 +16,10 @@ DEPENDENCIES = {
     "tauri-plugin-dialog": "2",
     "serde": {"version": "1", "features": ["derive"]},
     "serde_json": "1",
+    "tauri-plugin-updater": "=2.14.1",  # HOR-100: assinatura minisign e instalação confirmada via Rust.
+    "semver": "=1.0.28",
+    "reqwest": {"version": "=0.13.5", "features": ["json"]},  # somente loopback, sem proxy/redirect.
+    "time": {"version": "=0.3.55", "features": ["formatting"]},
     "uuid": {"version": "1", "features": ["v4"]},
     "windows-sys": {"version": "0.61", "features": [
         "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"]},
@@ -54,7 +58,7 @@ def validate_lock(manifest, lock):
         spec = direct[parts[0]]
         version = spec if isinstance(spec, str) else spec["version"]
         # Os ranges aprovados são caret numéricos simples (2, 1, 0.61).
-        prefix = tuple(map(int, version.split(".")))
+        prefix = tuple(map(int, version.lstrip("=").split(".")))
         actual = tuple(map(int, p["version"].split(".")))
         assert actual[:len(prefix)] == prefix, f"{dep}: fora do range {version}"
 

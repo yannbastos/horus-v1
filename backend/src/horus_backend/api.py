@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import tempfile
 import time
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -109,6 +110,8 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     narration = NarrationService(settings, store)
     whisper_models = WhisperModels(settings.data_dir)
     model_mutation = asyncio.Lock()
+    update_gate = threading.Lock()
+    update_reserved, mutations = False, 0
 
     @asynccontextmanager
     async def lifespan(app):
@@ -154,7 +157,20 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         if not is_stream and token_kind is None:
             return JSONResponse({"detail": "Autenticação local necessária."}, status_code=401)
         request.state.token_kind = token_kind
-        response = await call_next(request)
+        nonlocal mutations
+        mutation = request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path not in {
+            "/v1/update/reservation", "/v1/update/backup", "/v1/shutdown"}
+        if mutation:
+            with update_gate:
+                if update_reserved:
+                    return JSONResponse({"detail": "Atualização reservada; tente após reiniciar."}, status_code=409)
+                mutations += 1
+        try:
+            response = await call_next(request)
+        finally:
+            if mutation:
+                with update_gate:
+                    mutations -= 1
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -271,6 +287,22 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     async def probe_hermes():
         return await hermes.probe()
 
+    @app.post("/v1/update/reservation")
+    def reserve_update():
+        nonlocal update_reserved
+        with update_gate:
+            if update_reserved or mutations:
+                raise HTTPException(409, "Há operação em andamento ou atualização reservada.")
+            update_reserved = True
+        return {"reserved": True}
+
+    @app.delete("/v1/update/reservation")
+    def release_update():
+        nonlocal update_reserved
+        with update_gate:
+            update_reserved = False
+        return {"reserved": False}
+
     @app.get("/v1/update/activity")
     def update_activity():
         # Sem LIMIT: /v1/jobs mostra somente os últimos 100 e pode ocultar um job ativo.
@@ -278,7 +310,10 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             count = db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running','cancel_requested')").fetchone()[0]
         with narration.lock:
             previews = narration.active_previews
-        return {"busy": count > 0 or previews > 0, "active_jobs": count, "active_previews": previews}
+        # O worker pode já ter gravado status terminal enquanto ainda fecha o processo
+        # ou encadeia a próxima etapa; esse intervalo também bloqueia atualização.
+        busy = count > 0 or previews > 0 or manager.active_id is not None or manager.active_process is not None
+        return {"busy": busy, "active_jobs": count, "active_previews": previews}
 
     @app.post("/v1/update/backup")
     def update_backup():
