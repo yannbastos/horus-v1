@@ -4509,6 +4509,38 @@
         "summary": "Save Transcript"
       }
     },
+    "/v1/update/activity": {
+      "get": {
+        "operationId": "update_activity_v1_update_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Update Activity"
+      }
+    },
+    "/v1/update/backup": {
+      "post": {
+        "operationId": "update_backup_v1_update_backup_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Update Backup"
+      }
+    },
     "/v1/workflows": {
       "get": {
         "operationId": "list_workflows_v1_workflows_get",

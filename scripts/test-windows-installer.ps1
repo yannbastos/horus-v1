@@ -14,6 +14,8 @@ $existing = Get-ChildItem HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninst
     ForEach-Object { Get-ItemProperty $_.PSPath } |
     Where-Object { $_.DisplayName -eq 'HORUS' }
 if ($existing) { throw 'Instalação HORUS preexistente: execute em outro usuário/VM para preservá-la.' }
+$productRegistry = 'HKCU:/Software/horus/HORUS'
+$productRegistryExisted = Test-Path -LiteralPath $productRegistry
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
 $upgradePath = if ($UpgradeInstaller) { (Resolve-Path -LiteralPath $UpgradeInstaller).Path } else { '' }
 $smokeOptions = @()
@@ -108,6 +110,24 @@ try {
             $remaining = Get-ChildItem HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall |
                 ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq 'HORUS' }
             if ($remaining) { throw 'Entrada de desinstalação HORUS permaneceu no HKCU.' }
+            # O NSIS mantém o local de instalação para reinstalações. Só remover a chave
+            # criada por ESTE ensaio quando ela aponta exatamente para a pasta exclusiva.
+            if (-not $productRegistryExisted -and (Test-Path -LiteralPath $productRegistry)) {
+                $key = Get-Item -LiteralPath $productRegistry
+                if ($key.GetValue('').Trim('"') -ne $install -or $key.SubKeyCount -ne 0 -or
+                    @($key.GetValueNames() | Where-Object { $_ -notin @('', 'Installer Language') }).Count) {
+                    throw 'Chave de produto inesperada: preservada para inspeção.'
+                }
+                Remove-Item -LiteralPath $productRegistry
+                $parent = Get-Item -LiteralPath 'HKCU:/Software/horus'
+                if ($parent.SubKeyCount -eq 0 -and $parent.ValueCount -eq 0) { Remove-Item -LiteralPath 'HKCU:/Software/horus' }
+            }
+            $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/HORUS.lnk'
+            if (Test-Path -LiteralPath $shortcut) { throw 'Atalho HORUS permaneceu após desinstalar.' }
+            if ($upgradePath -and (Test-Path -LiteralPath (Join-Path $env:HORUS_DATA_DIR 'installer-fixture-hashes.json'))) {
+                & $Python (Join-Path $PSScriptRoot 'check-installer-data.py') $env:HORUS_DATA_DIR verify
+                if ($LASTEXITCODE) { throw 'Desinstalação alterou os dados semeados.' }
+            }
             [pscustomobject]@{ uninstall_seconds = [math]::Round($watch.Elapsed.TotalSeconds, 3); uninstalled = $true } | ConvertTo-Json -Compress
         }
     } finally { $env:HORUS_DATA_DIR = $oldDataDir }

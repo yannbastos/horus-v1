@@ -84,6 +84,7 @@ class NarrationService:
         self.preference = settings.data_dir / 'narration-preference.json'
         self.previews = {}
         self.lock = threading.Lock()
+        self.active_previews = 0
 
     def provider(self, ident):
         if ident not in self.providers: raise NarrationError('provider_not_found', 404)
@@ -122,6 +123,13 @@ class NarrationService:
         for ident in list(self.previews): self.remove_preview(ident)
 
     def preview(self, request):
+        with self.lock: self.active_previews += 1
+        try:
+            return self._preview(request)
+        finally:
+            with self.lock: self.active_previews -= 1
+
+    def _preview(self, request):
         provider = self.provider(request.provider)
         if provider.kind == 'paid_api': raise NarrationError('paid_provider_not_authorized', 403)
         temp = tempfile.TemporaryDirectory(prefix='horus-narration-')

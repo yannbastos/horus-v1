@@ -8,6 +8,7 @@ from pathlib import Path
 import secrets
 import sqlite3
 import subprocess
+import shutil
 
 
 def check(folder, action, executable):
@@ -15,6 +16,14 @@ def check(folder, action, executable):
     media = folder / "fixture.txt"
     if action == "seed":
         media.write_bytes(b"HORUS upgrade rollback synthetic fixture\n")
+        (folder / 'productions' / 'installer-fixture').mkdir(parents=True, exist_ok=True)
+        (folder / 'productions' / 'installer-fixture' / 'project.json').write_text('{"name":"Projeto sintético"}', encoding='utf-8')
+        (folder / 'narration-preference.json').write_text('{"voice":"fixture"}', encoding='utf-8')
+        (folder / 'exports').mkdir(exist_ok=True)
+        shutil.copyfile(Path(__file__).parent / 'fixtures' / 'installer-video.mp4', folder / 'exports' / 'example.mp4')
+        files = ['fixture.txt', 'productions/installer-fixture/project.json', 'narration-preference.json', 'exports/example.mp4']
+        hashes = {name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in files}
+        (folder / 'installer-fixture-hashes.json').write_text(json.dumps(hashes), encoding='utf-8')
     assert database.is_file(), "Banco do ensaio não foi preservado"
     with closing(sqlite3.connect(database)) as db, db:
         if action == "seed":
@@ -24,6 +33,8 @@ def check(folder, action, executable):
         assert db.execute("SELECT name, size FROM media WHERE id='installer-fixture'").fetchone() == (media.name, 41)
         version = db.execute("PRAGMA user_version").fetchone()[0]
     assert media.read_bytes() == b"HORUS upgrade rollback synthetic fixture\n"
+    hashes = json.loads((folder / 'installer-fixture-hashes.json').read_text(encoding='utf-8'))
+    assert all(hashlib.sha256((folder / name).read_bytes()).hexdigest() == digest for name, digest in hashes.items())
     if action == "future":
         # Cópia exclusiva: nunca aumentar o schema do banco do ciclo N → N+1 → N.
         future = folder / ("future-schema-" + secrets.token_hex(8))
@@ -51,6 +62,7 @@ def check(folder, action, executable):
         assert "Banco criado por uma versão mais recente do Hórus. Migração recusada." in output, output
         assert hashlib.sha256(target.read_bytes()).hexdigest() == before
     print(json.dumps(dict(action=action, schema_version=version, data_preserved=True,
+                         fixture_rows=1, hashed_files=len(hashes),
                          future_schema_refused=action == "future")))
 
 

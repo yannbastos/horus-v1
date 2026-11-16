@@ -244,10 +244,19 @@ powershell -NoProfile -File scripts/test-windows-installer.ps1 `
 
 O segundo parâmetro habilita N → N+1 → N na mesma pasta instalada, com o mesmo
 `HORUS_DATA_DIR` temporário exclusivo. Após iniciar N, o teste grava uma linha
-sintética em `media` e um arquivo; verifica ambos e `PRAGMA integrity_check`
+sintética em `media`, um projeto JSON, um vídeo MPEG-4 sintético e uma preferência;
+verifica SHA-256 dos quatro arquivos e `PRAGMA integrity_check`
 antes e depois de iniciar cada reinstalação. Os smokes autenticados verificam
 health, diagnostics e ausência de backend órfão após fechamento normal e queda.
-A desinstalação ocorre em `finally`, inclusive após falha do ensaio.
+A desinstalação ocorre em `finally`, inclusive após falha do ensaio, e a preservação
+dos dados semeados também é conferida após desinstalar. O perfil WebView fica isolado
+com `WEBVIEW2_USER_DATA_FOLDER` no diretório do smoke. A limpeza remove apenas a chave
+de local de instalação criada pelo próprio ensaio e exige que o atalho tenha saído.
+
+O template NSIS atual pode apagar dados quando o usuário marca a caixa de exclusão
+na desinstalação interativa; `/UPDATE` bloqueia essa exclusão e o ensaio usa somente
+`/S`, sem marcar a caixa. Detalhes, inventário e limites em
+[ADR do atualizador — etapa 1](adr-atualizador.md#protótipo-local--etapa-1).
 
 Como as versões diferem só pelo número, ambas usam o mesmo schema: esse ciclo
 valida rollback manual compatível, sem migração real entre versões de schema.
