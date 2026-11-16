@@ -22,6 +22,79 @@
         "title": "AuthorizationRequest",
         "type": "object"
       },
+      "CatalogLicense": {
+        "properties": {
+          "identifier": {
+            "const": "MIT",
+            "title": "Identifier",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identifier",
+          "url"
+        ],
+        "title": "CatalogLicense",
+        "type": "object"
+      },
+      "CatalogModel": {
+        "properties": {
+          "destination_label": {
+            "title": "Destination Label",
+            "type": "string"
+          },
+          "license": {
+            "$ref": "#/components/schemas/CatalogLicense"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CatalogSource"
+          }
+        },
+        "required": [
+          "destination_label",
+          "license",
+          "model",
+          "sha256",
+          "size_bytes",
+          "source"
+        ],
+        "title": "CatalogModel",
+        "type": "object"
+      },
+      "CatalogSource": {
+        "properties": {
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "url"
+        ],
+        "title": "CatalogSource",
+        "type": "object"
+      },
       "ChannelInput": {
         "additionalProperties": false,
         "properties": {
@@ -107,6 +180,21 @@
           "text"
         ],
         "title": "CommentRequest",
+        "type": "object"
+      },
+      "ConfirmDownload": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "const": true,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "title": "ConfirmDownload",
         "type": "object"
       },
       "CredentialRequest": {
@@ -333,6 +421,22 @@
         "title": "DeletionPreviewRequest",
         "type": "object"
       },
+      "DownloadCatalog": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogModel"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "DownloadCatalog",
+        "type": "object"
+      },
       "DownloadRequest": {
         "additionalProperties": false,
         "properties": {
@@ -359,6 +463,19 @@
           "url"
         ],
         "title": "DownloadRequest",
+        "type": "object"
+      },
+      "DownloadStarted": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "DownloadStarted",
         "type": "object"
       },
       "EstimateRequest": {
@@ -4177,6 +4294,24 @@
         "summary": "Installed Whisper Models"
       }
     },
+    "/v1/transcription/models/catalog": {
+      "get": {
+        "operationId": "whisper_download_catalog_v1_transcription_models_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whisper Download Catalog"
+      }
+    },
     "/v1/transcription/models/import": {
       "post": {
         "operationId": "import_whisper_model_v1_transcription_models_import_post",
@@ -4269,6 +4404,73 @@
           }
         },
         "summary": "Remove Whisper Model"
+      }
+    },
+    "/v1/transcription/models/{model}/download": {
+      "post": {
+        "operationId": "download_whisper_model_v1_transcription_models__model__download_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "enum": [
+                "base",
+                "large-v3-turbo",
+                "medium",
+                "small",
+                "tiny"
+              ],
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmDownload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Whisper Model"
       }
     },
     "/v1/transcriptions/save": {

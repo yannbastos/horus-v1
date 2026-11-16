@@ -93,6 +93,8 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "url:www.googleapis.com": "F-03"},
     "transcriber.py": {  # F-04 download de modelo Whisper, F-05 yt-dlp
         "import:faster_whisper": "F-04", "call:WhisperModel": "F-04", "import:ctranslate2": "F-04", "import:subprocess": "F-05", "import:yt_dlp": "F-05", "call:subprocess.call": "F-05"},
+    "whisper_download.py": {  # F-20 download explícito de modelos com hashes fixados
+        "import:urllib.request": "F-20", "call:build_opener": "F-20", "url:huggingface.co": "F-20"},
     "jobs.py": {  # F-04/F-05/F-12 workers de tarefa herdam o ambiente completo
         "call:OwnedProcess.start": "F-04"},
     "processes.py": {"call:create_subprocess_exec": "F-11", "call:Popen": "F-11", "import:subprocess": "F-11"},  # F-11 lançador único de processos possuídos
