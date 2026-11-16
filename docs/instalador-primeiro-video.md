@@ -15,6 +15,9 @@ com digest publicado na release upstream. Node 22.23.5 é obtido de
 [nodejs.org](https://nodejs.org/dist/v22.23.5/SHASUMS256.txt).
 `scripts/first-video-requirements.txt` fixa com hashes todas as dependências Python,
 incluindo Kokoro 0.9.4 e PyTorch 2.8.0 CPU; não redistribui CUDA.
+O runtime exclui bibliotecas estáticas `.lib`, símbolos `.pdb` e os headers de
+compilação do PyTorch; preserva as DLLs de inferência e os avisos de licença. A wheel
+é verificada antes dessa seleção. Não há compilação/JIT de extensões neste perfil.
 
 A fábrica permanece independente: o build exporta somente código e locks da revisão
 fixada, sem canais, mídias, bancos, segredos ou ambientes do operador. Remotion e
