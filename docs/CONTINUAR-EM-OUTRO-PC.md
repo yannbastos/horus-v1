@@ -177,7 +177,13 @@ O estado oficial está no Git e no GitHub Projects, não na máquina. Runs, mens
 
 ## Verificar e atualizar CLIs de desenvolvimento
 
-Na raiz do checkout, faça uma verificação somente leitura:
+Opcionalmente, registre o comando global de usuário `atualizar-ias` nos perfis do PowerShell 5.1 e 7 (sem admin, sem alterar `PATH` nem `ExecutionPolicy`):
+
+```powershell
+powershell -NoProfile -File scripts/install-atualizar-ias.ps1
+```
+
+Depois disso, em qualquer pasta, `atualizar-ias` executa a verificação (`-Check`) e `atualizar-ias -All` executa as atualizações elegíveis (após autorização e sem sessões ativas). Na raiz do checkout, também é possível executar diretamente:
 
 ```powershell
 powershell -NoProfile -File scripts/update-dev-tools.ps1 -Check
