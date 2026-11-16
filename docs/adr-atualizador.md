@@ -253,3 +253,95 @@ compilação padrão sem canal e geração local de NSIS assinado de teste.
 durante instalação, antivírus/Windows limpo, queda de energia, recuperação e
 rollback instalado. Não executar esses passos até a etapa 3.
 Relatório e contagens: `%LOCALAPPDATA%\Horus\dev-reports\HOR-100-B.md`.
+
+## Protótipo local — etapa 3
+
+Ensaio Windows de 16/11/2026, sobre `origin/main` `346dfa5`, com N=`0.1.0` e
+N+1=`0.1.1`, perfil mínimo e chave exclusiva de teste fora do Git. A versão do
+produto nos manifestos versionados continua `0.1.0`. Não houve publicação.
+
+O script [test-updater-e2e.ps1](../scripts/test-updater-e2e.ps1) instala N em
+TEMP, controla **o WebView real instalado** por CDP local e confirma pelo diálogo
+de Ajustes → Atualizações. Não usa mocks de IPC nem troca o instalador manualmente
+no caminho de sucesso. O servidor registra cada requisição: o caso positivo tem
+zero GET do pacote antes da confirmação; downloads dos dois casos negativos são
+identificados separadamente. Depois da confirmação, foi observado NSIS com
+`/P /UPDATE /R /ARGS`, reinício em N+1, backend autenticado saudável e SQLite íntegro.
+O instalador baixado/guardado tem o mesmo SHA-256 do artefato assinado do canal.
+
+### Critérios S1–S6
+
+| Critério | Evidência executada |
+|---|---|
+| S1 — autoridade do backend | Chamadas diretas ao comando Rust com UI livre: job `factory.profile` realmente em execução e reserva previamente negada devolvem `blocked/job_running`; nenhum pacote é pedido. A fábrica é uma fixture local que dorme, não uma renderização/inferência real. |
+| S2 — WAL e restauração | Escritor SQLite externo concorrente durante o backup; ZIP verificado e restaurado, conteúdo e `integrity_check` conferidos; o backend N+1 instalado abre a cópia restaurada e responde à saúde autenticada. Mídia/cache excluídos do ZIP são preservados/copiados separadamente no ensaio, explicitamente. |
+| S3 — compatibilidade | Manifestos menor e igual nunca viram `available`; retorno manual a N apenas com instalador guardado e schema compatível. Cópia sintética de schema futuro é recusada pelo backend antigo, com hash inalterado. |
+| S4 — concorrência | Consultas e instalações simultâneas devolvem o estado ocupado à segunda chamada: uma consulta ao manifesto ou um download/backup, sem duplicação de reserva/efeitos. |
+| S5 — assinatura | Pacote com byte adulterado e pacote assinado por outra chave geram `signature_invalid`; hash do binário, conteúdo lógico de todas as tabelas SQLite e quatro arquivos de fixture permanecem inalterados. |
+| S6 — sucesso após saúde | Recibo pendente antes de instalar; no reinício, fase `installing` até validar versão nova + backend autenticado + `PRAGMA integrity_check`. Só então grava resultado saudável e volta a `idle`. Banco futuro provoca resultado não saudável e `install_failed`, nunca sucesso. |
+
+Não foi necessária fase nova no contrato. `GET /v1/update/health` é somente
+leitura/autenticado, adicionado ao snapshot OpenAPI; não modifica schema.
+Metadados do resultado ficam em `workspace/updater/pending-health.json` e
+`last-update-result.json`, sem segredos. Falha mantém o recibo para diagnóstico
+e nova verificação ao reiniciar; não instala versão menor automaticamente.
+
+### Isolamento e defeitos encontrados
+
+O relançamento NSIS passa pelo shell; o ensaio não depende de herdar env. O overlay
+`-E2eRoot` fixa `appDirectoriesOverride` e CDP, e o Rust só reconhece esse sandbox
+quando o canal local é válido e a pasta exclusiva está sob TEMP. Backend, Hermes
+fictício, preferências e WebView permanecem no sandbox após reiniciar. O build
+padrão não recebe esse overlay nem CDP.
+
+Corrigidos durante o ensaio:
+
+- `canonicalize()` acrescentava `\\?\` no Windows; ao chegar ao Python, a URI
+  SQLite tinha autoridade `%3F` e o backup era recusado. A validação usa o canônico,
+  mas o caminho propagado permanece absoluto normal; regressão Rust adicionada.
+- Fechar a última janela após falha de inicialização do backend podia deixar o
+  desktop vivo. O encerramento agora solicita saída explícita também sem backend,
+  sem interceptar novamente a saída programática; o caso real de saúde negativa
+  cobre essa regressão e termina sem processo órfão.
+
+A primeira tentativa abortou corretamente porque o contador da pasta real variou
+19 bytes; medições posteriores, com o ensaio já desinstalado, também variaram.
+O app real não foi encerrado pelo ensaio. A execução final ocorreu numa janela
+em que ele já não era encontrado e confirmou contagem/tamanho idênticos antes/depois,
+desinstalação `/S`, registro/atalhos limpos e ausência de processos de teste.
+Nenhum dado real foi restaurado, revertido ou removido para satisfazer o contador.
+
+### Repetição e roteiro manual
+
+```powershell
+$env:UV_NATIVE_TLS = '1'
+$env:NODE_OPTIONS = '--use-system-ca'
+powershell -NoProfile -File scripts/test-updater-e2e.ps1 -Build
+```
+
+O script preserva seu sandbox e evidências; reexecuções arquivam somente os arquivos
+de ensaio anteriores. Sem `-Build`, informe `-Root` correspondente ao overlay já
+compilado. Recusa instalação preexistente e não usa portas 1420/8765. Canal em
+19430, CDP em 19431; testes de UI auxiliares usam 19432.
+
+Para repetir clicando: construir N e N+1 com `build-updater-test.ps1`, mesmo
+`-E2eRoot` temporário, porta e chave; guardar N, instalar N no destino TEMP e abrir
+com dados/perfil isolados; servir `channel-c` em 127.0.0.1; em **Ajustes → Atualizações**,
+clicar **VERIFICAR AGORA**, conferir N+1 e abrir o diálogo de instalação; cancelar
+deve manter zero downloads positivos; confirmar deve criar backup, baixar/verificar,
+fechar/reabrir e mostrar N+1, com recibo saudável e dados íntegros. Usar outro usuário/VM
+se houver instalação existente e não executar sobre a instalação operacional.
+
+Rollback continua **manual**: fechar N+1, guardar banco/sidecars e instalador atual,
+reinstalar N somente quando seu schema for compatível ou restaurar backup verificado
+em pasta nova. O ZIP não restaura mídia, modelos, WebView, segredos nem `updater/`;
+esses recursos permanecem separados. O ensaio N/N+1 usa schema 9 em ambos, não uma
+migração real; a recusa de schema 10 foi exercitada numa cópia descartável.
+
+Verificado: jornada instalada pelo plugin, confirmação real, todos os negativos,
+WAL/restauração/saúde/rollback compatível e limpeza. Não verificado: máquina limpa,
+queda de energia, atualizações com migração real, canal remoto ou assinatura
+Authenticode. Distribuição, custódia da chave real, retenção/cobertura do backup e
+caixa de exclusão do desinstalador continuam decisões do usuário.
+Contagens, hashes, comandos, screenshots e logs ficam no relatório local
+`%LOCALAPPDATA%\Horus\dev-reports\HOR-100-C.md`.

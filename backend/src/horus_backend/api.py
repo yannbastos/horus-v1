@@ -315,6 +315,15 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         busy = count > 0 or previews > 0 or manager.active_id is not None or manager.active_process is not None
         return {"busy": busy, "active_jobs": count, "active_previews": previews}
 
+    @app.get("/v1/update/health")
+    def update_health():
+        with store.connect() as db:
+            integrity=[row[0] for row in db.execute('PRAGMA integrity_check')]
+            version=db.execute('PRAGMA user_version').fetchone()[0]
+        if integrity!=['ok']:
+            raise HTTPException(503,"Verificação dos dados falhou; preserve o banco.")
+        return {"ok":True,"integrity_check":"ok","schema_version":version}
+
     @app.post("/v1/update/backup")
     def update_backup():
         if update_activity()["busy"]:
