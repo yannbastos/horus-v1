@@ -116,6 +116,7 @@ Quando uma decisão importante exigir aprovação, avance primeiro no trabalho i
 - Antes de um commit autorizado, revise o diff e selecione somente alterações da tarefa; não inclua trabalho alheio nem segredos.
 - Não crie repositórios remotos sem autorização.
 - A branch principal atual é `main`; confirme o estado real antes de operar. Não renomeie ou remova branches por conta própria.
+- Encerramento de tarefas, remoção de worktrees e limpeza de branches seguem [Encerramento de tarefas e limpeza](docs/AGENT-GOVERNANCE.md#encerramento-de-tarefas-e-limpeza).
 - Sugira mensagens de commit no padrão Conventional Commits.
 
 ## Peça aprovação antes de
@@ -126,7 +127,7 @@ Quando uma decisão importante exigir aprovação, avance primeiro no trabalho i
 - Incluir dependências com impacto relevante.
 - Instalar ou atualizar dependências que tragam riscos relevantes, alterações significativas ou mudanças no ambiente global.
 - Excluir arquivos em massa, remover mídias/bancos ou fazer mudanças que possam causar perda de dados.
-- Executar operações irreversíveis no Git, force push, reset destrutivo ou exclusão de branches remotas. Autorização de commit/push comum não cobre essas ações.
+- Executar operações irreversíveis no Git, force push, reset destrutivo ou exclusão de branches remotas não integradas, protegidas ou com PR aberto. Branches temporárias comprovadamente integradas seguem a seção de encerramento da governança. Autorização de commit/push comum não cobre essas ações.
 - Modificar credenciais, permissões, autenticação ou configurações sensíveis, inclusive arquivos privados de conexão e configuração do Hermes.
 - Publicar releases/instaladores/vídeos, fazer deploy ou alterar produção. Gerar um build local para validação não autoriza sua publicação.
 - Mudar o escopo ou os objetivos do produto.

@@ -9,7 +9,7 @@ Procedimento canônico: `docs/RETOMADA-MAESTRO.md`, a partir da raiz do reposit�
 
 1. Leia `docs/RETOMADA-MAESTRO.md` e execute as etapas A a D em **modo somente leitura**: sem reset, clean, merge, pull, stash ou push, sem instalar, configurar, alterar Issues ou o Project, e sem imprimir tokens.
 2. Apresente o resumo da etapa E.
-3. Retome somente o que `docs/AGENT-GOVERNANCE.md` autoriza para o seu papel.
+3. Retome somente o que `docs/AGENT-GOVERNANCE.md` autoriza para o seu papel, encerrando tarefas concluídas conforme a seção "Encerramento de tarefas e limpeza" dela.
    - Como **programador**: trabalhe na tarefa e nos arquivos atribuídos, faça commits na própria branch e entregue ao Maestro.
    - Como **Maestro**, só quando o usuário designar: coordenação completa conforme a governança.
 

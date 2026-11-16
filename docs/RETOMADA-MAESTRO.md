@@ -102,6 +102,7 @@ Depois disso, retome a coordenação conforme a governança:
 - Recrie worktrees a partir das branches publicadas.
 - Delegue tarefas independentes.
 - Atualize Issue, Status do Project e evidências.
+- Encerre tarefas concluídas conforme [Encerramento de tarefas e limpeza](AGENT-GOVERNANCE.md#encerramento-de-tarefas-e-limpeza).
 
 Continua exigindo autorização do usuário: inferência real, APIs pagas, credenciais, publicação, envio de dados privados e Git destrutivo.
 
