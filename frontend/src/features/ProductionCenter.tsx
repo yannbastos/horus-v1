@@ -5,11 +5,12 @@ import type { CenterRow, StageFilter } from '../services/productionCenter';
 import { StatusMessage } from '../components/StatusMessage';
 import CenterFilters from './production-center/CenterFilters';
 import CenterTable from './production-center/CenterTable';
+import type { GuideStepId } from '../services/firstVideoGuide';
 import FirstVideoGuide from './production-center/FirstVideoGuide';
 
 export default function ProductionCenter({ connection, onOpenProduction, onOpenSettings }: {
   connection: Connection | null;
-  onOpenProduction: () => void;
+  onOpenProduction: (stepId?: GuideStepId) => void;
   onOpenSettings?: () => void;
 }) {
   const [rows, setRows] = useState<CenterRow[] | null>(null);

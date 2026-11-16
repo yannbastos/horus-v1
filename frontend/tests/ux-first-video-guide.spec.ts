@@ -1,4 +1,5 @@
 import config from '../playwright.config';
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
@@ -321,4 +322,196 @@ test('recolher lembra preferência no localStorage, funciona sem localStorage e 
   await expect(page.getByTestId('first-video-guide')).toBeVisible();
   await page.getByTestId('first-video-guide').getByRole('button', { name: 'RECOLHER' }).click();
   await expect(page.locator('#first-video-guide-list')).toHaveCount(0);
+});
+
+test('HOR-143: guia Escrever roteiro abre fluxo manual sem proposta prévia, cria workflow e abre ScriptEditor + separa CLI legado (com axe)', async ({ page }) => {
+  const manualWorkflowId = 'wf-manual-hor143';
+  const manualProposalId = 'art-manual-proposal-hor143';
+  let manualCreated = false;
+  let manualWorkflowBody: Record<string, unknown> | null = null;
+  let manualScriptCreated = false;
+
+  await page.route('http://127.0.0.1:8765/**', async route => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+    if (method === 'OPTIONS') {
+      return route.fulfill({ status: 204, headers: corsHeaders });
+    }
+    const ok = (json: unknown, status = 200) => route.fulfill({ status, headers: corsHeaders, json });
+    if (path === '/health') return ok({ status: 'ready' });
+    if (path === '/v1/hermes') {
+      return ok({ state: 'not_checked', connected: false, cli_available: false, configured: false, message: 'OK', checked_at: null, version: null, features: [] });
+    }
+    if (path === '/v1/notifications/unread-count') return ok({ count: 0 });
+    if (path === '/v1/narration/default-voice') return ok({ voice: { provider: 'kokoro', voice_id: 'pf_dora' } });
+    if (path === '/v1/jobs') return ok([]);
+
+    if (path === '/v1/workflows/manual' && method === 'POST') {
+      manualWorkflowBody = route.request().postDataJSON() as Record<string, unknown>;
+      manualCreated = true;
+      return ok({
+        workflow_id: manualWorkflowId,
+        status: 'approved',
+        proposal_artifact_id: manualProposalId,
+      }, 201);
+    }
+
+    if (path === '/v1/workflows') {
+      if (!manualCreated) return ok([]);
+      return ok([{
+        id: manualWorkflowId,
+        status: 'approved',
+        stage: 'proposal',
+        revision: 1,
+        created_at: '2026-11-16T00:00:00Z',
+        updated_at: '2026-11-16T00:00:00Z',
+        simulated: false,
+        executor: 'manual',
+      }]);
+    }
+
+    if (path === `/v1/workflows/${manualWorkflowId}`) {
+      return ok({
+        id: manualWorkflowId,
+        status: 'approved',
+        stage: 'proposal',
+        revision: 1,
+        current_artifact_id: manualProposalId,
+        created_at: '2026-11-16T00:00:00Z',
+        updated_at: '2026-11-16T00:00:00Z',
+        simulated: false,
+        executor: 'manual',
+        artifacts: [{
+          id: manualProposalId,
+          workflow_id: manualWorkflowId,
+          revision: 1,
+          stage: 'proposal',
+          created_at: '2026-11-16T00:00:00Z',
+          content: {
+            stage: 'proposal',
+            title: String(manualWorkflowBody?.title ?? 'Meu primeiro vídeo'),
+            recommendation: { premise: 'Roteiro manual criado pelo usuário.' },
+          },
+        }],
+        approvals: [{
+          id: 'app-manual-1',
+          workflow_id: manualWorkflowId,
+          revision: 1,
+          artifact_id: manualProposalId,
+          decision: 'approve',
+          feedback: '',
+          created_at: '2026-11-16T00:00:00Z',
+        }],
+        cognitive_runs: [],
+        events: [],
+      });
+    }
+
+    if (path === `/v1/workflows/${manualWorkflowId}/scripts` && method === 'GET') {
+      if (!manualScriptCreated) return ok({ items: [] });
+      return ok({
+        items: [{
+          id: 'script-manual-hor143',
+          workflow_id: manualWorkflowId,
+          workflow_revision: 1,
+          proposal_artifact_id: manualProposalId,
+          proposal_content_hash: 'hash-hor143',
+          version: 1,
+          status: 'awaiting_review',
+          origin: 'human',
+          authored_by: 'human',
+          created_at: '2026-11-16T00:00:00Z',
+          review: null,
+          document: {
+            schema_version: 1,
+            simulated: false,
+            title: String(manualWorkflowBody?.title ?? 'Meu primeiro vídeo'),
+            sections: [
+              { id: 'sec-1', kind: 'hook', heading: 'Abertura', narration: 'Texto inicial do vídeo.', source_ids: [] },
+            ],
+          },
+        }],
+      });
+    }
+
+    if (path === `/v1/workflows/${manualWorkflowId}/scripts` && method === 'POST') {
+      manualScriptCreated = true;
+      const body = route.request().postDataJSON() as { document: Record<string, unknown> };
+      return ok({
+        id: 'script-manual-hor143',
+        workflow_id: manualWorkflowId,
+        workflow_revision: 1,
+        proposal_artifact_id: manualProposalId,
+        proposal_content_hash: 'hash-hor143',
+        version: 1,
+        status: 'awaiting_review',
+        origin: 'human',
+        authored_by: 'human',
+        created_at: '2026-11-16T00:00:00Z',
+        review: null,
+        document: body.document,
+      }, 201);
+    }
+
+    return route.fulfill({ status: 404, headers: corsHeaders, json: { detail: `não mockado: ${path}` } });
+  });
+
+  const pageErrors: string[] = [];
+  page.on('pageerror', err => pageErrors.push(err.message));
+  await openProductionCenter(page);
+
+  // Clicar em "Abrir Produção" no passo 2 (Escrever roteiro) abre diretamente o formulário de roteiro do zero
+  await page.getByTestId('guide-step-write_script').getByRole('button', { name: /Abrir Produção/i }).click();
+
+  const manualForm = page.getByTestId('manual-script-create-form');
+  await expect(manualForm).toBeVisible();
+
+  // Seção legada (FABRICA_HOME / Consulta de perfil) fica recolhida em Recursos avançados
+  const legacyAdvanced = page.getByTestId('legacy-factory-advanced');
+  await expect(legacyAdvanced).toBeVisible();
+  await expect(legacyAdvanced).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('button', { name: 'CONSULTAR PERFIL' })).toHaveCount(0);
+
+  // Auditoria axe no formulário de roteiro do zero + seção avançada recolhida
+  const axeForm = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  expect(axeForm.violations).toEqual([]);
+
+  // Preenche só o título, cria workflow manual e abre ScriptEditor automaticamente com o título preenchido
+  await manualForm.getByLabel('Título do roteiro').fill('Meu primeiro vídeo local');
+  await manualForm.getByRole('button', { name: 'Criar e abrir editor' }).click();
+
+  expect(manualWorkflowBody).toEqual({ title: 'Meu primeiro vídeo local' });
+  const editor = page.getByRole('region', { name: /Editor de roteiro humano/i });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel(/Título do roteiro/i)).toHaveValue('Meu primeiro vídeo local');
+
+  // Preenche a primeira seção e salva
+  await editor.getByLabel(/Narração/i).first().fill('Olá, este é o meu primeiro vídeo criado localmente.');
+  await editor.getByRole('button', { name: 'Salvar roteiro', exact: true }).click();
+  await expect(page.getByText('Olá, este é o meu primeiro vídeo criado localmente.')).toBeVisible();
+
+  // Expandindo Recursos avançados, mostra explicação clara e os controles legados
+  await legacyAdvanced.locator('summary').click();
+  await expect(legacyAdvanced).toHaveAttribute('open', '');
+  await expect(legacyAdvanced).toContainText('local_pilot');
+  await expect(legacyAdvanced).toContainText('FABRICA_HOME');
+  await expect(page.getByRole('button', { name: 'CONSULTAR PERFIL' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('HOR-143: Produção sem workflows exibe estado vazio claro para escrever roteiro do zero', async ({ page }) => {
+  await installBackend(page, { defaultVoice: null, workflows: [] });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Ajustes', exact: true }).click();
+  await page.getByLabel('Token da sessão').fill('test-session-token-first-video-0123456789');
+  await page.getByRole('button', { name: 'CONECTAR BACKEND', exact: true }).click();
+  await page.getByRole('button', { name: 'Produção', exact: true }).click();
+
+  const emptyState = page.getByTestId('editorial-empty-state');
+  await expect(emptyState).toBeVisible();
+  await expect(emptyState.getByRole('button', { name: 'Escrever roteiro do zero' })).toBeVisible();
+
+  const axeEmpty = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  expect(axeEmpty.violations).toEqual([]);
 });

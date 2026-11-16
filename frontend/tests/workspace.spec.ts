@@ -44,6 +44,7 @@ test('mostra recusa do render e só repete após uma ação explícita', async (
   await page.getByLabel('Token da sessão').fill('browser-test-session-token-0123456789');
   await page.getByRole('button', { name: 'CONECTAR BACKEND', exact: true }).click();
   await page.getByRole('button', { name: 'Produção', exact: true }).click();
+  await page.getByTestId('legacy-factory-advanced').locator('summary').click();
   await page.getByLabel('Vídeo para rascunho').fill('fixture');
   await page.getByRole('button', { name: 'RENDERIZAR RASCUNHO', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText(reason);
@@ -82,6 +83,9 @@ test('preserva navegação, temas e organização nos tamanhos do desktop', asyn
   await page.screenshot({ path: 'test-results/overview-light-1040.png', fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole('button', { name: 'Produção', exact: true }).click();
+  const legacyAdvanced = page.getByTestId('legacy-factory-advanced');
+  await expect(legacyAdvanced).not.toHaveAttribute('open', '');
+  await legacyAdvanced.locator('summary').click();
   await expect(page.getByRole('button', { name: 'CONSULTAR PERFIL' })).toBeDisabled();
   await page.getByRole('button', { name: 'Transcrição', exact: true }).click();
   await expect(page.getByRole('heading', { name: /Áudio e vídeo/ })).toBeVisible();
