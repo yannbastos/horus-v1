@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ApiError } from '../../services/api';
 import type { Connection } from '../../services/api';
 import type {
   ReviewComment,
@@ -133,6 +134,14 @@ export default function ReviewCommentsPanel({
         mergeKnownVersions(page.items);
       } catch (reason) {
         if (signal?.aborted) return;
+        if (reason instanceof ApiError && reason.status === 404) {
+          // Backend sem suporte a comentários ou produção ausente (já sinalizada por ProductionRun)
+          setComments([]);
+          setCounts({ open: 0, resolved: 0 });
+          setNextAfter(null);
+          mergeKnownVersions([]);
+          return;
+        }
         setLoadError(formatProductionError(reason));
       } finally {
         if (!signal?.aborted) setLoading(false);
