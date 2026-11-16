@@ -42,6 +42,7 @@ from .data_deletion import DataDeletionService, DeletionExecuteRequest, Deletion
 from .notifications import NotificationService
 from .project_import import ImportRefused, ImportService
 from .storage import Store
+from .update_backup import create_update_backup
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ManualWorkflowRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
 from .whisper_download import ConfirmDownload as ConfirmWhisperDownload, DownloadStarted as WhisperDownloadStarted, DownloadCatalog
@@ -269,6 +270,24 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.post("/v1/hermes/probe")
     async def probe_hermes():
         return await hermes.probe()
+
+    @app.get("/v1/update/activity")
+    def update_activity():
+        # Sem LIMIT: /v1/jobs mostra somente os últimos 100 e pode ocultar um job ativo.
+        with store.connect() as db:
+            count = db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running','cancel_requested')").fetchone()[0]
+        with narration.lock:
+            previews = narration.active_previews
+        return {"busy": count > 0 or previews > 0, "active_jobs": count, "active_previews": previews}
+
+    @app.post("/v1/update/backup")
+    def update_backup():
+        if update_activity()["busy"]:
+            raise HTTPException(409, "Há trabalho crítico pendente ou em execução.")
+        try:
+            return create_update_backup(settings.data_dir)
+        except (OSError, ValueError, sqlite3.Error):
+            raise HTTPException(409, "Backup pré-atualização falhou; não atualize.") from None
 
     @app.get("/v1/jobs")
     async def jobs():

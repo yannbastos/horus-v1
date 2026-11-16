@@ -59,6 +59,8 @@ def smoke(executable, desktop=False, crash=False, data_dir=None, with_transcript
         # Sem node, uv, Python, ffmpeg ou modelos descobertos pelo ambiente do operador.
         env["PATH"] = os.path.join(os.environ["SystemRoot"], "System32")
         env["HORUS_DATA_DIR"] = folder
+        # WebView mantém preferências fora de HORUS_DATA_DIR por padrão.
+        env["WEBVIEW2_USER_DATA_FOLDER"] = str(Path(folder) / "webview")
         env["HORUS_HERMES_CONFIG"] = str(Path(folder) / "missing-hermes.json")
         env["HORUS_HERMES_PROFILE"] = str(Path(folder) / "hermes-profile")
         token = secrets.token_hex(32)
@@ -146,6 +148,8 @@ def smoke(executable, desktop=False, crash=False, data_dir=None, with_transcript
             else:
                 request(port, token, "/v1/shutdown", "POST")
             proc.wait(timeout=15)
+            if not crash:
+                assert proc.returncode == 0, f"Encerramento anormal: {proc.returncode}"
             deadline = time.monotonic() + 10
             while backend.is_running() and time.monotonic() < deadline:
                 time.sleep(.1)

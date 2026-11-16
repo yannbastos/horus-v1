@@ -8,6 +8,17 @@ import sys
 import threading
 from pathlib import Path
 
+
+def watch_owner_input(shutdown):
+    # Leitura sem o lock do BufferedReader: /v1/shutdown pode terminar o
+    # interpretador enquanto o desktop ainda mantém stdin aberto.
+    try:
+        while os.read(sys.stdin.fileno(), 65536):
+            pass
+    except OSError:
+        pass
+    shutdown()
+
 def main():
     from .worker_runtime import dispatch
     dispatch()
@@ -42,7 +53,7 @@ def main():
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False))
     if os.environ.get("HORUS_MANAGED") == "1":
         # EOF detecta morte do desktop sem polling de CPU.
-        threading.Thread(target=lambda: (sys.stdin.buffer.read(), shutdown()), daemon=True).start()
+        threading.Thread(target=watch_owner_input, args=(shutdown,), daemon=True).start()
     try:
         server.run(sockets=[listener])
     finally:
