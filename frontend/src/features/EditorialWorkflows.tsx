@@ -19,6 +19,7 @@ import {
   reviewWorkflow,
 } from '../services/api';
 import { StatusMessage } from '../components/StatusMessage';
+import { nativeDesktop } from '../platform/desktop';
 import ProposalComparePanel, { type ProposalCompareItem } from './proposal-compare/ProposalComparePanel';
 import ScriptReview, { type AutoOpenEditorRequest } from './ScriptReview';
 
@@ -410,7 +411,9 @@ export default function EditorialWorkflows({
 
       {!connection && (
         <StatusMessage state="empty" role="status">
-          Conecte o backend local em Ajustes para escrever roteiros do zero e acompanhar aprovações.
+          {nativeDesktop
+            ? 'Backend local indisponível. Use RECONECTAR BACKEND em Ajustes para escrever roteiros do zero e acompanhar aprovações.'
+            : 'Conecte o backend local em Ajustes para escrever roteiros do zero e acompanhar aprovações.'}
         </StatusMessage>
       )}
 
