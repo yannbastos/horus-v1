@@ -83,8 +83,25 @@ function Test-DevActive {
     return $false
 }
 
+function Get-DevPolicyKeys {
+    param([string]$Name, [string]$Manager)
+    # Cada política só vale para a ferramenta a que pertence. Chaves genéricas de
+    # fornecedor (ex.: Policies\Google do Chrome/Google Update) não indicam gestão
+    # de Antigravity nem de Hermes.
+    $keys = switch ($Name) {
+        'claude' { @('Anthropic') }
+        'codex' { @('OpenAI') }
+        'antigravity' { @('Google\Antigravity') }
+        'hermes' { @('NousResearch') }
+        default { @() }
+    }
+    foreach ($k in $keys) { "HKLM:\SOFTWARE\Policies\$k"; "HKCU:\SOFTWARE\Policies\$k" }
+    # Política do App Installer só importa quando a instalação vem do winget/MSIX.
+    if ($Manager -match 'winget') { 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller' }
+}
+
 function Get-DevPolicy {
-    param([string[]]$Paths)
+    param([string[]]$Paths, [string]$Name = '', [string]$Manager = '')
     $reasons = @()
     foreach ($path in $Paths) {
         foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:windir)) {
@@ -93,11 +110,36 @@ function Get-DevPolicy {
         if (-not $path.StartsWith($env:USERPROFILE.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $reasons += 'Fora do perfil do usuário; propriedade não comprovada' }
     }
     # Apenas existência de políticas, nunca conteúdo privado ou credenciais.
-    foreach ($key in @('HKLM:\SOFTWARE\Policies\Anthropic','HKCU:\SOFTWARE\Policies\Anthropic','HKLM:\SOFTWARE\Policies\OpenAI','HKCU:\SOFTWARE\Policies\OpenAI','HKLM:\SOFTWARE\Policies\Google','HKCU:\SOFTWARE\Policies\Google','HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller')) {
-        if (Test-Path $key) { $reasons += "Política corporativa presente: $key" }
+    foreach ($key in @(Get-DevPolicyKeys $Name $Manager)) {
+        if (Test-Path $key) { $reasons += "Política corporativa presente para ${Name}: $key" }
     }
-    if (Test-Path (Join-Path $env:ProgramData 'ClaudeCode/managed-settings.json')) { $reasons += 'Claude gerenciado' }
+    if ($Name -eq 'claude' -and (Test-Path (Join-Path $env:ProgramData 'ClaudeCode/managed-settings.json'))) { $reasons += 'Claude gerenciado: ProgramData\ClaudeCode\managed-settings.json' }
     return @($reasons | Select-Object -Unique)
+}
+
+function Invoke-DevStdout {
+    param([string]$File, [string[]]$Arguments)
+    # Somente stdout: no Windows PowerShell 5.1, 2>&1 embrulha o stderr do npm
+    # ("npm warn ...") em "npm.cmd : npm warn ...", que virava caminho inválido.
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $File @Arguments 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
+        return @($output | ForEach-Object { "$_" })
+    } finally { $ErrorActionPreference = $previous }
+}
+
+function Get-DevNpmDirectory {
+    param([string]$Npm, [ValidateSet('root','prefix')][string]$What)
+    $fail = { param($m) [pscustomobject]@{ Path=''; Error="npm $What -g: $m" } }
+    try { $lines = @(Invoke-DevStdout $Npm @($What, '-g')) } catch { return (& $fail $_.Exception.Message) }
+    $line = @($lines | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ } | Select-Object -Last 1)
+    if (-not $line.Count) { return (& $fail 'saída vazia') }
+    $value = [string]$line[0]
+    if ($value -notmatch '^(?:[A-Za-z]:[\\/]|\\\\)' -or $value.IndexOfAny([IO.Path]::GetInvalidPathChars()) -ge 0) { return (& $fail 'saída não é um caminho absoluto') }
+    if (-not (Test-Path -LiteralPath $value -PathType Container)) { return (& $fail 'diretório inexistente') }
+    [pscustomobject]@{ Path=$value.TrimEnd('\','/'); Error='' }
 }
 
 function Get-DevInstall {
@@ -128,14 +170,20 @@ function Get-DevInstall {
         elseif ($path -match '[\\/]uv[\\/]tools[\\/]') { $origins += 'uv tool' }
         elseif ($path -match '[\\/](site-packages|Scripts)[\\/]') { $origins += 'pip/venv (confirmar distribuição)' }
     }
-    if ($Entry.Package -and (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-        $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-        $root = (Invoke-DevCommand $npm @('root','-g')).Trim()
-        $prefix = (Invoke-DevCommand $npm @('prefix','-g')).Trim()
-        $manifest = Join-Path (Join-Path $root $Entry.Package) 'package.json'
-        if (Test-Path $manifest) {
-            $pkg = Get-Content $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($pkg.name -eq $Entry.Package -and @($paths | Where-Object { (Split-Path $_ -Parent) -eq $prefix }).Count) { $origins += 'npm global' }
+    $detectionError = ''
+    $npmCmd = @(if ($Entry.Package) { Get-Command npm.cmd -ErrorAction SilentlyContinue | Where-Object { $_.Source } | Select-Object -First 1 })
+    if ($npmCmd.Count) {
+        $npm = $npmCmd[0].Source
+        $root = Get-DevNpmDirectory $npm 'root'
+        $prefix = Get-DevNpmDirectory $npm 'prefix'
+        if ($root.Error -or $prefix.Error) {
+            $detectionError = (@($root.Error, $prefix.Error) | Where-Object { $_ }) -join '; '
+        } else {
+            $manifest = Join-Path (Join-Path $root.Path $Entry.Package) 'package.json'
+            if (Test-Path -LiteralPath $manifest) {
+                $pkg = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($pkg.name -eq $Entry.Package -and @($paths | Where-Object { (Split-Path $_ -Parent).TrimEnd('\') -eq $prefix.Path }).Count) { $origins += 'npm global' }
+            }
         }
     }
     if (@($registered | Where-Object WinGetPackageIdentifier).Count) { $origins += 'winget/MSIX' }
@@ -152,9 +200,9 @@ function Get-DevInstall {
     # .cmd/.ps1/.exe adjacentes do mesmo shim são uma instalação, mas todos aparecem no relatório.
     $locations = @($paths | ForEach-Object { Split-Path $_ -Parent } | Select-Object -Unique)
     $policyPaths = @($paths) + @($registered | Where-Object InstallLocation | ForEach-Object InstallLocation)
-    $policy = @(Get-DevPolicy $policyPaths)
+    $policy = @(Get-DevPolicy $policyPaths $Entry.Name $manager)
     if (@($registered | Where-Object { $_.PSPath -match 'HKEY_LOCAL_MACHINE' }).Count) { $policy += 'App por máquina' }
-    [pscustomobject]@{ Paths=$paths; Apps=$apps; Manager=$manager; Npm=$npm; Conflict=($aliasConflict -or $locations.Count -gt 1 -or @($origins | Select-Object -Unique).Count -gt 1); Policy=$policy }
+    [pscustomobject]@{ Paths=$paths; Apps=$apps; Manager=$manager; Npm=$npm; DetectionError=$(if ($manager -eq 'desconhecido') { $detectionError } else { '' }); Conflict=($aliasConflict -or $locations.Count -gt 1 -or @($origins | Select-Object -Unique).Count -gt 1); Policy=$policy }
 }
 
 function Get-DevLatest {
@@ -224,7 +272,9 @@ function Invoke-DevTool {
         $r.Method = (@($plan.File) + @($plan.Args)) -join ' '
         if ($plan.Manual) { $r.Method += ' | ' + $plan.Manual }
         if ($i.Policy.Count) { $r.Status='Gerenciado'; $r.Detail=$i.Policy -join '; '; return [pscustomobject]$r }
+        if ($i.DetectionError) { $r.Status='FalhaDeteccao'; $r.Detail="Não foi possível identificar a origem da instalação ($($i.DetectionError)); atualização bloqueada."; return [pscustomobject]$r }
         if ($i.Conflict) { $r.Status='Conflito'; $r.Detail='Múltiplas origens/localizações ou alias; resolver manualmente sem alterar PATH.'; return [pscustomobject]$r }
+        if ($i.Manager -eq 'desconhecido') { $r.Status='InstalacaoDesconhecida'; $r.Detail='Instalação não reconhecida (não é npm global comprovado nem local conhecido); atualização bloqueada para não criar uma segunda cópia.'; return [pscustomobject]$r }
         if (Test-DevActive $Entry @(Get-DevProcesses)) { $r.Status='SessaoAtiva'; $r.Detail='Pulado: processo ativo ou host sem linha de comando verificável; nenhum processo encerrado.'; return [pscustomobject]$r }
         if ($networkError) { $r.Status='RedeIndisponivel'; $r.Detail=$networkError; return [pscustomobject]$r }
         if (-not $current -or ($r.LatestStable -and -not $target)) { $r.Status='VersaoIncompativel'; $r.Detail='Versão não reconhecida ou prerelease; intervenção manual.'; return [pscustomobject]$r }
