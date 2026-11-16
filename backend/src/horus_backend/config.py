@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
+from .bundled_runtime import configured_resource, resource
+
 
 def default_data_dir() -> Path:
     if os.name == "nt":
@@ -21,6 +23,9 @@ def discover_factory() -> Path | None:
     configured = os.environ.get("FABRICA_HOME") or os.environ.get("HORUS_PILOT_FACTORY")
     if configured:
         return Path(configured).expanduser().resolve()
+    bundled = resource('factory')
+    if bundled:
+        return bundled
     for parent in Path(__file__).resolve().parents:
         candidate = parent / "fabrica-canais"
         if (candidate / "scripts/pyproject.toml").is_file():
@@ -99,8 +104,8 @@ class Settings:
     alignment_model: Path | None = field(default_factory=lambda: (
         Path(os.environ["HORUS_ALIGNMENT_MODEL"]).expanduser() if os.environ.get("HORUS_ALIGNMENT_MODEL") else None))
     # Ferramenta/fonte locais preparadas fora do job; sem instalação ou PATH global.
-    ffmpeg: Path | None = field(default_factory=lambda: Path(os.environ["HORUS_FFMPEG"]).expanduser() if os.environ.get("HORUS_FFMPEG") else None)
-    subtitle_font: Path | None = field(default_factory=lambda: Path(os.environ["HORUS_SUBTITLE_FONT"]).expanduser() if os.environ.get("HORUS_SUBTITLE_FONT") else None)
+    ffmpeg: Path | None = field(default_factory=lambda: configured_resource('HORUS_FFMPEG', 'tools/ffmpeg.exe'))
+    subtitle_font: Path | None = field(default_factory=lambda: configured_resource('HORUS_SUBTITLE_FONT', 'fonts/ArchivoExpanded-SemiBold.ttf'))
     # Apenas configuração do operador/testes. Nunca aceitar executável vindo da API.
     factory_command: tuple[str, ...] | None = None
     # Somente testes substituem o subprocesso de transcrição/download.
@@ -123,8 +128,8 @@ class Settings:
     elevenlabs_currency: str | None = field(default_factory=lambda: os.environ.get("HORUS_ELEVENLABS_CURRENCY"))
     piper_executable: Path | None = field(default_factory=lambda: Path(os.environ["HORUS_PIPER_EXECUTABLE"]).expanduser() if os.environ.get("HORUS_PIPER_EXECUTABLE") else None)
     piper_models: Path | None = field(default_factory=lambda: Path(os.environ["HORUS_PIPER_MODELS"]).expanduser() if os.environ.get("HORUS_PIPER_MODELS") else None)
-    kokoro_python: Path | None = field(default_factory=lambda: Path(os.environ["HORUS_KOKORO_PYTHON"]).expanduser() if os.environ.get("HORUS_KOKORO_PYTHON") else None)
-    kokoro_model_dir: Path | None = field(default_factory=lambda: Path(os.environ["HORUS_KOKORO_MODEL_DIR"]).expanduser() if os.environ.get("HORUS_KOKORO_MODEL_DIR") else None)
+    kokoro_python: Path | None = field(default_factory=lambda: configured_resource('HORUS_KOKORO_PYTHON', 'factory/scripts/.venv/Scripts/python.exe'))
+    kokoro_model_dir: Path | None = field(default_factory=lambda: configured_resource('HORUS_KOKORO_MODEL_DIR', 'kokoro'))
     hermes_poll_seconds: float = 2.0
     hermes_run_timeout: float = 900.0
     origins: tuple[str, ...] = field(default_factory=frontend_origins)
