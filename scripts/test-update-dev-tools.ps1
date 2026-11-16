@@ -8,7 +8,7 @@ function Assert-Equal($Actual,$Expected,$Name) {
     $script:passed++; Write-Host "PASS $Name"
 }
 $script:entry=@(Get-DevCatalog)[1]
-$script:fixture=[pscustomobject]@{ Paths=@('C:\Users\test\codex.cmd'); Apps=@(); Manager='npm global'; Npm='npm.cmd'; Conflict=$false; Policy=@() }
+$script:fixture=[pscustomobject]@{ Paths=@('C:\Users\test\codex.cmd'); Apps=@(); Manager='npm global'; Npm='npm.cmd'; DetectionError=''; Conflict=$false; Policy=@() }
 $script:installed='codex-cli 1.0.0'
 $script:latest='1.1.0'
 $script:active=$false
@@ -52,10 +52,20 @@ $script:fixture.Policy=@()
 $script:fixture.Conflict=$true
 Assert-Equal (Invoke-DevTool $entry $true $false).Status 'Conflito' 'duplicatas bloqueiam'
 $script:fixture.Conflict=$false
-foreach ($manager in @('scoop','winget/MSIX','pipx','uv tool','pip/venv (confirmar distribuição)','desconhecido','instalador próprio / auto-update nativo')) {
+foreach ($manager in @('scoop','winget/MSIX','pipx','uv tool','pip/venv (confirmar distribuição)','instalador próprio / auto-update nativo')) {
     $script:fixture.Manager=$manager
     Assert-Equal (Invoke-DevTool $entry $true $false).Status 'Manual' "gerenciador $manager não é substituído"
 }
+$script:fixture.Manager='desconhecido'
+$r=Invoke-DevTool $entry $true $false
+Assert-Equal $r.Status 'InstalacaoDesconhecida' 'instalação não reconhecida bloqueia'
+Assert-Equal ($r.Detail -match 'bloqueada') $true 'instalação desconhecida explica o bloqueio'
+$script:fixture.DetectionError='npm root -g: saída vazia'
+$r=Invoke-DevTool $entry $true $false
+Assert-Equal $r.Status 'FalhaDeteccao' 'falha de detecção distinta de desconhecida'
+Assert-Equal ($r.Detail -match 'saída vazia') $true 'falha de detecção traz motivo curto'
+$script:fixture.DetectionError=''
+Assert-Equal $script:mutations 0 'desconhecida/falha de detecção não mutam'
 $script:fixture.Manager='npm global'
 $script:installed='versão desconhecida'
 Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoIncompativel' 'versão incompatível'
@@ -106,7 +116,7 @@ Write-Host "$script:passed testes aprovados; nenhuma atualização real, rede ou
 $script:commandPaths=@()
 function Get-Command { param($Name,[switch]$All,$ErrorAction); if($Name -ne 'npm.cmd') { foreach($path in $script:commandPaths) { [pscustomobject]@{ CommandType='Application'; Source=$path } } } }
 function Get-ItemProperty { param($Path,$ErrorAction); @() }
-function Get-DevPolicy { param($Paths); @() }
+function Get-DevPolicy { param($Paths,$Name,$Manager); @() }
 foreach ($pair in @(
     @('C:\Users\test\scoop\shims\codex.cmd','scoop'),
     @('C:\Users\test\AppData\Local\Microsoft\WinGet\Links\codex.exe','winget/MSIX'),
@@ -136,4 +146,80 @@ function Get-CimInstance { throw 'acesso negado' }
 $blocked=$false
 try { $null=Get-DevProcesses } catch { $blocked=$true }
 Assert-Equal $blocked $true 'falha de inventário não libera atualização'
+
+# --- HOR-144: npm com ruído, política por ferramenta e estados do diagnóstico.
+. (Join-Path $PSScriptRoot 'update-dev-tools.ps1')
+foreach ($f in @('Get-Command','Get-ItemProperty','Get-Process','Get-CimInstance')) { Remove-Item "function:$f" -ErrorAction SilentlyContinue }
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ('dev-tools-test-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $tmp | Out-Null
+try {
+    function Invoke-DevStdout { param($File,$Arguments); if ($script:npmFail) { throw 'exit 1' }; $script:npmLines }
+    $script:npmFail=$false
+    $script:npmLines=@($tmp)
+    $d=Get-DevNpmDirectory 'npm.cmd' 'root'
+    Assert-Equal $d.Path $tmp 'npm root: saída limpa'
+    $script:npmLines=@('npm.cmd : npm warn Unknown user config "always-auth".',"  $tmp  ",'')
+    Assert-Equal (Get-DevNpmDirectory 'npm.cmd' 'prefix').Path $tmp 'npm prefix: ruído antes, usa a última linha não vazia'
+    $script:npmLines=@('npm.cmd : npm warn Unknown user config')
+    $d=Get-DevNpmDirectory 'npm.cmd' 'root'
+    Assert-Equal $d.Path '' 'texto de aviso não vira caminho'
+    Assert-Equal ($d.Error -match 'absoluto') $true 'aviso: motivo informado'
+    $script:npmLines=@('','  ')
+    Assert-Equal ((Get-DevNpmDirectory 'npm.cmd' 'root').Error -match 'vazia') $true 'saída vazia'
+    $script:npmLines=@('relativo\dir')
+    Assert-Equal ((Get-DevNpmDirectory 'npm.cmd' 'root').Error -match 'absoluto') $true 'caminho relativo recusado'
+    $script:npmLines=@((Join-Path $tmp 'nao-existe'))
+    Assert-Equal ((Get-DevNpmDirectory 'npm.cmd' 'root').Error -match 'inexistente') $true 'diretório inexistente recusado'
+    $script:npmFail=$true
+    Assert-Equal ((Get-DevNpmDirectory 'npm.cmd' 'root').Error -match 'exit 1') $true 'falha do npm vira erro, sem exceção'
+    $script:npmFail=$false
+
+    # Get-DevInstall com npm inválido: sem exceção, falha de detecção para Claude não-npm.
+    $claude=@(Get-DevCatalog)[0]
+    $script:cmds=@()
+    function Get-Command { param($Name,[switch]$All,$ErrorAction)
+        if ($Name -eq 'npm.cmd') { [pscustomobject]@{ CommandType='Application'; Source='C:\fake\npm.cmd' } }
+        else { foreach ($p in $script:cmds) { [pscustomobject]@{ CommandType='Application'; Source=$p } } } }
+    function Get-ItemProperty { param($Path,$ErrorAction); @() }
+    $script:cmds=@('C:\Users\test\custom\claude.exe')
+    $script:npmLines=@('npm.cmd : npm warn lixo')
+    $i=Get-DevInstall $claude
+    Assert-Equal $i.Manager 'desconhecido' 'npm inválido: origem desconhecida'
+    Assert-Equal ($i.DetectionError -match 'npm root -g') $true 'npm inválido: falha de detecção com motivo'
+    # Claude nativo reconhecido não é afetado pela falha do npm.
+    $nativeClaude = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+    $script:cmds=@($nativeClaude)
+    $i=Get-DevInstall $claude
+    Assert-Equal $i.Manager 'instalador próprio / auto-update nativo' 'Claude nativo não presume npm'
+    Assert-Equal $i.DetectionError '' 'nativo reconhecido sem falha de detecção'
+    # npm global comprovado continua reconhecido.
+    $modules=Join-Path $tmp 'node_modules'; $pkgDir=Join-Path $modules '@openai\codex'
+    New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $pkgDir 'package.json') -Value '{"name":"@openai/codex"}'
+    function Invoke-DevStdout { param($File,$Arguments); if ($Arguments[0] -eq 'root') { $modules } else { $tmp } }
+    $script:cmds=@((Join-Path $tmp 'codex.cmd'))
+    Assert-Equal (Get-DevInstall $entry).Manager 'npm global' 'npm global comprovado reconhecido'
+    Remove-Item function:Get-Command; Remove-Item function:Get-ItemProperty
+} finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+
+# Políticas: chave genérica do Google não gerencia Antigravity/Hermes.
+function Test-Path { param($Path,$LiteralPath,$PathType); $script:existing -contains $Path }
+$mine=@((Join-Path $env:USERPROFILE 'x\tool.exe'))
+$script:existing=@('HKLM:\SOFTWARE\Policies\Google','HKCU:\SOFTWARE\Policies\Google')
+foreach ($n in @('antigravity','hermes','claude','codex')) {
+    Assert-Equal @(Get-DevPolicy $mine $n 'instalador próprio').Count 0 "Policies\Google genérica não gerencia $n"
+}
+$script:existing=@('HKLM:\SOFTWARE\Policies\Google\Antigravity')
+$p=@(Get-DevPolicy $mine 'antigravity' 'instalador próprio')
+Assert-Equal @($p | Where-Object { $_ -match 'Google\\Antigravity' }).Count 1 'política específica do Antigravity bloqueia e cita a chave'
+Assert-Equal @(Get-DevPolicy $mine 'hermes' 'instalador próprio').Count 0 'política do Antigravity não afeta Hermes'
+$script:existing=@('HKCU:\SOFTWARE\Policies\Anthropic')
+Assert-Equal @(Get-DevPolicy $mine 'claude' 'npm global').Count 1 'política Anthropic bloqueia Claude'
+Assert-Equal @(Get-DevPolicy $mine 'codex' 'npm global').Count 0 'política Anthropic não afeta Codex'
+$script:existing=@('HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller')
+Assert-Equal @(Get-DevPolicy $mine 'codex' 'npm global').Count 0 'AppInstaller ignorado fora do winget'
+Assert-Equal @(Get-DevPolicy $mine 'codex' 'winget/MSIX').Count 1 'AppInstaller vale para winget/MSIX'
+$script:existing=@()
+Assert-Equal (@(Get-DevPolicy @('C:\Program Files\Tool\t.exe') 'hermes' '').Count -ge 1) $true 'instalação por máquina continua bloqueando'
+Remove-Item function:Test-Path
 Write-Host "TOTAL: $script:passed testes aprovados."
