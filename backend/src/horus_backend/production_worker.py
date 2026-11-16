@@ -508,7 +508,10 @@ def main():
         proxy, proxy_thread, rejected = deny_proxy()
         env = {**os.environ, 'HORUS_DEMO_PROXY':f'127.0.0.1:{proxy.server_port}', 'NODE_OPTIONS': '--require=' + str(root / 'offline-guard.cjs'),
                'HORUS_DEMO_NETLOG':str(root / 'browser-netlog.json'), 'HORUS_DEMO_LAUNCH':str(root / 'browser-launch.json'),
-               'npm_config_offline': 'true', 'npm_config_yes': 'false', 'HORUS_DEMO_BROWSER': str(browser),
+               'npm_config_offline': 'true', 'npm_config_yes': 'false', 'npm_config_update_notifier': 'false',
+               'npm_config_cache': str(root / 'npm-cache'),
+               'npm_config_userconfig': str(root / 'missing-user.npmrc'),
+               'npm_config_globalconfig': str(root / 'missing-global.npmrc'), 'HORUS_DEMO_BROWSER': str(browser),
                'HORUS_DEMO_FFPROBE': ffprobe, 'HORUS_DEMO_FFMPEG': ffmpeg}
         try:
             completed = run_factory_render(root,
