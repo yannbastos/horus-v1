@@ -9,6 +9,7 @@ import type {
 } from '../services/api';
 import { ApiError, api, getSecurityStatus, readDiskEncryption } from '../services/api';
 import { DiskEncryptionCard } from '../components/DiskEncryptionCard';
+import { DataDeletionHistorySection } from '../components/DataDeletionHistorySection';
 import {
   AvailabilityBadge,
   BlockerList,
@@ -292,6 +293,8 @@ export default function PrivacySecurity({ connection }: { connection: Connection
           <AuditSection audit={status.audit ?? null} />
 
           <CredentialsSection credentials={status.credentials ?? null} />
+
+          <DataDeletionHistorySection connection={connection} />
         </div>
       )}
     </section>

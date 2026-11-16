@@ -1,5 +1,6 @@
 import { api, ApiError } from './api';
 import type { Connection, JobStatus } from './api';
+import type { DataDeletionLocalState } from './dataDeletion';
 import {
   observeProductionCreated,
   observeProductionList,
@@ -238,6 +239,7 @@ export type ProductionRecord = {
   quality_status?: string | null;
   pilot_evidence?: Record<string, unknown> | null;
   provenance?: Record<string, unknown> | null;
+  local_data?: DataDeletionLocalState | null;
 };
 
 export type ProductionListResponse = {
@@ -554,11 +556,24 @@ export function adaptProductionRecord(raw: ProductionRecord): ProductionRecord {
           : undefined,
       }
     : null;
+  const localDataRaw = isRecord(raw.local_data) ? raw.local_data : null;
+  const local_data: DataDeletionLocalState | null | undefined =
+    localDataRaw &&
+    (localDataRaw.state === 'present' ||
+      localDataRaw.state === 'deleted' ||
+      localDataRaw.state === 'incomplete')
+      ? {
+          state: localDataRaw.state,
+          audit_id: typeof localDataRaw.audit_id === 'string' ? localDataRaw.audit_id : null,
+          changed_at: typeof localDataRaw.changed_at === 'string' ? localDataRaw.changed_at : null,
+        }
+      : raw.local_data ?? undefined;
   return {
     ...raw,
     artifacts,
     failure,
     review,
+    local_data,
     publishable: false,
   };
 }

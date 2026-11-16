@@ -45,6 +45,7 @@ import QualityReportPanel from './production/QualityReportPanel';
 import ProductionCompare from './production/ProductionCompare';
 import ProductionExportPanel from './production/ProductionExportPanel';
 import TimecodeReviewWorkspace from './production/TimecodeReviewWorkspace';
+import { DataDeletionDialog } from '../components/DataDeletionDialog';
 
 const PRODUCTION_STAGES: ProductionStage[] = [
   'prepare',
@@ -346,6 +347,12 @@ export default function ProductionRun({
 
   const activeProduction =
     productions.find(item => item.id === selectedId) ?? productions[0] ?? null;
+  const localDataState = activeProduction?.local_data?.state ?? 'present';
+  const isLocalDataDeleted = localDataState === 'deleted' || localDataState === 'incomplete';
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteSuccessMessage, setDeleteSuccessMessage] = useState('');
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Clear preview and per-production review state if user switches selected production
   useEffect(() => {
@@ -1273,8 +1280,49 @@ export default function ProductionRun({
               <span className="tag">
                 Etapa: {STAGE_LABELS[activeProduction.stage] || activeProduction.stage}
               </span>
+              {isLocalDataDeleted && (
+                <span className="tag warn" data-testid="production-local-data-deleted-tag">
+                  Arquivos excluídos
+                </span>
+              )}
+              {!isLocalDataDeleted &&
+                terminalStatuses.includes(activeProduction.status) && (
+                  <button
+                    ref={deleteTriggerRef}
+                    type="button"
+                    className="button danger"
+                    data-testid="production-delete-local-data-btn"
+                    onClick={() => {
+                      setDeleteSuccessMessage('');
+                      setDeleteDialogOpen(true);
+                    }}
+                  >
+                    Excluir arquivos locais
+                  </button>
+                )}
             </div>
           </div>
+
+          {deleteSuccessMessage && (
+            <StatusMessage state="success" tone="good" testId="production-delete-success">
+              {deleteSuccessMessage}
+            </StatusMessage>
+          )}
+
+          {isLocalDataDeleted && (
+            <StatusMessage
+              state="empty"
+              eyebrow="ARQUIVOS EXCLUÍDOS · QUARENTENA"
+              testId="production-deleted-notice"
+            >
+              Os arquivos locais desta produção foram movidos para a quarentena
+              {activeProduction.local_data?.changed_at
+                ? ` em ${formatDate(activeProduction.local_data.changed_at)}`
+                : ''}
+              . Prévia de artefatos, exportação e novos comentários ficam indisponíveis até a
+              restauração em Ajustes → Privacidade e Segurança.
+            </StatusMessage>
+          )}
 
           <div className="info-grid">
             <div className="info-block">
@@ -1635,7 +1683,7 @@ export default function ProductionRun({
               </span>
             </div>
 
-            {activeProduction.artifacts.length > 0 && (
+            {!isLocalDataDeleted && activeProduction.artifacts.length > 0 && (
               <div
                 className="fact-item"
                 role="region"
@@ -1788,19 +1836,23 @@ export default function ProductionRun({
                             {artifact.sha256}
                           </td>
                           <td>
-                            <button
-                              className={`button ${isPreviewed ? 'active' : ''}`}
-                              type="button"
-                              disabled={previewLoading}
-                              style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
-                              onClick={() => void handlePreviewArtifact(artifact)}
-                            >
-                              {artifact.kind === 'video'
-                                ? 'Abrir vídeo'
-                                : artifact.kind === 'audio'
-                                ? 'Ouvir áudio'
-                                : 'Inspecionar'}
-                            </button>
+                            {isLocalDataDeleted ? (
+                              <span className="tag warn">Arquivos excluídos</span>
+                            ) : (
+                              <button
+                                className={`button ${isPreviewed ? 'active' : ''}`}
+                                type="button"
+                                disabled={previewLoading}
+                                style={{ padding: '4px 10px', minHeight: '28px', fontSize: '10px' }}
+                                onClick={() => void handlePreviewArtifact(artifact)}
+                              >
+                                {artifact.kind === 'video'
+                                  ? 'Abrir vídeo'
+                                  : artifact.kind === 'audio'
+                                  ? 'Ouvir áudio'
+                                  : 'Inspecionar'}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -2039,7 +2091,7 @@ export default function ProductionRun({
             />
           )}
 
-          {videoArtifact && normalizedWordTimings && (
+          {!isLocalDataDeleted && videoArtifact && normalizedWordTimings && (
             <TimecodeReviewWorkspace
               connection={connection}
               productionId={activeProduction.id}
@@ -2084,7 +2136,7 @@ export default function ProductionRun({
             </div>
           )}
 
-          {canReviewFinal && videoArtifact && (
+          {!isLocalDataDeleted && canReviewFinal && videoArtifact && (
             <div className="card" role="region" aria-label="Revisão humana final da produção">
               <div className="row spread">
                 <p className="eyebrow accent">REVISÃO HUMANA FINAL (VÍDEO VERIFICADO POR HASH)</p>
@@ -2341,13 +2393,51 @@ export default function ProductionRun({
             </div>
           )}
 
-          <ProductionExportPanel
-            connection={connection}
-            production={activeProduction}
-            currentTimeSeconds={currentTimeSeconds}
-            onCaptureCurrentVideoTime={handleCaptureCurrentVideoTime}
-          />
+          {!isLocalDataDeleted && (
+            <ProductionExportPanel
+              connection={connection}
+              production={activeProduction}
+              currentTimeSeconds={currentTimeSeconds}
+              onCaptureCurrentVideoTime={handleCaptureCurrentVideoTime}
+            />
+          )}
         </div>
+      )}
+
+      {activeProduction && (
+        <DataDeletionDialog
+          open={deleteDialogOpen}
+          connection={connection}
+          scope="production"
+          targetId={activeProduction.id}
+          targetLabel={`Produção ${activeProduction.id}`}
+          triggerRef={deleteTriggerRef}
+          onClose={() => setDeleteDialogOpen(false)}
+          onDeleted={result => {
+            const changedAt = new Date().toISOString();
+            clearPreview();
+            setProductions(prev =>
+              prev.map(item =>
+                item.id === result.id
+                  ? {
+                      ...item,
+                      local_data: {
+                        state: 'deleted',
+                        audit_id: result.audit_id,
+                        changed_at: changedAt,
+                      },
+                    }
+                  : item
+              )
+            );
+            setDeleteSuccessMessage(
+              `Arquivos locais da produção ${result.id.slice(
+                0,
+                8
+              )} movidos para a quarentena recuperável (${result.totals.files} arquivo(s)).`
+            );
+          }}
+        />
       )}
 
       <ProductionCompare
