@@ -1,5 +1,7 @@
 # ADR — persistência local e remota (HOR-137, Fase A)
 
+**Atualização da Fase B (15/11/2026):** [hospedagem, schema e provas](persistencia-fase-b.md) registram a escolha de Edge Functions para o serviço futuro e o schema sintético aplicado no horus-dev, com RLS validado e fixtures revertidas. Os trechos abaixo descrevem a decisão da Fase A; o serviço remoto, a sessão e a sincronização do app continuam sem implementação operacional.
+
 **Estado: aceita pelo Maestro em 15/11/2026 como direção das Fases B–D** (SQLite local continua fonte da operação audiovisual; Supabase como destino opcional de metadados sincronizáveis por adesão; acesso pela opção B — serviço remoto autenticado com JWT individual e papel restrito, Data API desativada). A hospedagem do serviço B (ex.: Edge Functions do próprio horus-dev, dentro do Free) é decidida na Fase B. **Fase E (dados reais) continua exigindo aprovação específica do usuário.** Base inspecionada: `399f305` da `main`; [inventário e contrato proposto](inventario-persistencia.md). Mantêm-se os requisitos [R1–R13 de segurança](seguranca-persistencia-remota.md) e a [especificação de UX](ux-sincronizacao.md), cuja integração é dependência documental. Nenhum dado operacional foi aberto ou enviado à nuvem.
 
 ## Recomendação
