@@ -174,3 +174,19 @@ O estado oficial está no Git e no GitHub Projects, não na máquina. Runs, mens
 4. Para cada item pendente, recria o worktree a partir da branch publicada (ou de `main`) pelo Orca e delega ao programador indicado no campo Agente, registrando a retomada na Issue.
 5. Trabalho apenas local na máquina antiga (commits não publicados ou alterações não commitadas) não existe na nova: publique a branch antes de trocar de computador ou registre na Issue o que ficou pendente.
 6. Modelos locais (por exemplo, Whisper para alinhamento) e ferramentas de prova ficam em `%LOCALAPPDATA%\Horus\` e precisam ser baixados de novo, conferindo os hashes registrados na documentação correspondente.
+
+## Verificar e atualizar CLIs de desenvolvimento
+
+Na raiz do checkout, faça uma verificação somente leitura:
+
+```powershell
+powershell -NoProfile -File scripts/update-dev-tools.ps1 -Check
+```
+
+Com autorização de atualização e depois de encerrar as sessões, tente todas as ferramentas elegíveis:
+
+```powershell
+powershell -NoProfile -File scripts/update-dev-tools.ps1 -All -NonInteractive
+```
+
+O script preserva configurações, credenciais, modelos, memória e PATH; pula sessões ativas, conflitos e instalações de TI. Atualizações nativas cujo canal ou efeitos não possam ser garantidos ficam manuais. Métodos, fontes oficiais, simulação, testes e agendador opcional estão em [dev-tools-update.md](dev-tools-update.md). Registrar tarefa de logon exige autorização específica; o plano padrão apenas verifica e não foi registrado automaticamente.
