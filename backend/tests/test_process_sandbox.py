@@ -231,3 +231,20 @@ def test_backend_death_kills_the_children_through_the_job_object(tmp_path):
     """)
     subprocess.run([PY, "-c", backend], timeout=60, check=True)
     assert wait_dead(int(wait_file(leaderfile))) and wait_dead(int(wait_file(pidfile))), "filhos sobreviveram ao backend"
+
+
+def test_minimal_environment_preserves_system_drive_without_secrets(monkeypatch):
+    monkeypatch.setenv("SystemDrive", "C:")
+    monkeypatch.setenv("HORUS_API_TOKEN", "segredo")
+    env = minimal_env()
+    assert {k.upper(): v for k, v in env.items()}["SYSTEMDRIVE"] == "C:"
+    assert "HORUS_API_TOKEN" not in env
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Regressão do Shell.Application no Windows")
+def test_bitlocker_query_does_not_create_literal_systemdrive_cache(tmp_path, monkeypatch):
+    from horus_backend.disk_encryption import _query
+    assert os.environ.get("SystemDrive")
+    monkeypatch.chdir(tmp_path)
+    _query(Path(sys.executable).drive)
+    assert not (tmp_path / "%SystemDrive%").exists()

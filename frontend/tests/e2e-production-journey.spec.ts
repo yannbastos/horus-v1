@@ -235,7 +235,8 @@ test.describe('Jornada de produção — backend real', () => {
       const review = page.getByRole('region', { name: 'Revisão e navegação por timecode' });
       await review.scrollIntoViewIfNeeded();
       await page.locator('video').evaluate((el: HTMLVideoElement) => { el.currentTime = 7.9; });
-      await page.getByRole('button', { name: 'Capturar tempo atual do player' }).click();
+      await page.getByRole('region', { name: 'Notas de revisão por timecode', exact: true })
+        .getByRole('button', { name: 'Capturar tempo atual do player' }).click();
       await page.getByLabel('Texto da nova nota por timecode').fill('Pausa estranha antes do desenvolvimento; revisar ritmo.');
       await page.getByRole('button', { name: 'Adicionar nota no timecode' }).click();
       await expect(page.getByText('(1/200 NOTA(S))')).toBeVisible();

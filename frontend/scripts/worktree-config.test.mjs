@@ -2,12 +2,21 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, loadConfigFromFile } from 'vite';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { frontendConfig, port, localPath, root } from './worktree-config.mjs';
 
 const frontendRoot = resolve(root, 'frontend');
+
+test('Tauri dev omite recursos empacotados e o build mantém o backend', () => {
+  const config = name => JSON.parse(readFileSync(resolve(frontendRoot, 'src-tauri', name), 'utf8'));
+  assert.deepEqual(config('tauri.dev.conf.json').bundle.resources, []);
+  assert.deepEqual(config('tauri.conf.json').bundle.resources, { '../../backend/dist/horus-backend/': 'backend/' });
+  const { scripts } = JSON.parse(readFileSync(resolve(frontendRoot, 'package.json'), 'utf8'));
+  assert.match(scripts['desktop:dev'], /--config src-tauri\/tauri.dev.conf.json/);
+  assert.equal(scripts['desktop:build'], 'tauri build');
+});
 async function viteConfig(value) {
   const previous = process.env.HORUS_FRONTEND_PORT;
   process.env.HORUS_FRONTEND_PORT = String(value);
