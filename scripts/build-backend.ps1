@@ -1,7 +1,8 @@
-param([switch]$SkipInstall, [switch]$IncludeTranscription)
+param([switch]$SkipInstall, [switch]$IncludeTranscription, [switch]$IncludeFirstVideo)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $backend = Join-Path $root 'backend'
+if ($IncludeFirstVideo) { $IncludeTranscription = $true }
 $environment = if ($IncludeTranscription) { '.venv-bundle-transcription' } else { '.venv-bundle' }
 $lock = if ($IncludeTranscription) { 'backend-bundle-transcription-requirements.txt' } else { 'backend-bundle-requirements.txt' }
 $python = Join-Path $backend "$environment/Scripts/python.exe"
@@ -30,3 +31,17 @@ try {
     & $python -m PyInstaller --noconfirm --clean --onedir --name horus-backend --distpath dist --workpath build/work --specpath build --paths src --collect-submodules uvicorn --collect-submodules horus_backend --hidden-import keyring.backends.Windows --add-data $workerSources @modules launcher.py
     if ($LASTEXITCODE) { throw 'PyInstaller falhou.' }
 } finally { Pop-Location }
+if ($IncludeFirstVideo) {
+    if (-not $env:HORUS_BUILD_FACTORY_SOURCE -or -not $env:HORUS_BUILD_FFMPEG_SOURCE) {
+        throw 'O perfil primeiro vídeo exige HORUS_BUILD_FACTORY_SOURCE e HORUS_BUILD_FFMPEG_SOURCE somente na máquina de build.'
+    }
+    $stage = if ($env:HORUS_BUILD_FIRST_VIDEO_STAGE) { $env:HORUS_BUILD_FIRST_VIDEO_STAGE } else {
+        Join-Path $backend '.cache/first-video-stage-v1'
+    }
+    $arguments = @((Join-Path $PSScriptRoot 'prepare-first-video.py'), '--factory-source', $env:HORUS_BUILD_FACTORY_SOURCE,
+        '--ffmpeg-source', $env:HORUS_BUILD_FFMPEG_SOURCE, '--output', $stage,
+        '--bundle-output', (Join-Path $backend 'dist/horus-backend/first-video'))
+    if ($env:HORUS_BUILD_KOKORO_SOURCE) { $arguments += @('--kokoro-source', $env:HORUS_BUILD_KOKORO_SOURCE) }
+    & $python @arguments
+    if ($LASTEXITCODE) { throw 'Preparação do runtime offline falhou.' }
+}

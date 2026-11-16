@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 import sys
 
+from .bundled_runtime import resource
+
 TOOL_ENV = {'ffmpeg': 'HORUS_FFMPEG', 'ffprobe': 'HORUS_FFPROBE', 'node': 'HORUS_NODE', 'yt-dlp': 'HORUS_YTDLP'}
 
 
@@ -18,6 +20,9 @@ def find_tool(name: str) -> str | None:
     directory = os.environ.get('HORUS_TOOLS_DIR')
     folders = [Path(directory).expanduser()] if directory else []
     if getattr(sys, 'frozen', False):
+        bundled = resource('tools')
+        if bundled:
+            folders.append(bundled)
         folders.append(Path(sys.executable).parent / 'tools')
     for folder in folders:
         candidate = folder / (name + '.exe' if os.name == 'nt' else name)

@@ -78,6 +78,14 @@ Adotar uma plataforma unificada com **monólito modular**: responsabilidades cla
 
 Windows local é a plataforma inicial, sem VPS. Linux, inclusive Arch Linux, exige validação própria; usar caminhos e interfaces portáveis onde possível. Não afirmar portabilidade completa: a implementação atual possui integrações específicas do Windows, como Job Objects e o empacotamento NSIS.
 
+HOR-143 acrescenta um [perfil privado de instalador para primeiro vídeo](instalador-primeiro-video.md),
+separado do mínimo e do perfil de transcrição. Os recursos offline de fábrica/Remotion,
+Python portável, Node, FFmpeg e Kokoro CPU são descobertos relativamente ao backend
+instalado; variáveis explícitas continuam válidas para desenvolvimento. O build exporta
+uma revisão fixada da fábrica independente, sem alterar seu código nem incluir canais
+ou dados operacionais. Pesos Whisper/alinhamento continuam pela importação local existente.
+Presença dos recursos e build não substituem ensaio no instalado ou aceite humano audiovisual.
+
 O backend deverá ser a fonte oficial dos estados, eventos, custos, aprovações e histórico operacional. Hoje essa centralização cobre tarefas técnicas, eventos e revisões/aprovações do fluxo editorial simulado. Custos, execução cognitiva real e aprovações da produção audiovisual ainda precisam de implementação e validação. Regras obrigatórias da fábrica também devem valer quando seu CLI for usado diretamente.
 
 ### Armazenamento e segurança

@@ -353,7 +353,9 @@ class ProductionService:
                 command += ["--factory-source", str(self.settings.factory_root)]
             # Ambiente mínimo: nenhum token, .env, perfil ou credencial de operador.
             env = {k: v for k, v in os.environ.items() if k.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "COMSPEC", "PATHEXT"}}
-            env.update(PYTHONUTF8="1", PYTHONUNBUFFERED="1")
+            from .bundled_runtime import tool_path
+            env.update(PYTHONUTF8="1", PYTHONUNBUFFERED="1", PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1")
+            env['PATH'] = tool_path(env.get('PATH', ''))
             if row["mode"] == "local_pilot":
                 env["HORUS_ALIGNMENT_MODEL"] = str(self.settings.alignment_models_dir.resolve())
             if row["mode"] == "local_pilot" and self.settings.ffmpeg:

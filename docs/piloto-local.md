@@ -32,15 +32,14 @@ aprova o roteiro: salvar, versionar e aprovar continuam nas rotas existentes de 
 O fluxo editorial demonstrativo descrito abaixo continua disponível como alternativa.
 
 **Instalador e dependências:** “Consultar perfil” e o render de rascunho da operação
-CLI são opcionais para escrever roteiros. O piloto local ainda usa o renderer da
+CLI são opcionais para escrever roteiros. O piloto local usa o renderer da
 fábrica/Remotion e seu Python, além de Node, navegador, FFmpeg, voz e alinhamento.
-O perfil de instalador com transcrição inclui o motor Whisper e o bridge do worker;
-não inclui fábrica, pesos Kokoro nem Python Kokoro. A importação de modelos em
-Ajustes atende Whisper/alinhamento, mas não instala esses outros recursos. Um
-atalho externo configurado não equivale a um instalador autossuficiente. A prontidão
-de produção deve ser conferida separadamente; ausência da CLI opcional não explica,
-por si só, a disponibilidade do render. Empacotar ou importar um runtime de produção
-portável, versionado e verificado continua necessário para eliminar esses caminhos.
+O [perfil offline Primeiro vídeo](instalador-primeiro-video.md) inclui fábrica,
+Python portável, Node, FFmpeg e Kokoro CPU/pesos/vozes, descobertos relativamente ao
+backend instalado. O perfil mínimo e o perfil de transcrição continuam disponíveis
+sem esses recursos. A importação de modelos em Ajustes atende Whisper/alinhamento;
+não exige definir variáveis de ambiente. A prontidão de produção deve ser conferida
+separadamente; ausência da CLI opcional não explica, por si só, a disponibilidade do render.
 
 Fluxo completo no aplicativo, sem Hermes real, sem nuvem e sem custo. Na **Central de Produção** (menu lateral)
 o painel **Meu primeiro vídeo** (GUIA RÁPIDO) mostra os 5 passos e o próximo pendente; **RECOLHER** / **EXPANDIR**
