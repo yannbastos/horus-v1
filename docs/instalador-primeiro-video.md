@@ -83,3 +83,18 @@ runtime offline. As variáveis `HORUS_BUILD_FACTORY_SOURCE`,
 `HORUS_BUILD_FIRST_VIDEO_STAGE` são entradas de build, nunca exigências para abrir
 o aplicativo instalado. O perfil mínimo continua usando `scripts/build-backend.ps1`
 sem os switches adicionais.
+
+## Verificação do pacote
+
+`smoke-windows-package.py --with-first-video` confere ferramentas e voz empacotadas
+com PATH restrito; o modo mínimo mantém sua verificação de ausência de Node/FFmpeg.
+`test-windows-installer.ps1 -WithFirstVideo` acrescenta instalação, fechamento normal
+e queda forçada. O runner de testes precisa de Python/psutil, não o aplicativo.
+
+`test-installed-first-video.py --bundled-runtime` não injeta caminhos de ferramentas
+e percorre criação humana, versões, aprovação, Kokoro, importação local de Whisper,
+render e revisão/exportação. Use `--render-quality final` para 1080×1920;
+`--keep-installed` preserva somente a instalação/dados temporários criados pelo
+ensaio, para inspeção da janela Tauri. O script recusa instalações registradas
+preexistentes. Resultados e limitações devem ser registrados com o hash do instalador;
+smoke do backend congelado não comprova sozinho a navegação do app instalado.

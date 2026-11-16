@@ -49,7 +49,8 @@ def close_window(pid):
 
 
 def smoke(executable, desktop=False, crash=False, data_dir=None, with_transcription=False,
-          cuda_runtime_dir=None, model_dir=None, audio=None, expected_device=None):
+          cuda_runtime_dir=None, model_dir=None, audio=None, expected_device=None, with_first_video=False):
+    with_transcription = with_transcription or with_first_video
     started = time.perf_counter()
     with (nullcontext(str(data_dir)) if data_dir else tempfile.TemporaryDirectory(prefix="horus-package-smoke-")) as folder:
         Path(folder).mkdir(parents=True, exist_ok=True)
@@ -107,7 +108,12 @@ def smoke(executable, desktop=False, crash=False, data_dir=None, with_transcript
             assert health["status"] == "ready"
             diagnostics = request(port, token, "/v1/diagnostics")
             missing = [c["id"] for c in diagnostics["checks"] if not c["available"]]
-            assert {'ffmpeg', 'node'} <= set(missing), missing
+            if with_first_video:
+                assert not {'ffmpeg', 'node'}.intersection(missing), missing
+                for ident in ('factory', 'ffmpeg', 'ffprobe', 'kokoro', 'subtitle_font'):
+                    assert next(c for c in diagnostics['production']['checks'] if c['id'] == ident)['available'], ident
+            else:
+                assert {'ffmpeg', 'node'} <= set(missing), missing
             engines = {'faster_whisper', 'ctranslate2', 'av'}
             assert (not engines.intersection(missing)) if with_transcription else engines <= set(missing), missing
             if expected_device:
@@ -168,10 +174,11 @@ if __name__ == "__main__":
     parser.add_argument("--crash", action="store_true")
     parser.add_argument("--data-dir", type=Path, help="Diretório descartável compartilhado entre versões")
     parser.add_argument('--with-transcription', action='store_true')
+    parser.add_argument('--with-first-video', action='store_true')
     parser.add_argument('--cuda-runtime-dir')
     parser.add_argument('--model-dir', type=Path)
     parser.add_argument('--audio', type=Path, help='Somente áudio sintético descartável')
     parser.add_argument('--expected-device', choices=['cpu', 'cuda'])
     args = parser.parse_args()
     smoke(args.executable.resolve(), args.desktop, args.crash, args.data_dir, args.with_transcription,
-          args.cuda_runtime_dir, args.model_dir, args.audio, args.expected_device)
+          args.cuda_runtime_dir, args.model_dir, args.audio, args.expected_device, args.with_first_video)
