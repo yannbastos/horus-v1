@@ -22,7 +22,10 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 
 async function runAxeAuditForCurrentTheme(page: Page, contextLabel: string) {
   await page.evaluate(() =>
-    Promise.all(document.getAnimations().map(anim => anim.finished.catch(() => undefined)))
+    Promise.race([
+      Promise.all(document.getAnimations().map(anim => anim.finished.catch(() => undefined))),
+      new Promise(resolve => setTimeout(resolve, 1000)),
+    ])
   );
   const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
   const formatted = results.violations.map(v => ({
