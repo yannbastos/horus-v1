@@ -2,7 +2,7 @@
 
 Estas regras valem para todos os agentes que trabalham no HORUS.
 
-**Antes de trabalhar, leia obrigatoriamente a [política de governança dos agentes](docs/AGENT-GOVERNANCE.md)**: papéis (Claude Opus como Maestro; Codex, Claude Sonnet e Antigravity como programadores preferenciais, com distribuição flexível), ações previamente autorizadas, ações que exigem o usuário, testes proporcionais ao risco, fluxo de integração e a obrigação de atualizar Issue + Status do GitHub Projects + evidências. Ela vale em qualquer computador e sessão nova.
+**Antes de trabalhar, leia obrigatoriamente a [política de governança dos agentes](docs/AGENT-GOVERNANCE.md)**: papéis (Maestro — modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2; Codex, Claude Sonnet e Antigravity como programadores preferenciais, com distribuição flexível), ações previamente autorizadas, ações que exigem o usuário, testes proporcionais ao risco, fluxo de integração e a obrigação de atualizar Issue + Status do GitHub Projects + evidências. Ela vale em qualquer computador e sessão nova.
 
 **Sessão nova do Maestro ou retomada de contexto:** use a skill `horus-maestro` (`.claude/skills/` no Claude Code, `.agents/skills/` no Codex) ou siga [docs/RETOMADA-MAESTRO.md](docs/RETOMADA-MAESTRO.md). Nem toda ferramenta carrega skills automaticamente: invoque-a explicitamente no início.
 
