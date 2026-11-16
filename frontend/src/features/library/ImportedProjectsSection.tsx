@@ -15,6 +15,7 @@ import type {
 } from '../../services/imports';
 import { nativeDesktop, selectZipPackage } from '../../platform/desktop';
 import { StatusMessage } from '../../components/StatusMessage';
+import { DataDeletionDialog } from '../../components/DataDeletionDialog';
 import { MediaPlayer, formatMediaSize } from '../../components/MediaPlayer';
 import type { SubtitleCue } from '../../components/MediaPlayer';
 
@@ -85,9 +86,12 @@ export function ImportedProjectsSection({ connection, pickZip }: ImportedProject
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState('');
   const [showPlayer, setShowPlayer] = useState(true);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteSuccess, setDeleteSuccess] = useState('');
 
   const activeVideoBlobRef = useRef<string | null>(null);
   const detailControllerRef = useRef<AbortController | null>(null);
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const revokeVideoBlob = useCallback(() => {
     if (activeVideoBlobRef.current) {
@@ -373,6 +377,12 @@ export function ImportedProjectsSection({ connection, pickZip }: ImportedProject
         </StatusMessage>
       )}
 
+      {deleteSuccess && (
+        <StatusMessage state="success" tone="good" testId="import-delete-success">
+          {deleteSuccess}
+        </StatusMessage>
+      )}
+
       {listLoading && (
         <StatusMessage state="loading">Carregando projetos importados…</StatusMessage>
       )}
@@ -443,18 +453,32 @@ export function ImportedProjectsSection({ connection, pickZip }: ImportedProject
               </div>
               <h3 style={{ marginTop: 'var(--Space2)' }}>{detail.title}</h3>
             </div>
-            <button
-              type="button"
-              className="button"
-              onClick={() => {
-                detailControllerRef.current?.abort();
-                setSelectedId(null);
-                setDetail(null);
-                revokeVideoBlob();
-              }}
-            >
-              Fechar detalhes
-            </button>
+            <div className="actions">
+              <button
+                ref={deleteTriggerRef}
+                type="button"
+                className="button danger"
+                data-testid="import-delete-local-data-btn"
+                onClick={() => {
+                  setDeleteSuccess('');
+                  setDeleteDialogOpen(true);
+                }}
+              >
+                Excluir arquivos locais
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  detailControllerRef.current?.abort();
+                  setSelectedId(null);
+                  setDetail(null);
+                  revokeVideoBlob();
+                }}
+              >
+                Fechar detalhes
+              </button>
+            </div>
           </div>
 
           <div
@@ -611,6 +635,33 @@ export function ImportedProjectsSection({ connection, pickZip }: ImportedProject
             </section>
           </div>
         </article>
+      )}
+
+      {detail && (
+        <DataDeletionDialog
+          open={deleteDialogOpen}
+          connection={connection}
+          scope="import"
+          targetId={detail.id}
+          targetLabel={detail.title}
+          triggerRef={deleteTriggerRef}
+          onClose={() => setDeleteDialogOpen(false)}
+          onDeleted={() => {
+            const removedTitle = detail.title;
+            const removedId = detail.id;
+            detailControllerRef.current?.abort();
+            setSelectedId(null);
+            setDetail(null);
+            revokeVideoBlob();
+            setImports(prev => prev.filter(item => item.id !== removedId));
+            setDeleteSuccess(
+              `Arquivos locais de "${removedTitle}" movidos para a quarentena recuperável.`
+            );
+            if (connection) {
+              void loadImports(connection);
+            }
+          }}
+        />
       )}
     </section>
   );

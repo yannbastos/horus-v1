@@ -1,0 +1,16 @@
+# Somente projeto de desenvolvimento existente; nenhuma credencial.
+project_id = "horus-dev"
+[api]
+enabled = false
+[db]
+major_version = 17
+[db.seed]
+enabled = false
+[studio]
+enabled = false
+[local_smtp]
+enabled = false
+[storage]
+enabled = false
+[analytics]
+enabled = false
