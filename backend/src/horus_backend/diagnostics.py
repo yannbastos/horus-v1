@@ -31,7 +31,7 @@ def production_diagnostics(settings: Settings):
                    and any((source / ('remotion/node_modules/.bin/' + p)).is_file()
                            for p in ('remotion.cmd', 'remotion')))
     add('factory', 'Fábrica do piloto', factory,
-        'Configure FABRICA_HOME (ou HORUS_PILOT_FACTORY) e prepare scripts/.venv, código e dependências Remotion pelos locks.')
+        'O perfil Primeiro vídeo inclui fábrica/Remotion. Repare esse perfil se ausente; no perfil mínimo, prepare o runtime separadamente.')
     browsers = [os.environ.get('HORUS_DEMO_BROWSER', ''),
                 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
                 'C:/Program Files/Microsoft/Edge/Application/msedge.exe']
@@ -39,9 +39,9 @@ def production_diagnostics(settings: Settings):
         'Prepare um navegador local e configure HORUS_DEMO_BROWSER quando necessário.')
     ffmpeg = settings.ffmpeg
     add('ffmpeg', 'FFmpeg do piloto', ffmpeg and ffmpeg.is_file(),
-        'Configure HORUS_FFMPEG com o executável local preparado com subtitles/libass; filtros não são executados nesta consulta.')
+        'Incluído no perfil Primeiro vídeo, com subtitles/libass. Repare o perfil se ausente; filtros não são executados nesta consulta.')
     add('ffprobe', 'FFprobe do piloto', ffmpeg and ffmpeg.with_name('ffprobe' + ffmpeg.suffix).is_file(),
-        'Prepare ffprobe ao lado do executável indicado em HORUS_FFMPEG; mantenha também as ferramentas acessíveis ao worker pelo PATH ou compositor Remotion.')
+        'Incluído junto do FFmpeg no perfil Primeiro vídeo; repare o perfil se ausente.')
     model = settings.alignment_models_dir
     model_path = resolve_model_path(Path(model), 'small') if model else None
     add('alignment_model', 'Modelo de alinhamento', model_path and all(
@@ -60,7 +60,7 @@ def production_diagnostics(settings: Settings):
     except (NarrationError, OSError, ValueError):
         kokoro = False
     add('kokoro', 'Kokoro local', kokoro,
-        'Configure HORUS_KOKORO_PYTHON e HORUS_KOKORO_MODEL_DIR com executável e pesos/vozes de hashes oficiais; confira Ajustes/Narração.', ('kokoro',))
+        'O perfil Primeiro vídeo inclui runtime CPU, pesos e vozes verificados por hashes; confira Ajustes/Narração ou repare o perfil.', ('kokoro',))
     configured = settings.subtitle_font
     local = next((p / 'frontend/public/fonts/ArchivoExpanded-SemiBold.ttf'
                   for p in Path(__file__).resolve().parents

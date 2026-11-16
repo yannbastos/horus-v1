@@ -101,6 +101,9 @@ def job_environment(request, settings: Settings) -> dict[str, str]:
            if k.upper() in allowed or (cuda and k.upper().startswith(_CUDA_PREFIX))}
     env.update(PYTHONUNBUFFERED="1", PYTHONUTF8="1")
     if isinstance(request, FactoryRequest) and settings.factory_root:
+        from .bundled_runtime import tool_path
+        env['PATH'] = tool_path(env.get('PATH', ''))
+        env['PYTHONNOUSERSITE'] = '1'
         env["FABRICA_HOME"] = str(settings.factory_root)
         env["PYTHONPATH"] = str(settings.factory_root / "scripts")
     return env
