@@ -105,7 +105,7 @@ test.describe('Auditoria de UX — layout, foco e acessibilidade', () => {
 
         // 6. Canais e Histórico operacional não repetem o placeholder antigo.
         await page.locator('.sidebar').getByRole('button', { name: 'Canais', exact: true }).click();
-        await expect(page.getByText('Uma etapa por vez.')).toBeVisible();
+        await expect(page.getByTestId('legacy-factory-advanced')).toBeVisible();
         await expect(page.getByText('PRÉVIA DE LAYOUT · EM PREPARAÇÃO')).toHaveCount(0);
         await page.locator('.sidebar').getByRole('button', { name: 'Histórico operacional', exact: true }).click();
         await expect(page.getByRole('heading', { level: 2, name: 'Central de erros' })).toBeVisible();
