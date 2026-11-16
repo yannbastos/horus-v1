@@ -499,3 +499,13 @@ main::-webkit-scrollbar-track,
 .button.danger { border-color: var(--Bad); color: var(--Bad); }
 .button.danger:hover:not(:disabled) { background: var(--Bad); color: var(--Background); }
 
+/* --- Atualizações em Ajustes (HOR-100) --- */
+.production-notice.update { border-left: 3px solid var(--AccentInk); }
+.update-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--Space4); }
+.update-preference-row { display: flex; align-items: center; justify-content: space-between; gap: var(--Space5); padding: var(--Space4) var(--Space5); border: 1px solid var(--Line); background: var(--Sunken); flex-wrap: wrap; }
+.update-preference-info { display: flex; flex-direction: column; gap: var(--Space1); flex: 1 1 260px; min-width: 0; }
+.update-preference-title { color: var(--InkStrong); font-size: var(--TextBody); font-weight: 600; }
+.update-switch { min-width: 112px; }
+.update-live-region { display: flex; flex-direction: column; gap: var(--Space3); }
+
+

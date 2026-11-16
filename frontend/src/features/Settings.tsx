@@ -4,8 +4,10 @@ import type { Connection, HermesStatus } from '../services/api';
 import { connectDesktop, nativeDesktop } from '../platform/desktop';
 import { StatusMessage } from '../components/StatusMessage';
 import { ShortcutsSettings } from '../components/ShortcutsSettings';
+import { UpdateSection } from '../components/UpdateSection';
 import { loadShortcutPreferences, saveShortcutPreferences } from '../services/shortcuts';
 import type { ShortcutPreferences } from '../services/shortcuts';
+import type { UpdateState } from '../services/updates';
 import PrivacySecurity from './PrivacySecurity';
 import NarrationSettings from './narration/NarrationSettings';
 import WhisperModelsPanel from './transcription/WhisperModelsPanel';
@@ -185,6 +187,8 @@ export default function Settings({
   initialSection = 'general',
   shortcutPrefs,
   onChangeShortcutPrefs,
+  updateState,
+  onUpdateStateChange,
 }: {
   theme: Theme;
   setTheme: (theme: Theme) => void;
@@ -195,6 +199,8 @@ export default function Settings({
   initialSection?: SettingsSection;
   shortcutPrefs?: ShortcutPreferences;
   onChangeShortcutPrefs?: (next: ShortcutPreferences) => void;
+  updateState?: UpdateState;
+  onUpdateStateChange?: (next: UpdateState) => void;
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
   const [localShortcutPrefs, setLocalShortcutPrefs] = useState<ShortcutPreferences>(loadShortcutPreferences);
@@ -288,6 +294,7 @@ export default function Settings({
         <WhisperModelsPanel connection={connection} />
         <NarrationSettings connection={connection} />
         <ShortcutsSettings preferences={activeShortcutPrefs} onChange={handleShortcutPrefsChange} />
+        <UpdateSection state={updateState} onStateChange={onUpdateStateChange} />
       </div>
     ) : (
       <div id="panel-privacy" role="tabpanel" aria-labelledby="tab-privacy" className="settings-panel">

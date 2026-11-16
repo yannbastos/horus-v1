@@ -11,6 +11,12 @@ import { useNotificationsBell } from './services/notifications';
 import type { NotificationItem } from './services/notifications';
 import { useProductionObserver } from './services/productionNotices';
 import {
+  createDisabledUpdateState,
+  getUpdateState,
+  listenUpdateState,
+} from './services/updates';
+import type { UpdateState } from './services/updates';
+import {
   isEditableTarget,
   loadShortcutPreferences,
   matchesShortcut,
@@ -66,6 +72,30 @@ export default function App() {
     }).catch(reason => { if (active) setBackendError(String(reason)); });
     return () => { active = false; };
   }, []);
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void getUpdateState()
+      .then(initial => {
+        if (active) setUpdateState(initial);
+      })
+      .catch(() => {
+        /* Mantém estado desabilitado se o canal não estiver disponível. */
+      });
+    void listenUpdateState(next => {
+      if (active) setUpdateState(next);
+    }).then(fn => {
+      if (active) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
   const effectiveTheme = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
   const { activeCount: activeProductions, notice: productionNotice, dismissNotice } = useProductionObserver(connection);
   const {
@@ -83,6 +113,8 @@ export default function App() {
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [librarySearchNonce, setLibrarySearchNonce] = useState(0);
   const [navAnnouncement, setNavAnnouncement] = useState('');
+  const [updateState, setUpdateState] = useState<UpdateState>(() => createDisabledUpdateState());
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
   const bellButtonRef = useRef<HTMLButtonElement | null>(null);
   const shortcutsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const prevUnreadRef = useRef(0);
@@ -232,6 +264,51 @@ export default function App() {
       <div className="sidebar-bottom"><div className="integration"><p className="eyebrow">HERMES AGENT</p><p className="muted"><span className="status-dot" />{hermes?.connected ? 'API verificada' : hermes?.cli_available ? 'CLI localizado' : 'Integração pendente'}</p></div><button ref={shortcutsTriggerRef} type="button" className="shortcuts-help-trigger" data-testid="shortcuts-help-button" aria-keyshortcuts={shortcutPrefs.enabled ? shortcutPrefs.bindings['help.open'] || undefined : undefined} onClick={() => setShortcutsHelpOpen(true)}>Atalhos ({shortcutPrefs.bindings['help.open'] || '?'})</button><button className="settings-navigation" aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}>Ajustes</button><p className="eyebrow signature">SEU ESPAÇO DE CRIAÇÃO</p></div>
     </aside>
     <div className="workspace-shell"><header className="topbar"><div className="row"><span className="eyebrow accent">HORUS</span><span className="muted">/</span><span className="eyebrow">CENTRAL AUDIOVISUAL</span></div><span className="tag">APLICATIVO EM DESENVOLVIMENTO</span></header>
+      {updateState.phase === 'available' &&
+        updateState.available &&
+        dismissedUpdateVersion !== updateState.available.version && (
+          <div
+            className="production-notice update"
+            role="status"
+            aria-live="polite"
+            aria-label="Aviso de atualização disponível"
+            data-testid="update-available-notice"
+          >
+            <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+              <span className="tag">ATUALIZAÇÃO</span>
+              <span>
+                Nova versão <strong>{updateState.available.version}</strong> disponível para
+                instalação manual.
+              </span>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                className="button primary"
+                data-testid="update-notice-open-settings"
+                onClick={() => {
+                  setPage('settings');
+                  requestAnimationFrame(() => {
+                    document
+                      .getElementById('settings-updates')
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  });
+                }}
+              >
+                Ver atualização
+              </button>
+              <button
+                type="button"
+                className="button"
+                data-testid="update-notice-dismiss"
+                onClick={() => setDismissedUpdateVersion(updateState.available?.version ?? null)}
+                aria-label="Fechar aviso de atualização"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
       {productionNotice && (
         <div
           className={`production-notice ${productionNotice.kind}`}
@@ -276,7 +353,7 @@ export default function App() {
       )}
       <main id="main" tabIndex={-1}><Suspense fallback={<p className="loading" role="status">Abrindo seu espaço…</p>}>
         {page === 'overview' ? <Overview navigate={setPage} connection={connection} />
-          : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} shortcutPrefs={shortcutPrefs} onChangeShortcutPrefs={handleShortcutPrefsChange} />
+          : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} shortcutPrefs={shortcutPrefs} onChangeShortcutPrefs={handleShortcutPrefsChange} updateState={updateState} onUpdateStateChange={setUpdateState} />
           : page === 'library' ? <Library connection={connection} searchFocusNonce={librarySearchNonce} searchShortcutBinding={shortcutPrefs.enabled ? shortcutPrefs.bindings['library.search'] : undefined} />
           : page === 'transcription' ? null
           : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={stepId => {
