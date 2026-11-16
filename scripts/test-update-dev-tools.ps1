@@ -37,7 +37,7 @@ $script:fixture.Paths=@('C:\Users\test\codex.cmd')
 $script:installed='1.1.0'
 Assert-Equal (Invoke-DevTool $entry $true $false).Status 'Atualizada' 'já atualizada'
 $script:installed='1.2.0'
-Assert-Equal (Invoke-DevTool $entry $true $false).Status 'Atualizada' 'não faz downgrade'
+Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoInstaladaSuperior' 'não faz downgrade'
 $script:installed='1.0.0'
 $script:networkFail=$true
 Assert-Equal (Invoke-DevTool $entry $true $false).Status 'RedeIndisponivel' 'falha de rede isolada'
@@ -68,12 +68,12 @@ $script:fixture.DetectionError=''
 Assert-Equal $script:mutations 0 'desconhecida/falha de detecção não mutam'
 $script:fixture.Manager='npm global'
 $script:installed='versão desconhecida'
-Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoIncompativel' 'versão incompatível'
+Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoNaoComparavel' 'versão incompatível'
 $script:installed='1.0.0-beta.1'
-Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoIncompativel' 'prerelease instalada recusada'
+Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoNaoComparavel' 'prerelease instalada recusada'
 $script:installed='1.0.0'
 $script:latest='1.1.0-rc.1'
-Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoIncompativel' 'alvo prerelease recusado'
+Assert-Equal (Invoke-DevTool $entry $true $false).Status 'VersaoNaoComparavel' 'alvo prerelease recusado'
 $script:latest='1.1.0'
 Assert-Equal (Invoke-DevTool $entry $true $true).Status 'Disponivel' 'dryrun não atualiza'
 Assert-Equal $script:mutations 0 'simulação sem mutações'
@@ -91,6 +91,70 @@ function Test-DevActive { param($Entry,$Processes); $script:activeChecks++; retu
 $oldMutations=$script:mutations
 Assert-Equal (Invoke-DevTool $entry $true $false).Status 'SessaoAtiva' 'sessão aberta entre consulta e atualização bloqueia'
 Assert-Equal $script:mutations $oldMutations 'revalidação não executa mutação'
+# --- HOR-144: proibição de downgrade (caso real Claude 2.1.325 x stable 2.1.311).
+$script:fixture.Manager='npm global'; $script:fixture.Policy=@(); $script:fixture.Conflict=$false; $script:active=$false
+function Test-DevActive { param($Entry,$Processes); $script:active }
+function Invoke-DevCommand {
+    param($File,$Arguments)
+    if ($Arguments[0] -eq '--version') { return $script:installed }
+    if ($Arguments[0] -ne 'install') { throw 'unexpected command' }
+    $script:mutations++; $script:lastArgs=$Arguments
+    $script:installed=($script:fmt -f $script:latestVer)
+}
+$script:fmt='{0}'; $script:latestVer=''
+$cases=@(
+    @{ Name='claude'; Fmt='{0} (Claude Code)'; Pkg='@anthropic-ai/claude-code' },
+    @{ Name='codex'; Fmt='codex-cli {0}'; Pkg='@openai/codex' }
+)
+foreach ($c in $cases) {
+    $e=@(Get-DevCatalog | Where-Object Name -eq $c.Name)[0]; $script:fmt=$c.Fmt
+    $script:installed=($c.Fmt -f '2.1.325'); $script:latest='2.1.311'; $script:latestVer='2.1.311'; $script:mutations=0
+    $r=Invoke-DevTool $e $true $false
+    Assert-Equal $r.Status 'VersaoInstaladaSuperior' "$($c.Name): 2.1.325 x 2.1.311 não faz downgrade"
+    Assert-Equal $script:mutations 0 "$($c.Name): downgrade nunca chama instalação"
+    # Sessão ativa/conflito/política não mascaram o motivo da versão.
+    $script:active=$true; $script:fixture.Conflict=$true; $script:fixture.Policy=@('x')
+    Assert-Equal (Invoke-DevTool $e $true $false).Status 'VersaoInstaladaSuperior' "$($c.Name): versão decide antes das proteções"
+    $script:active=$false; $script:fixture.Conflict=$false; $script:fixture.Policy=@()
+    $script:installed=($c.Fmt -f '2.1.311')
+    Assert-Equal (Invoke-DevTool $e $true $false).Status 'Atualizada' "$($c.Name): iguais"
+    Assert-Equal $script:mutations 0 "$($c.Name): iguais sem comando"
+    foreach ($bad in @('','2.1.325-beta.1','abc','2.1','2.1.325.1')) {
+        $script:latest=$bad; $script:installed=($c.Fmt -f '2.1.325')
+        Assert-Equal (Invoke-DevTool $e $true $false).Status 'VersaoNaoComparavel' "$($c.Name): fonte '$bad' não comparável"
+    }
+    $script:latest='2.1.326'; $script:latestVer='2.1.326'; $script:installed=($c.Fmt -f '2.1.325')
+    $r=Invoke-DevTool $e $true $false
+    Assert-Equal $r.Status 'AtualizadaAgora' "$($c.Name): superior atualiza"
+    Assert-Equal $script:mutations 1 "$($c.Name): chamada única"
+    Assert-Equal ($script:lastArgs -contains "$($c.Pkg)@2.1.326") $true "$($c.Name): versão fixada"
+    Assert-Equal (@($script:lastArgs | Where-Object { $_ -match 'latest' }).Count) 0 "$($c.Name): nunca latest"
+    $script:mutations=0
+}
+# Antigravity e Hermes (instalador próprio): nunca executam comando, mesmo com -All.
+foreach ($pair in @(@('antigravity','1.0.5','1.0.4'),@('hermes','Hermes Agent v0.23.1 (2026.9.24) Python 3.12','v0.22.0'))) {
+    $e=@(Get-DevCatalog | Where-Object Name -eq $pair[0])[0]
+    $script:fixture.Manager='instalador próprio / auto-update nativo'
+    $script:installed=$pair[1]; $script:latest=$pair[2]; $script:mutations=0
+    Assert-Equal (Invoke-DevTool $e $true $false).Status 'VersaoInstaladaSuperior' "$($pair[0]): instalada superior"
+    $script:latest='v9.99.0'; $script:installed=if ($pair[0] -eq 'hermes') { $pair[1] } else { '1.0.5' }
+    Assert-Equal (Invoke-DevTool $e $true $false).Status 'Manual' "$($pair[0]): superior só orienta, sem executar"
+    Assert-Equal $script:mutations 0 "$($pair[0]): sem chamada de instalação"
+}
+$script:fixture.Manager='npm global'
+# Comparação numérica e extração de prefixos.
+Assert-Equal (Compare-DevVersion '0.9.0' '0.10.0').Result 'DisponivelSuperior' '0.9.0 < 0.10.0'
+Assert-Equal (Compare-DevVersion '1.5.6' '1.5.9').Result 'DisponivelSuperior' '1.5.6 < 1.5.9'
+Assert-Equal (Compare-DevVersion '0.10.0' '0.9.0').Result 'InstaladaSuperior' '0.10.0 > 0.9.0'
+Assert-Equal (Compare-DevVersion '2.1.325 (Claude Code)' '2.1.311').Result 'InstaladaSuperior' 'formato Claude'
+Assert-Equal (Compare-DevVersion 'codex-cli 0.167.2' 'rust-v0.169.0').Result 'DisponivelSuperior' 'codex-cli x rust-v'
+Assert-Equal (Compare-DevVersion 'Hermes Agent v0.23.1 (2026.9.24) x' 'v0.23.1').Result 'Igual' 'Hermes ignora data'
+Assert-Equal (Compare-DevVersion '1.5.6' '1.5.6').Result 'Igual' 'iguais'
+Assert-Equal (Compare-DevVersion '' '1.0.0').Result 'NaoComparavel' 'instalada vazia'
+Assert-Equal (Compare-DevVersion '1.0.0-rc.1' '1.0.0').Result 'NaoComparavel' 'instalada prerelease'
+Assert-Equal (Compare-DevVersion '1.0.0' 'latest').Result 'NaoComparavel' 'disponível sem versão'
+Assert-Equal (Compare-DevVersion '1.0.0' '1.1.0-beta.2').Result 'NaoComparavel' 'disponível prerelease'
+Assert-Equal (Compare-DevVersion '1.0.0' 'x 1.1.0').Result 'NaoComparavel' 'disponível ambíguo'
 # Confirma default seguro e precedência Check/DryRun na função pública.
 $script:applies=@()
 function Invoke-DevTool { param($Entry,$Apply,$Preview); $script:applies+=([bool]$Apply); [pscustomobject]@{ Tool=$Entry.Name; Status='Mock'; Before=''; LatestStable=''; Detail='' } }
