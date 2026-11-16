@@ -24,14 +24,14 @@ function Get-DefaultProfilePaths {
         throw 'Pasta Documentos do usuário não encontrada.'
     }
     @(
-        (Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'),
-        (Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1')
+        ([System.IO.Path]::Combine($docs, 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')),
+        ([System.IO.Path]::Combine($docs, 'PowerShell\Microsoft.PowerShell_profile.ps1'))
     )
 }
 
 function Get-ProfileFileState {
     param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) {
+    if (-not [System.IO.File]::Exists($Path)) {
         return [pscustomobject]@{
             Exists   = $false
             Content  = ''
@@ -108,10 +108,10 @@ function New-AtualizarIasBlock {
         '    )',
         "    `$scriptPath = '$escapedUpdater'",
         "    `$installerPath = '$escapedInstaller'",
-        '    if (-not (Test-Path -LiteralPath $scriptPath)) {',
+        '    if (-not [System.IO.File]::Exists($scriptPath)) {',
         '        throw "Atualizador não encontrado em ''$scriptPath''. Execute novamente ''$installerPath'' para registrar o comando."',
         '    }',
-        "    `$exe = if (`$PSVersionTable.PSEdition -eq 'Core') { Join-Path `$PSHOME 'pwsh.exe' } else { Join-Path `$PSHOME 'powershell.exe' }",
+        "    `$exe = if (`$PSVersionTable.PSEdition -eq 'Core') { [System.IO.Path]::Combine(`$PSHOME, 'pwsh.exe') } else { [System.IO.Path]::Combine(`$PSHOME, 'powershell.exe') }",
         "    `$baseArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `$scriptPath)",
         '    if ($Check -or (-not $All -and (-not $Tool -or $Tool.Count -eq 0))) {',
         "        `$baseArgs += '-Check'",
@@ -136,11 +136,28 @@ function New-AtualizarIasBlock {
     $lines -join $NewLine
 }
 
+function Write-SafeWarning {
+    param([string]$Message)
+    try {
+        Write-Warning $Message
+    } catch {
+        if ($Host -and $Host.UI) {
+            $Host.UI.WriteWarningLine($Message)
+        }
+    }
+}
+
 function Test-EffectiveExecutionPolicyWarning {
     param([string]$UpdaterScriptPath)
-    $policy = Get-ExecutionPolicy
+    $policy = $null
+    try {
+        $policy = Get-ExecutionPolicy
+    } catch {
+        Write-SafeWarning 'Não foi possível verificar a ExecutionPolicy efetiva; continuando a instalação.'
+        return
+    }
     if ($policy -in @('Restricted', 'AllSigned')) {
-        Write-Warning ("A ExecutionPolicy efetiva atual é '{0}', o que pode impedir o carregamento automático do perfil do PowerShell. Nenhuma política foi alterada. Alternativas: (1) liberar scripts locais para o usuário atual com 'Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned', ou (2) executar diretamente: powershell -NoProfile -ExecutionPolicy Bypass -File `"{1}`" -Check" -f $policy, $UpdaterScriptPath)
+        Write-SafeWarning ("A ExecutionPolicy efetiva atual é '{0}', o que pode impedir o carregamento automático do perfil do PowerShell. Nenhuma política foi alterada. Alternativas: (1) liberar scripts locais para o usuário atual com 'Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned', ou (2) executar diretamente: powershell -NoProfile -ExecutionPolicy Bypass -File `"{1}`" -Check" -f $policy, $UpdaterScriptPath)
     }
 }
 
@@ -153,16 +170,16 @@ function Install-AtualizarIas {
         [string]$UpdaterScriptPath
     )
 
-    $installerPath = (Resolve-Path -LiteralPath $PSCommandPath -ErrorAction Stop).ProviderPath
+    $installerPath = [System.IO.Path]::GetFullPath($PSCommandPath)
     if (-not $UpdaterScriptPath) {
-        $candidate = Join-Path $PSScriptRoot 'update-dev-tools.ps1'
+        $candidate = [System.IO.Path]::Combine($PSScriptRoot, 'update-dev-tools.ps1')
         if ($Uninstall) {
-            $UpdaterScriptPath = if (Test-Path -LiteralPath $candidate) { (Resolve-Path -LiteralPath $candidate).ProviderPath } else { $candidate }
+            $UpdaterScriptPath = [System.IO.Path]::GetFullPath($candidate)
         } else {
-            if (-not (Test-Path -LiteralPath $candidate)) {
+            if (-not [System.IO.File]::Exists($candidate)) {
                 throw 'Atualizador update-dev-tools.ps1 não encontrado ao lado deste script.'
             }
-            $UpdaterScriptPath = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).ProviderPath
+            $UpdaterScriptPath = [System.IO.Path]::GetFullPath($candidate)
         }
     }
 
@@ -208,9 +225,9 @@ function Install-AtualizarIas {
 
         $applied = $false
         if (-not $DryRun -and $action -ne 'SemAlteracao') {
-            $dir = Split-Path -Parent $target
-            if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-                $null = New-Item -ItemType Directory -Path $dir -Force
+            $dir = [System.IO.Path]::GetDirectoryName($target)
+            if ($dir -and -not [System.IO.Directory]::Exists($dir)) {
+                $null = [System.IO.Directory]::CreateDirectory($dir)
             }
             [System.IO.File]::WriteAllText($target, $newContent, $state.Encoding)
             $applied = $true

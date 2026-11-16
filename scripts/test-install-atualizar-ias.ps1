@@ -158,6 +158,34 @@ if ($env:HORUS_TEST_EXIT_CODE) { exit ([int]$env:HORUS_TEST_EXIT_CODE) }
     $null = Install-AtualizarIas -DryRun -ProfilePath $profileNew -WarningVariable warnings 3>$null
     Assert-True ($warnings.Count -ge 1 -and ($warnings[0].ToString() -match 'Restricted')) 'avisa quando ExecutionPolicy é Restricted sem alterá-la'
 
+    # 9. PS 5.1 filho com PSModulePath contaminado por módulo do pwsh 7 não aborta em Get-ExecutionPolicy
+    $pwsh7ModDir = Join-Path $tempRoot 'pwsh7-modules'
+    $secModDir = Join-Path $pwsh7ModDir 'Microsoft.PowerShell.Security'
+    $null = New-Item -ItemType Directory -Path $secModDir -Force
+    @'
+@{
+    ModuleVersion = '7.0.0.0'
+    PowerShellVersion = '7.0'
+    CompatiblePSEditions = @('Core')
+    CmdletsToExport = @('Get-ExecutionPolicy')
+}
+'@ | Set-Content -LiteralPath (Join-Path $secModDir 'Microsoft.PowerShell.Security.psd1') -Encoding UTF8
+
+    $pollutedProfile = Join-Path $tempRoot 'PollutedPSModulePath\Microsoft.PowerShell_profile.ps1'
+    $winPsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $oldModulePath = $env:PSModulePath
+    try {
+        $env:PSModulePath = "$pwsh7ModDir;$oldModulePath"
+        $childOut = & $winPsExe -NoProfile -ExecutionPolicy Bypass -Command "& '$installerSource' -ProfilePath '$pollutedProfile' 3>&1 | ForEach-Object { `$_.ToString() }"
+        $childExit = $LASTEXITCODE
+    } finally {
+        $env:PSModulePath = $oldModulePath
+    }
+    $childText = ($childOut -join "`n")
+    Assert-Equal $childExit 0 'PS 5.1 com PSModulePath do pwsh 7 conclui sem erro'
+    Assert-True ($childText -match 'não foi possível verificar a ExecutionPolicy') 'PS 5.1 com PSModulePath do pwsh 7 emite aviso curto'
+    Assert-True (Test-Path -LiteralPath $pollutedProfile) 'PS 5.1 com PSModulePath do pwsh 7 cria o perfil mesmo assim'
+
     Write-Host "TOTAL: $script:passed testes aprovados."
 } finally {
     Remove-Item Env:HORUS_TEST_ARGS_LOG -ErrorAction SilentlyContinue
