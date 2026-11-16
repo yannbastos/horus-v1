@@ -42,6 +42,29 @@ As atualizações automáticas desta versão cobrem **npm global comprovado** pa
 
 Antes da mutação, registra versão e comando. Depois, resolve novamente o executável e confirma inicialização por `--version` e igualdade com a versão solicitada. Isso verifica inicialização básica, não autenticação nem inferência. Falha deixa recuperação manual pelo distribuidor original; não há rollback garantido e não se restauram configurações/dados automaticamente.
 
+## Comando de usuário (`atualizar-ias`)
+
+Para executar de qualquer pasta no Windows PowerShell 5.1 e no PowerShell 7 sem navegar até o repositório, registre a função `atualizar-ias` nos perfis do usuário atual:
+
+```powershell
+powershell -NoProfile -File scripts/install-atualizar-ias.ps1 -DryRun
+powershell -NoProfile -File scripts/install-atualizar-ias.ps1
+powershell -NoProfile -File scripts/install-atualizar-ias.ps1 -Uninstall
+```
+
+O instalador é idempotente, não exige administrador e não altera `PATH` nem `ExecutionPolicy`. Ele grava apenas um bloco delimitado por marcadores (`# >>> horus atualizar-ias >>>` / `# <<< horus atualizar-ias <<<`) nos perfis de Windows PowerShell 5.1 e PowerShell 7 em `MyDocuments` (preservando conteúdo e encoding existentes; perfis novos usam UTF-8 com BOM), apontando para o caminho absoluto atual de `scripts/update-dev-tools.ps1`. Se o checkout for movido, execute o instalador novamente. Se a `ExecutionPolicy` efetiva (`Restricted` ou `AllSigned`) impedir o carregamento do perfil, o instalador apenas avisa e exibe a alternativa sem alterá-la.
+
+Uso após abrir uma nova sessão do PowerShell:
+
+```powershell
+atualizar-ias                      # somente verificação (-Check)
+atualizar-ias -All                 # executa atualizações elegíveis
+atualizar-ias -DryRun -All         # simula sem alterar
+atualizar-ias -Tool codex          # atualiza apenas a ferramenta indicada
+```
+
+Sem `-All` nem `-Tool`, o comando sempre repassa `-Check`. A função invoca `update-dev-tools.ps1` em processo filho (`-NoProfile -ExecutionPolicy Bypass -File ...`) preservando todas as travas do script original e propagando `$LASTEXITCODE`.
+
 ## Agendador opcional
 
 ```powershell
@@ -57,6 +80,8 @@ O padrão é DryRun. Plano por usuário, logon interativo, sem elevação, senha
 
 ```powershell
 powershell -NoProfile -File scripts/test-update-dev-tools.ps1
+powershell -NoProfile -File scripts/test-install-atualizar-ias.ps1
+pwsh -NoProfile -File scripts/test-install-atualizar-ias.ps1
 ```
 
 Testes próprios com mocks, sem dependências/Pester, rede ou atualização real. Cobrem instalada, ausente, já atualizada, sem downgrade, atualização disponível, falha de rede, sessões, TI, conflitos, gerenciadores alternativos, versões incompatíveis/prerelease, DryRun, falha durante atualização, confirmação final, seleção e registro simulado. Execute também `-Check` real para validar descoberta no computador de destino. Linux/macOS recebem diagnóstico de incompatibilidade; não há atualizador multiplataforma nesta entrega.
