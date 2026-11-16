@@ -77,9 +77,11 @@ def production_diagnostics(settings: Settings):
 def diagnose(settings: Settings):
     checks = []
     command = settings.command()
-    checks.append({"id": "factory", "name": "CLI fabrica", "available": command is not None,
-                   "detail": "Comando localizado; execução e dependências ainda precisam ser validadas." if command else
-                   "Configure FABRICA_HOME e prepare o ambiente Python da fábrica."})
+    checks.append({"id": "factory", "name": "CLI fábrica (operações opcionais)", "available": command is not None,
+                   "detail": ("Comando localizado; execução e dependências ainda precisam ser validadas. " if command else
+                              "CLI indisponível. ") +
+                   "Consultar perfil e render de rascunho são operações opcionais. Não são etapas do roteiro manual. "
+                   "A fábrica/Remotion necessária ao piloto local é verificada separadamente em Pronto para produzir."})
     for name, detail in (
         ("ffmpeg", "Opcional para transcrição via PyAV; permite mesclar vídeo/áudio do download."),
         ("ffprobe", "Inspeção técnica de mídia."),

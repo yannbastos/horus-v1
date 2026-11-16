@@ -43,6 +43,12 @@ class WorkflowRequest(BaseModel):
     channel_profile: ChannelProfile | None = None
 
 
+class ManualWorkflowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=200)
+    objective: str | None = Field(default=None, max_length=2000)
+
+
 class RevisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1, strict=True)
@@ -163,6 +169,8 @@ class WorkflowService:
                 item["executor"] = "hermes_simulated"
             item["request"].pop("_radar_request", None)
             item["simulated"] = item["executor"] in {"simulated", "hermes_simulated"}
+            if item["request"].get("origin") == "human":
+                item["executor"], item["simulated"] = "human", False
             if "radar" in item["request"]:
                 item["radar"] = item["request"]["radar"]
             item["steps"] = [self.store.job(row) for row in db.execute(
@@ -213,6 +221,43 @@ class WorkflowService:
             for item in items:
                 item["data"] = json.loads(item["data"])
             return items
+
+    def create_manual(self, request: ManualWorkflowRequest, key: str):
+        """Registra a ação humana e sua aprovação atomicamente, sem enfileirar IA."""
+        payload = encode({**request.model_dump(mode="json"), "origin": "human"})
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT * FROM workflows WHERE idempotency_key=?", (key,)).fetchone()
+            if existing:
+                if existing["payload"] != payload:
+                    raise WorkflowConflict("A chave de idempotência já identifica outro pedido editorial.")
+                return {"workflow_id": existing["id"], "status": "approved",
+                        "proposal_artifact_id": existing["current_artifact_id"]}, False
+            workflow_id, job_id, attempt_id, artifact_id, approval_id = (uuid.uuid4().hex for _ in range(5))
+            timestamp = now()
+            content = {"schema_version": 1, "simulated": False, "origin": "human", "stage": "proposal",
+                       "title": request.title, "text": request.objective or request.title, "source_artifact_ids": []}
+            # O schema anterior restringe executor a simulated/hermes; a autoria real fica no payload e na tentativa.
+            db.execute("""INSERT INTO workflows(id,idempotency_key,payload,revision,status,created_at,updated_at)
+                VALUES(?,?,?,1,'approved',?,?)""", (workflow_id, key, payload, timestamp, timestamp))
+            db.execute("""INSERT INTO jobs(id,idempotency_key,payload,status,created_at,updated_at,attempt,
+                workflow_id,workflow_revision,step_key,step_index,result) VALUES(?,?,?,'succeeded',?,?,1,?,1,'proposal',0,?)""",
+                (job_id, f"manual:{workflow_id}", encode({"operation": "editorial.manual", "stage": "proposal"}),
+                 timestamp, timestamp, workflow_id, encode({"artifact_id": artifact_id, "origin": "human"})))
+            db.execute("""INSERT INTO job_attempts(id,job_id,number,status,executor,input_hash,input_artifacts,started_at,finished_at,result)
+                VALUES(?,?,1,'succeeded','human',?,'[]',?,?,?)""",
+                (attempt_id, job_id, digest(json.loads(payload)), timestamp, timestamp, encode(content)))
+            db.execute("INSERT INTO artifacts VALUES(?,?,1,'proposal',?,?,1,?,?,?)",
+                (artifact_id, workflow_id, job_id, attempt_id, encode(content), digest(content), timestamp))
+            review = ReviewRequest(expected_revision=1, artifact_id=artifact_id, decision="approve",
+                                   feedback="Proposta manual criada e aprovada pelo operador local.")
+            db.execute("INSERT INTO approvals VALUES(?,?,1,?,'approve',?,'local-operator','editorial_proposal',?,?,?)",
+                (approval_id, workflow_id, artifact_id, review.feedback, key, encode(review.model_dump()), timestamp))
+            db.execute("UPDATE workflows SET current_artifact_id=? WHERE id=?", (artifact_id, workflow_id))
+            self._job_event(db, job_id, "succeeded")
+            self._event(db, workflow_id, 1, "workflow.created", {"origin": "human", "simulated": False})
+            self._event(db, workflow_id, 1, "review.recorded", {"approval_id": approval_id, "decision": "approve"})
+        return {"workflow_id": workflow_id, "status": "approved", "proposal_artifact_id": artifact_id}, True
 
     async def create(self, request: WorkflowRequest, key: str, *, executor=None, radar=None, radar_request=None):
         data = request.model_dump(mode="json", exclude_none=True)

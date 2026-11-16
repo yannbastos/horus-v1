@@ -667,6 +667,34 @@
         "title": "ManualScriptRequest",
         "type": "object"
       },
+      "ManualWorkflowRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "objective": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "ManualWorkflowRequest",
+        "type": "object"
+      },
       "MediaRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4340,6 +4368,55 @@
           }
         },
         "summary": "Create Workflow"
+      }
+    },
+    "/v1/workflows/manual": {
+      "post": {
+        "operationId": "create_manual_workflow_v1_workflows_manual_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Manual Workflow"
       }
     },
     "/v1/workflows/radar": {

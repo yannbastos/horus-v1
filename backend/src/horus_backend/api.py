@@ -43,7 +43,7 @@ from .notifications import NotificationService
 from .project_import import ImportRefused, ImportService
 from .storage import Store
 from .file_access import PathNotAllowed, client_path
-from .workflows import AuthorizationRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
+from .workflows import AuthorizationRequest, ManualWorkflowRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
 from .whisper_models import ImportModelRequest, InstalledModel, ModelCatalog, ModelConflict, ModelName, RemovedModel, WhisperModels
 
 STREAM_KEEPALIVE_SECONDS = 10
@@ -295,6 +295,12 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise HTTPException(422, str(error)) from None
         except ValueError as error:
             raise HTTPException(422, "Estrutura do roteiro inválida.") from error
+
+    @app.post("/v1/workflows/manual", status_code=201)
+    def create_manual_workflow(request: ManualWorkflowRequest,
+                               idempotency_key: str = Header(min_length=1, max_length=128)):
+        record, created = script_call(lambda: manager.workflows.create_manual(request, idempotency_key))
+        return JSONResponse(record, status_code=201 if created else 200)
 
     @app.post("/v1/workflows/{workflow_id}/scripts", status_code=201)
     def generate_script(workflow_id: str, request: ScriptRequest | ManualScriptRequest,
