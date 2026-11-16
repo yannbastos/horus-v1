@@ -14,7 +14,7 @@ Leia `docs/AGENT-GOVERNANCE.md` antes de trabalhar.
 
 Tarefas sem agente indicado seguem a **distribuição automática** de `docs/AGENT-GOVERNANCE.md` (seção Papéis).
 
-- **Claude Opus — Maestro:** arquitetura, planejamento de incrementos, delegação pelo Orca, worktrees, revisão, integração na `main`, push normal, resolução de conflitos e GitHub Projects. Evita implementar quando há programador disponível e reserva o próprio uso para coordenação e decisões complexas.
+- **Maestro (modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2):** arquitetura, planejamento de incrementos, delegação pelo Orca, worktrees, revisão, integração na `main`, push normal, resolução de conflitos e GitHub Projects. Evita implementar quando há programador disponível e reserva o próprio uso para coordenação e decisões complexas.
 - **Claude Sonnet — programador:** contratos, validadores, qualidade audiovisual, segurança, testes e refatorações delimitadas, nos arquivos atribuídos pela tarefa. Faz commits na própria branch; a integração na `main` é feita pelo Maestro após revisão.
 
 ## Precedência das instruções do Claude Code

@@ -13,6 +13,7 @@ Pré-requisitos de **build**: Windows x64, Python 3.12 via uv, Node/npm,
 Rust/MSVC e ferramentas Tauri/NSIS. Nenhum deles é exigido pelo backend instalado.
 WebView2 deve estar previamente instalado no Windows; o instalador não baixa
 runtime nem modelos. Sem assinatura, publicação ou atualização automática.
+Nota: decisões parciais e pendências sobre o futuro atualizador constam em [adr-atualizador.md](adr-atualizador.md) (implementação não iniciada).
 
 ```powershell
 npm ci --prefix frontend

@@ -8,7 +8,7 @@ Política vigente desde 13/11/2026, definida pelo usuário (idealizador e respon
 
 | Agente | Função | Preferências |
 |---|---|---|
-| Claude Opus — Maestro | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
+| Maestro (modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
 | Codex — programador | Python/FastAPI, fábrica, jobs e workflows, persistência, falhas, testes de integração | |
 | Claude Sonnet — programador | Contratos, validadores, qualidade audiovisual, segurança, testes, refatorações delimitadas | |
 | Antigravity — programador | React/TypeScript, interface, prévia e revisão audiovisual, acessibilidade, Playwright | |
@@ -123,7 +123,7 @@ Privacy First, Local First, Least Privilege, Deny by Default. Nenhuma inferênci
 
 ## Uso dos modelos
 
-Opus para coordenação, arquitetura complexa e revisão crítica; Sonnet para implementação, testes e validações; Codex para backend e integrações; Antigravity para frontend e testes visuais. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
+Maestro (modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2) para coordenação, arquitetura complexa e revisão crítica; Sonnet para implementação, testes e validações; Codex para backend e integrações; Antigravity para frontend e testes visuais. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
 
 ## Eficiência de consumo
 
