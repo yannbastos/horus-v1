@@ -97,7 +97,8 @@ class WindowsJob:
 
 
 # Ambiente mínimo padrão (allowlist) quando quem chama não define `env`: nunca herdar o ambiente inteiro do backend.
-SAFE_ENV_KEYS = {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP'}
+# Shell.Application (consulta BitLocker) expande caches relativos se SystemDrive faltar.
+SAFE_ENV_KEYS = {'PATH', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP'}
 OUTPUT_LIMIT = 16 * 1024 * 1024
 
 

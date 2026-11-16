@@ -62,6 +62,21 @@ npm --prefix frontend run desktop:dev
 npm --prefix frontend run desktop:build
 ```
 
+O modo `desktop`/`desktop:dev` aplica `frontend/src-tauri/tauri.dev.conf.json`,
+que omite os recursos do backend empacotado: o desenvolvimento usa o Python da
+worktree e não exige `backend/dist/horus-backend`. `desktop:build` mantém os
+recursos e o build do backend definidos em `tauri.conf.json`.
+Em uma worktree paralela, configure `HORUS_FRONTEND_PORT` e passe também
+`--config '{"build":{"devUrl":"http://127.0.0.1:15422"}}'` ao comando
+`desktop:dev` (após `--`), usando a mesma porta livre. Configure `HORUS_DATA_DIR`
+temporário e `CARGO_TARGET_DIR` próprio antes de iniciar; não compartilhe dados
+nem a porta de um aplicativo em uso.
+
+A consulta de criptografia usa `Shell.Application` em PowerShell isolado.
+O ambiente mínimo preserva `SystemDrive`, necessário para o Windows resolver
+seus caches; sem ele, o COM pode criar a pasta literal `%SystemDrive%` no
+diretório corrente. Credenciais continuam excluídas da allowlist.
+
 O build empacota Python em diretório próprio via PyInstaller antes de gerar o instalador NSIS. Com os extras preparados, inclui as bibliotecas faster-whisper/CTranslate2/PyAV/yt-dlp; não inclui os modelos Whisper, fábrica, Hermes, executáveis FFmpeg/Node ou Remotion. Linux exige dependências Tauri da distribuição e validação específica; o instalador configurado inicialmente é Windows.
 
 ## Transcrição
