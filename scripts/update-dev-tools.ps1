@@ -38,10 +38,29 @@ function ConvertTo-DevVersion {
     param([string]$Value)
     # Recusa prerelease, nightly, hashes e saídas incompatíveis, sem adivinhar.
     if ($Value -match '(?i)alpha|beta|nightly|canary|preview|\d-rc') { return $null }
-    if ($Value -match '(?<!\d)(\d+\.\d+\.\d+)(?![\d.-])') {
-        return [version]$Matches[1]
+    if ($Value -match '(?<!\d)(\d+\.\d+\.\d+)(?![\d.+-])') {
+        # [version] compara por componente numérico, nunca por texto (0.9.0 < 0.10.0).
+        try { return [version]$Matches[1] } catch { return $null }
     }
     return $null
+}
+
+function Compare-DevVersion {
+    param([string]$Installed, [string]$Available)
+    # Única porta de decisão de versão. Só 'DisponivelSuperior' autoriza atualizar.
+    $result = { param($r, $reason, $i, $a) [pscustomobject]@{ Result=$r; Reason=$reason; Installed=$i; Available=$a } }
+    $inst = ConvertTo-DevVersion $Installed
+    if (-not $inst) { return (& $result 'NaoComparavel' 'Versão instalada ausente, prerelease ou em formato não reconhecido.' $null $null) }
+    # A fonte do canal estável devolve uma versão limpa (ex.: 2.1.311, v0.23.1, rust-v0.169.0);
+    # qualquer outra forma sugere outro canal ou resposta ambígua.
+    if ([string]::IsNullOrWhiteSpace($Available) -or $Available.Trim() -notmatch '^(?:[A-Za-z]+-)?v?\d+\.\d+\.\d+$') {
+        return (& $result 'NaoComparavel' 'Versão do canal estável ausente, prerelease ou ambígua.' $inst $null)
+    }
+    $avail = ConvertTo-DevVersion $Available
+    if (-not $avail) { return (& $result 'NaoComparavel' 'Versão do canal estável não reconhecida.' $inst $null) }
+    if ($avail -gt $inst) { return (& $result 'DisponivelSuperior' 'Versão estável comprovadamente superior.' $inst $avail) }
+    if ($avail -eq $inst) { return (& $result 'Igual' 'Versões iguais.' $inst $avail) }
+    return (& $result 'InstaladaSuperior' 'Versão instalada superior à estável; downgrade proibido.' $inst $avail)
 }
 
 function Get-DevCatalog {
@@ -233,7 +252,7 @@ function Get-DevLatest {
 function Get-DevPlan {
     param($Entry, $Install, [version]$Target)
     $file = if ($Install.Paths.Count) { $Install.Paths[0] } else { '' }
-    if ($Install.Manager -eq 'npm global') {
+    if ($Install.Manager -eq 'npm global' -and $Entry.Package) {
         return [pscustomobject]@{ File=$Install.Npm; Args=@('install','--global',"$($Entry.Package)@$Target",'--engine-strict','--registry=https://registry.npmjs.org'); Manual='' }
     }
     if ($Install.Manager -like 'instalador próprio*') {
@@ -264,10 +283,15 @@ function Invoke-DevTool {
         if (-not $i.Paths.Count) { $r.Status=if ($i.Apps.Count) { 'Manual' } else { 'Ausente' }; $r.Detail='CLI ausente no PATH; nenhuma instalação será feita. App, se presente, usa atualização pela interface oficial.'; return [pscustomobject]$r }
         # --version é a única inicialização permitida; nunca abrir uma sessão de inferência.
         $r.Before = Invoke-DevCommand $i.Paths[0] @('--version')
-        $current = ConvertTo-DevVersion $r.Before
         $networkError = ''
         try { $r.LatestStable=Get-DevLatest $Entry } catch { $networkError=$_.Exception.Message }
-        $target = ConvertTo-DevVersion $r.LatestStable
+        # Decisão de versão antes de qualquer outra proteção: downgrade é proibido sempre.
+        if ($networkError) { $r.Status='RedeIndisponivel'; $r.Detail=$networkError; return [pscustomobject]$r }
+        $cmp = Compare-DevVersion $r.Before $r.LatestStable
+        if ($cmp.Result -eq 'InstaladaSuperior') { $r.Status='VersaoInstaladaSuperior'; $r.Detail="Instalada $($cmp.Installed) é superior à estável $($cmp.Available); nenhum downgrade será feito."; return [pscustomobject]$r }
+        if ($cmp.Result -eq 'Igual') { $r.Status='Atualizada'; $r.Detail='Já igual à estável; nenhum comando executado.'; return [pscustomobject]$r }
+        if ($cmp.Result -ne 'DisponivelSuperior') { $r.Status='VersaoNaoComparavel'; $r.Detail=$cmp.Reason; return [pscustomobject]$r }
+        $target = $cmp.Available
         $plan = Get-DevPlan $Entry $i $target
         $r.Method = (@($plan.File) + @($plan.Args)) -join ' '
         if ($plan.Manual) { $r.Method += ' | ' + $plan.Manual }
@@ -276,14 +300,13 @@ function Invoke-DevTool {
         if ($i.Conflict) { $r.Status='Conflito'; $r.Detail='Múltiplas origens/localizações ou alias; resolver manualmente sem alterar PATH.'; return [pscustomobject]$r }
         if ($i.Manager -eq 'desconhecido') { $r.Status='InstalacaoDesconhecida'; $r.Detail='Instalação não reconhecida (não é npm global comprovado nem local conhecido); atualização bloqueada para não criar uma segunda cópia.'; return [pscustomobject]$r }
         if (Test-DevActive $Entry @(Get-DevProcesses)) { $r.Status='SessaoAtiva'; $r.Detail='Pulado: processo ativo ou host sem linha de comando verificável; nenhum processo encerrado.'; return [pscustomobject]$r }
-        if ($networkError) { $r.Status='RedeIndisponivel'; $r.Detail=$networkError; return [pscustomobject]$r }
-        if (-not $current -or ($r.LatestStable -and -not $target)) { $r.Status='VersaoIncompativel'; $r.Detail='Versão não reconhecida ou prerelease; intervenção manual.'; return [pscustomobject]$r }
-        if ($target -and $current -ge $target) { $r.Status='Atualizada'; $r.Detail='Já igual ou superior à estável; sem downgrade.'; return [pscustomobject]$r }
-        if (-not $target -or $plan.Manual) { $r.Status='Manual'; $r.Detail=$plan.Manual; return [pscustomobject]$r }
+        if ($plan.Manual -or -not $plan.File) { $r.Status='Manual'; $r.Detail=$plan.Manual; return [pscustomobject]$r }
         $r.Status='Disponivel'
         if (-not $Apply -or $Preview) { $r.Detail='Somente consulta/simulação; atualização não executada.'; return [pscustomobject]$r }
         # Revalidar sessões imediatamente antes da mutação.
         if (Test-DevActive $Entry @(Get-DevProcesses)) { $r.Status='SessaoAtiva'; return [pscustomobject]$r }
+        # Última barreira: o comando precisa fixar exatamente a versão comparada.
+        if (@($plan.Args | Where-Object { $_ -like "*@$target" }).Count -ne 1) { throw 'Comando de atualização não fixa a versão comparada; abortado.' }
         Write-Host "ANTES $($Entry.Name): $($r.Before); método: $($r.Method)"
         $null = Invoke-DevCommand $plan.File $plan.Args
         $afterInstall = Get-DevInstall $Entry
