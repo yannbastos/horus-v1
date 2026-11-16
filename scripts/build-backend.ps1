@@ -36,7 +36,7 @@ if ($IncludeFirstVideo) {
         throw 'O perfil primeiro vídeo exige HORUS_BUILD_FACTORY_SOURCE e HORUS_BUILD_FFMPEG_SOURCE somente na máquina de build.'
     }
     $stage = if ($env:HORUS_BUILD_FIRST_VIDEO_STAGE) { $env:HORUS_BUILD_FIRST_VIDEO_STAGE } else {
-        Join-Path $backend '.cache/first-video-stage-v1'
+        Join-Path $backend '.cache/first-video-stage-v3'
     }
     $arguments = @((Join-Path $PSScriptRoot 'prepare-first-video.py'), '--factory-source', $env:HORUS_BUILD_FACTORY_SOURCE,
         '--ffmpeg-source', $env:HORUS_BUILD_FFMPEG_SOURCE, '--output', $stage,

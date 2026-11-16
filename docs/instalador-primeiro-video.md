@@ -15,6 +15,9 @@ com digest publicado na release upstream. Node 22.23.5 é obtido de
 [nodejs.org](https://nodejs.org/dist/v22.23.5/SHASUMS256.txt).
 `scripts/first-video-requirements.txt` fixa com hashes todas as dependências Python,
 incluindo Kokoro 0.9.4 e PyTorch 2.8.0 CPU; não redistribui CUDA.
+O runtime exclui bibliotecas estáticas `.lib`, símbolos `.pdb` e os headers de
+compilação do PyTorch; preserva as DLLs de inferência e os avisos de licença. A wheel
+é verificada antes dessa seleção. Não há compilação/JIT de extensões neste perfil.
 
 A fábrica permanece independente: o build exporta somente código e locks da revisão
 fixada, sem canais, mídias, bancos, segredos ou ambientes do operador. Remotion e
@@ -80,3 +83,18 @@ runtime offline. As variáveis `HORUS_BUILD_FACTORY_SOURCE`,
 `HORUS_BUILD_FIRST_VIDEO_STAGE` são entradas de build, nunca exigências para abrir
 o aplicativo instalado. O perfil mínimo continua usando `scripts/build-backend.ps1`
 sem os switches adicionais.
+
+## Verificação do pacote
+
+`smoke-windows-package.py --with-first-video` confere ferramentas e voz empacotadas
+com PATH restrito; o modo mínimo mantém sua verificação de ausência de Node/FFmpeg.
+`test-windows-installer.ps1 -WithFirstVideo` acrescenta instalação, fechamento normal
+e queda forçada. O runner de testes precisa de Python/psutil, não o aplicativo.
+
+`test-installed-first-video.py --bundled-runtime` não injeta caminhos de ferramentas
+e percorre criação humana, versões, aprovação, Kokoro, importação local de Whisper,
+render e revisão/exportação. Use `--render-quality final` para 1080×1920;
+`--keep-installed` preserva somente a instalação/dados temporários criados pelo
+ensaio, para inspeção da janela Tauri. O script recusa instalações registradas
+preexistentes. Resultados e limitações devem ser registrados com o hash do instalador;
+smoke do backend congelado não comprova sozinho a navegação do app instalado.

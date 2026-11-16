@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Installer,
     [string]$UpgradeInstaller = '',
     [switch]$WithTranscription,
+    [switch]$WithFirstVideo,
     [string]$CudaRuntimeDir = '',
     [string]$ModelDir = '',
     [string]$Audio = '',
@@ -16,6 +17,7 @@ if ($existing) { throw 'Instalação HORUS preexistente: execute em outro usuár
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
 $upgradePath = if ($UpgradeInstaller) { (Resolve-Path -LiteralPath $UpgradeInstaller).Path } else { '' }
 $smokeOptions = @()
+if ($WithFirstVideo) { $WithTranscription = $true; $smokeOptions += '--with-first-video' }
 if ($WithTranscription) { $smokeOptions += '--with-transcription' }
 if ($CudaRuntimeDir -and (-not $WithTranscription -or -not $ModelDir -or -not $Audio)) { throw 'Ensaio CUDA exige WithTranscription, ModelDir e Audio sintético.' }
 if ($ModelDir) { $ModelDir = (Resolve-Path -LiteralPath $ModelDir).Path }

@@ -44,6 +44,14 @@ def run(*args, **kwargs):
     subprocess.run(list(map(str, args)), check=True, **kwargs)
 
 
+def runtime_files(directory, names):
+    """Inferência usa DLLs, não SDKs estáticos (dnnl.lib sozinho excede 2 GiB)."""
+    excluded = {name for name in names if name == '__pycache__' or name.endswith(('.lib', '.pdb'))}
+    if Path(directory).name == 'torch':
+        excluded.add('include')
+    return excluded
+
+
 def prepare(args):
     lock = json.loads(LOCK.read_text(encoding='utf-8'))
     stage, cache = args.output.resolve(), ROOT / 'backend/.cache/first-video-downloads'
@@ -86,9 +94,15 @@ def prepare(args):
     # Mantém o código independente da fábrica importável sem PYTHONPATH ou instalação editável.
     site_packages = python_root / 'Lib/site-packages'
     site_packages.mkdir(parents=True, exist_ok=True)
-    run('uv', 'pip', 'install', '--python', python, '--target', site_packages,
+    # Materializa wheels verificadas fora do runtime distribuído e copia somente arquivos de execução.
+    dependencies = cache / ('python-deps-' + sha(REQUIREMENTS)[:16])
+    run('uv', 'pip', 'install', '--python', python, '--target', dependencies,
         '--require-hashes', '-r', REQUIREMENTS, '--index', 'https://download.pytorch.org/whl/cpu',
         '--index-strategy', 'unsafe-best-match', '--build-constraints', BUILD_REQUIREMENTS, '--require-build-hashes')
+    copy_source, copy_target = dependencies.resolve(), site_packages.resolve()
+    if os.name == 'nt':
+        copy_source, copy_target = Path('\\\\?\\' + str(copy_source)), Path('\\\\?\\' + str(copy_target))
+    shutil.copytree(copy_source, copy_target, dirs_exist_ok=True, ignore=runtime_files)
     # Do site-packages até factory/scripts; arquivo relativo, sem caminho da máquina de build.
     (site_packages / 'horus_factory.pth').write_text('../../../..\n', encoding='utf-8')
     run(python, '-I', '-c', 'import torch,kokoro,PIL,pydantic,fabrica.render; print(torch.__version__)')
@@ -109,8 +123,8 @@ def prepare(args):
                     shutil.copyfileobj(source, dest)
     env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ.get('PATH', ''),
            'npm_config_audit': 'false', 'npm_config_fund': 'false'}
-    run(tools / 'npm.cmd', 'ci', '--ignore-scripts', '--no-audit', '--no-fund',
-        cwd=factory / 'remotion', env=env, shell=True)
+    run(tools / 'node.exe', tools / 'node_modules/npm/bin/npm-cli.js', 'ci', '--ignore-scripts', '--no-audit', '--no-fund',
+        cwd=factory / 'remotion', env=env)
 
     licenses = stage / 'licenses'
     licenses.mkdir(exist_ok=True)
@@ -151,6 +165,8 @@ def prepare(args):
     (licenses / 'npm-packages.json').write_text(json.dumps(packages, ensure_ascii=False, indent=2), encoding='utf-8')
     # As licenças originais permanecem nos pacotes npm e nas pastas *.dist-info/licenses Python.
     paths = [p for p in stage.rglob('*') if p.is_file() and p != marker]
+    if any(p.stat().st_size >= 2**31 for p in paths):
+        raise ValueError('Arquivo excede o limite individual do NSIS; revise a seleção do runtime.')
     forbidden = [p for p in paths if p.name in {'.env', 'hermes.json', 'pyvenv.cfg'} or p.suffix in {'.sqlite3', '.key'}
                  or (p.suffix == '.pem' and p.name != 'cacert.pem')]
     if forbidden:
