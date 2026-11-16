@@ -20,6 +20,7 @@ Codex, Claude Sonnet e Antigravity são os programadores preferenciais; as prefe
 ## Ações autorizadas sem aprovação individual
 
 - Criar e administrar branches e worktrees; selecionar e delegar Issues.
+- Remover worktrees limpas e excluir branches temporárias comprovadamente integradas, local e remotamente, conforme [Encerramento de tarefas e limpeza](#encerramento-de-tarefas-e-limpeza).
 - Modificar código e documentação; implementar funcionalidades aprovadas no roadmap; corrigir bugs e regressões.
 - Instalar dependências gratuitas necessárias, de fontes confiáveis, preferindo lockfiles e ambientes isolados; sem alterar configurações globais de segurança.
 - Executar testes e builds.
@@ -35,7 +36,7 @@ Codex, Claude Sonnet e Antigravity são os programadores preferenciais; as prefe
 - Transmitir informações privadas a serviços externos; publicar vídeos ou fazer uploads externos.
 - Excluir dados operacionais ou backups; migrações destrutivas em bancos operacionais.
 - Alterar visibilidade de repositórios ou permissões administrativas do GitHub.
-- Git destrutivo: `push --force`, `reset --hard`, `clean -fd`, reescrita de histórico, exclusão de worktree com alterações não preservadas.
+- Git destrutivo: `push --force`, `reset --hard`, `clean -fd`, reescrita de histórico, exclusão de worktree com alterações não preservadas, exclusão forçada (`branch -D`, `worktree remove --force`) e exclusão de branches não integradas, protegidas ou com PR aberto.
 - Desativar controles de segurança; manipular credenciais reais além de procedimentos locais já autorizados.
 
 Quando algo exigir autorização, o trabalho independente continua.
@@ -61,9 +62,36 @@ Branches `feat/HOR-XXX-descricao` ou `fix/HOR-XXX-descricao` (o Orca pode prefix
 2. Criar branch/worktree e delegar.
 3. Testes focados; revisão de diff e segurança pelo Maestro.
 4. Merge normal na `main` após validação; testes necessários na `main`.
-5. Push normal; atualizar Issue e Project; selecionar a próxima tarefa.
+5. Push normal; atualizar Issue e Project; encerrar a tarefa e limpar worktree e branches conforme [Encerramento de tarefas e limpeza](#encerramento-de-tarefas-e-limpeza); selecionar a próxima tarefa.
 
 A `main` permanece funcional: não integrar código com falha crítica conhecida, não ignorar mudanças inesperadas de outros agentes e não commitar credenciais, dados pessoais, arquivos operacionais ou configurações sensíveis. Em conflito crítico, resolver só o que for seguro ou manter a entrega em revisão.
+
+## Encerramento de tarefas e limpeza
+
+Regra permanente definida pelo usuário em 16/11/2026, fonte única do encerramento (os demais documentos apenas remetem a esta seção). Fluxo: terminou → testou → integrou → publicou → atualiza o GitHub → remove a worktree → exclui branches temporárias → Issue Concluída. Sem resíduos.
+
+**Critérios de conclusão (todos):** implementação terminada; testes relevantes passando; código integrado à branch de destino; commits publicados no GitHub; Issue com evidências, commits e resultados de testes; nenhuma validação obrigatória pendente. Se qualquer verificação falhou, a tarefa não é declarada concluída.
+
+**Após confirmar os critérios (automático, sem pedir autorização a cada vez):**
+
+1. Comentar a evidência na Issue.
+2. Status do Project = Concluído, verificado por leitura.
+3. Encerrar, no Orca, as sessões de agentes da tarefa que não estejam mais trabalhando.
+4. `git worktree remove` (sem `--force`) somente se a worktree estiver limpa e sem trabalho exclusivo: sem commits fora do remoto/destino e sem arquivos não rastreados relevantes. `git worktree prune` quando apropriado.
+
+**Limpeza de branches (automática após integração validada):**
+
+1. Integração concluída e publicada no remoto.
+2. Nenhum commit exclusivo na branch: `git merge-base --is-ancestor <branch> origin/<destino>`. Em squash/rebase, verificar a integração efetiva das alterações (`git cherry` ou diff vazio contra o destino); PR fechado ou mesclado, por si só, não prova integração.
+3. Branch não usada por agente ou worktree ativo.
+4. Remover a worktree limpa.
+5. Excluir a branch local com `git branch -d` (nunca `-D`).
+6. Excluir a remota correspondente (`git push origin --delete <branch>`) se existir e não for protegida.
+7. Atualizar Issue e Project conforme o aceite.
+
+**Proteções:** nunca excluir `main`, `develop` ou branches protegidas; nunca branches com PR aberto ou não integradas; nunca exclusão forçada (`branch -D`, `worktree remove --force`, `push --force`). Em dúvida, preservar e registrar o motivo. Aplicação retroativa exige verificação individual de cada branch. Branches retidas por decisão (ex.: linha Hermes em [RETOMADA-MAESTRO.md §F](RETOMADA-MAESTRO.md#f-branches-retidas-não-estão-no-project-como-código)) não são temporárias concluídas.
+
+**Exceções:** código pronto, mas dependente de aprovação humana, teste no app instalado ou outra validação obrigatória: a Issue fica Em revisão com o bloqueio registrado. A worktree é preservada enquanto houver trabalho ativo ou exclusivo; se estiver limpa e todo o código publicado, pode ser removida antes de fechar a Issue, mas a branch remota só sai depois de integrada.
 
 ## GitHub Projects
 
@@ -71,7 +99,7 @@ Fonte oficial de estado: [Project](https://github.com/users/yannbastos/projects/
 
 - Ao iniciar: comentário na Issue e Status Em andamento.
 - Ao entregar: commits, testes e evidências; Em revisão quando necessário.
-- Ao concluir: confirmar critérios de aceite, Status Concluído e fechar a Issue só com todos os critérios atendidos. Recurso parcial mantém a Issue aberta.
+- Ao concluir: confirmar critérios de aceite, Status Concluído e fechar a Issue só com todos os critérios atendidos, seguindo [Encerramento de tarefas e limpeza](#encerramento-de-tarefas-e-limpeza). Recurso parcial mantém a Issue aberta.
 - Ao bloquear: motivo, Status Bloqueado e a autorização ou dependência exata.
 - Verificar por leitura que a gravação no Project foi aplicada. Não criar Issues duplicadas.
 - **Integridade:** nenhuma entrega é administrativamente concluída sem Issue, Status e evidências iguais ao resultado real. Falha de gravação: registrar e tentar de novo quando seguro. Verificação incremental a cada entrega e reconciliação periódica delegada (não a cada commit).
@@ -112,7 +140,7 @@ Maximizar progresso real por unidade de consumo, sem reduzir qualidade ou segura
 
 ## Continuidade
 
-Ao concluir um incremento: atualizar Issue + Status do Project + evidências (obrigatório em toda transição), revisar, testar, integrar e fazer push quando os critérios forem atendidos, atualizar o Project e delegar a próxima tarefa independente enquanto houver capacidade e autorização. Agente bloqueado ou no limite de uso: registrar e redistribuir. Não prometer execução futura sem mecanismo ativo; registrar o ponto de retomada na Issue.
+Ao concluir um incremento: atualizar Issue + Status do Project + evidências (obrigatório em toda transição), revisar, testar, integrar e fazer push quando os critérios forem atendidos, atualizar o Project, encerrar a tarefa e limpar worktree e branches conforme [Encerramento de tarefas e limpeza](#encerramento-de-tarefas-e-limpeza) e delegar a próxima tarefa independente enquanto houver capacidade e autorização. Agente bloqueado ou no limite de uso: registrar e redistribuir. Não prometer execução futura sem mecanismo ativo; registrar o ponto de retomada na Issue.
 
 **Delegação contínua:** a fila de trabalho são as Issues do Project. Quando um agente termina: receber resultado e evidências; encaminhar revisão/integração se preciso; escolher na fila a próxima tarefa prioritária, independente e autorizada; delegar já ao agente livre, sem esperar os demais; atualizar Issue e Status. Não delegar quando a tarefa depender de código não integrado, sobrepuser arquivos em andamento, exigir autorização ainda não dada ou o agente estiver sem cota; não criar tarefas artificiais.
 
