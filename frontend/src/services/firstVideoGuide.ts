@@ -114,7 +114,7 @@ export function buildFirstVideoGuideState(input: {
     {
       id: 'write_script',
       title: 'Escrever roteiro',
-      detail: 'Crie o roteiro manual a partir de uma proposta aprovada.',
+      detail: 'Escreva seu roteiro manual do zero (ou a partir de uma proposta aprovada).',
       status: writeStatus,
       target: 'production',
       actionLabel: 'Abrir Produção',

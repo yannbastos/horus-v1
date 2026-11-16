@@ -612,15 +612,12 @@ export default function ScriptReview({
           <h3>Roteiro estruturado e revisão humana</h3>
         </div>
         <div className="row">
-          {activeScript ? (
+          {activeScript && (
             activeOrigin === 'human' ? (
               <span className="tag">ESCRITO POR VOCÊ</span>
             ) : (
               <span className="tag simulated">SIMULADO</span>
             )
-          ) : (
-            isProposalApproved &&
-            editorSession?.mode !== 'create' && <span className="tag simulated">SIMULADO</span>
           )}
           {latestScript && (
             <span className={`tag ${SCRIPT_STATUS_TONE[latestScript.status] || ''}`}>
