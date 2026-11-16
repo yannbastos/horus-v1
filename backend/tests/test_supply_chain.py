@@ -26,6 +26,7 @@ PY_SDIST_ONLY_ALLOWLIST: set[str] = set()
 LIFECYCLE_SCRIPTS = ("preinstall", "install", "postinstall", "prepare", "prepublish", "prepublishOnly", "preprepare", "postprepare")
 
 SECRET_PATTERNS = {
+    "minisign_private_text": re.compile(r"untrusted comment: [^\n]*(?:encrypted )?secret key", re.I),
     "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     "github_token": re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"),
     "slack_token": re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
@@ -73,6 +74,22 @@ def test_no_dotenv_or_private_key_files_are_versioned():
     bad = [p for p in tracked() if re.search(r"(^|/)\.env(\..+)?$", p) and not p.endswith((".example", ".sample", ".template"))
            or p.lower().endswith((".pem", ".key", ".p12", ".pfx"))]
     assert not bad, f"Arquivos de segredo versionados: {bad}"
+
+
+def test_updater_key_material_is_ignored_and_not_hidden_as_base64():
+    import base64
+    for name in ['horus-updater-test.key','horus-updater-test.key.pub','tauri-updater-test.generated.json']:
+        result=subprocess.run(['git','check-ignore','--no-index',name],cwd=ROOT,capture_output=True)
+        assert result.returncode==0, name
+    for rel in tracked():
+        path=ROOT/rel
+        if path.suffix.lower() in BINARY or not path.is_file() or path.stat().st_size>2_000_000:
+            continue
+        text=path.read_text(encoding='utf-8',errors='replace')
+        for candidate in re.findall(r'[A-Za-z0-9+/]{100,}={0,2}',text):
+            try: decoded=base64.b64decode(candidate,validate=True).lower()
+            except ValueError: continue
+            assert not (b'untrusted comment:' in decoded and b'secret key' in decoded), rel
 
 
 @pytest.mark.parametrize("sample,expected", [

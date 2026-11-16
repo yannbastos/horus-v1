@@ -4541,6 +4541,36 @@
         "summary": "Update Backup"
       }
     },
+    "/v1/update/reservation": {
+      "delete": {
+        "operationId": "release_update_v1_update_reservation_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Release Update"
+      },
+      "post": {
+        "operationId": "reserve_update_v1_update_reservation_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reserve Update"
+      }
+    },
     "/v1/workflows": {
       "get": {
         "operationId": "list_workflows_v1_workflows_get",

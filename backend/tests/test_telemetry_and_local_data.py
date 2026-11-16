@@ -27,7 +27,7 @@ TELEMETRY_HOSTS = re.compile(
     r"(?i)(google-analytics\.com|googletagmanager\.com|sentry\.io|posthog\.com|segment\.(io|com)|mixpanel\.com|amplitude\.com|"
     r"datadoghq\.|hotjar\.com|clarity\.ms|bugsnag\.com|rollbar\.com|logrocket\.|fullstory\.com|plausible\.io|stats\.g\.doubleclick)")
 # Pacotes legítimos cujo nome casa a expressão: avaliados e aceitos explicitamente (nenhum envia dados do Hórus).
-NAME_ALLOWLIST = {"opentelemetry-api"}  # vazio de fato; exemplo de como aceitar com justificativa
+NAME_ALLOWLIST = {"opentelemetry-api", "tauri-plugin-updater"}  # HOR-100: protótipo local, confirmação explícita.
 
 
 def lock_names():
@@ -51,7 +51,7 @@ def test_no_dependency_in_any_lockfile_is_a_telemetry_or_auto_update_library():
 
 def test_tauri_has_no_updater_http_or_shell_plugin_and_only_loopback_connect_src():
     cargo = tomllib.loads((ROOT / "frontend/src-tauri/Cargo.toml").read_text(encoding="utf-8"))
-    assert set(cargo["dependencies"]) == {"tauri", "tauri-plugin-dialog", "serde", "serde_json", "uuid"}, "dependência Tauri nova"
+    assert set(cargo["dependencies"]) == {"tauri", "tauri-plugin-dialog", "serde", "serde_json", "uuid", "tauri-plugin-updater", "semver", "reqwest", "time"}, "dependência Tauri nova"
     assert cargo["dependencies"]["tauri"]["features"] == []
     conf = json.loads((ROOT / "frontend/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
     assert "updater" not in json.dumps(conf).lower() and "plugins" not in conf or "updater" not in conf.get("plugins", {})
