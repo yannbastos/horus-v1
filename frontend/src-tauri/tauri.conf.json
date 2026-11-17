@@ -19,7 +19,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico", "icons/128x128.png", "icons/32x32.png"],
-    "windows": { "nsis": { "installMode": "currentUser" }, "webviewInstallMode": { "type": "skip" } },
+    "windows": { "nsis": { "installMode": "currentUser", "template": "installer.nsi" }, "webviewInstallMode": { "type": "skip" } },
     "resources": { "../../backend/dist/horus-backend/": "backend/" }
   }
 }

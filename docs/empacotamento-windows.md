@@ -305,3 +305,157 @@ com mensagem explícita no stderr e SHA-256 do banco inalterado. Isso valida
 o guard de incompatibilidade, sem certificar uma migração real ou a mensagem
 na interface. Ensaio no computador de desenvolvimento, não em máquina limpa;
 os critérios mais amplos de instalação/migração em VM continuam pendentes.
+
+## Diretório inicial e isolamento de ensaios (HOR-147)
+
+O template `frontend/src-tauri/installer.nsi` é a cópia do template oficial
+`tauri-cli-v2.12.4` (`crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi`),
+com alterações limitadas ao destino inicial, `RestorePreviousInstallLocation` e
+remoção da caixa/bloco de exclusão de dados pessoais.
+Ao atualizar a CLI, revisar o diff com upstream e repetir os testes abaixo.
+Não substituímos o fluxo Tauri de atualização/desinstalação.
+
+Instalação nova: `%LOCALAPPDATA%\Programs\Horus`, `currentUser`, sem elevação.
+Locais personalizados permanentes continuam sendo respeitados. O template original
+lia `Software\horus\HORUS` e restaurava seu valor padrão sem validar TEMP;
+`/D=` grava esse valor na instalação e a desinstalação `/S` mantém o local lembrado.
+O harness de primeiro vídeo não limpava essa chave. Isso explica a herança de
+pasta de ensaio; o valor histórico exato já foi substituído pela instalação real,
+portanto não pode ser recuperado do registro atual.
+
+Uma lembrança sob TEMP sem entrada de desinstalação é ignorada somente na seleção
+inicial, sem escrever registro. Se houver uma instalação registrada sob TEMP, o
+instalador interrompe com código 2: não muda o destino silenciosamente nem deixa
+os executáveis antigos órfãos. `/D=` continua sendo uma escolha explícita.
+
+**Migração proposta, ainda dependente de aprovação do usuário:** inventariar
+local/versão atuais; fechar o app por ação do operador; guardar instalador anterior,
+backup verificado dos dados e inventário de mídias/segredos/perfil WebView;
+desinstalar explicitamente a versão antiga preservando os dados (na versão antiga,
+não selecionar eventual opção de exclusão);
+confirmar remoção dos executáveis, entrada Uninstall e atalhos; remover somente a
+lembrança de instalação comprovadamente antiga, com autorização; instalar no destino
+aprovado e conferir saúde, dados e atalhos antes de limpar qualquer sobra.
+Instalações permanentes personalizadas permanecem no local atual até essa decisão.
+Nenhuma migração ou limpeza da instalação operacional foi aplicada nesta entrega.
+
+Todos os artefatos usados pelos harnesses devem ser construídos com identidade
+`HORUS Test` / `com.horus.installer-test`; só mudar o identificador não isola as
+chaves NSIS, que dependem do nome do produto. Para transcrição/primeiro vídeo:
+
+```powershell
+npm --prefix frontend run tauri build -- --config ../scripts/tauri-first-video.json --config ../scripts/tauri-installer-test.json
+```
+
+`build-upgrade-installers.ps1` e `build-updater-test.ps1` já aplicam a identidade.
+Os harnesses verificam `ProductName` do instalador antes de executá-lo e recusam
+artefatos antigos HORUS; reconstruí-los, nunca reutilizar o instalador privado de
+validação como fixture. Os testes usam `/D=` sob TEMP e `HORUS_DATA_DIR` externo a
+`app/`. O smoke de executável não instala produto nem escreve registro NSIS.
+O ciclo de updater deve usar o mesmo overlay E2E em N e N+1 para isolar também o
+WebView após relançamento. Não executar ensaios concorrentes com a mesma identidade.
+O modo diagnóstico `--keep-installed` é excepcional: exige limpeza posterior do
+produto de teste e não é um ensaio concluído com limpeza.
+
+Regressões sem dependências Python extras:
+
+```powershell
+python scripts/test-installer-location.py
+powershell -NoProfile -File scripts/test-installer-data-isolation.ps1 -Installer '<HORUS Test N>' -UpgradeInstaller '<HORUS Test N+1>'
+```
+
+O primeiro compila/executa a função NSIS em chave aleatória de fixture: reproduz a
+herança original e verifica instalação nova, TEMP removido/raiz/maiúsculas/`..`,
+instalação TEMP ainda registrada, local permanente, prefixo semelhante e `/D=`.
+O segundo instala N→N+1→N e desinstala `/S`, sem abrir o desktop; compara SHA-256
+de SQLite, projeto, preferência e mídia descartáveis fora de `INSTDIR` e limpa
+somente a identidade de teste. A fixture de mídia é uma sequência de bytes; esse
+teste verifica preservação, não decodificação audiovisual nem migração de schema.
+Na HOR-147 foram gerados dois NSIS de teste com o template completo, reutilizando
+um desktop compilado e sem recursos backend; esse ciclo valida o instalador,
+não a inicialização do aplicativo ou o fluxo completo pelo plugin de atualização.
+Relatório local: `%LOCALAPPDATA%\Horus\dev-reports\HOR-147.md`.
+
+### Preservação obrigatória de dados e roteiro de VM (decisão HOR-147)
+
+A opção de apagar dados pessoais foi removida, junto com seu código de exclusão.
+Desinstalar interativamente, por `/S` ou durante `/UPDATE` sempre preserva banco,
+projetos, mídias, configurações e perfil do usuário fora da pasta de executáveis.
+Isso vale para novos instaladores gerados com o template versionado; instaladores
+antigos continuam tendo seu comportamento original. Não usar exclusão de dados
+no instalador antigo. A lembrança do local no registro pode permanecer para
+reinstalação, sem apagar dados; os harnesses limpam somente sua chave de teste.
+
+**Execução instalada final: somente em VM Windows descartável**, com WebView2,
+dados fictícios e snapshot limpo, sem compartilhamento de pastas/dados/credenciais
+operacionais. Não executar os comandos a seguir no computador de uso diário.
+O ciclo isolado local relatado anteriormente ocorreu antes dessa restrição;
+a versão final sem a caixa foi compilada e coberta estaticamente, sem reinstalação
+neste computador. A validação comportamental interativa final continua pendente.
+
+1. Copiar dois instaladores de produção N/N+1 (ProductName `HORUS`, sem canal real)
+   para a VM, registrar SHA-256, conferir versão e manter o instalador anterior.
+   Para testar o destino de produção, usar a identidade real **somente na VM limpa**;
+   os harnesses com `HORUS Test` continuam sendo a regra para ensaios automatizados.
+2. Em PowerShell normal, sem privilégios administrativos, definir os caminhos e
+   exigir ausência de instalação/dados preexistentes antes de iniciar:
+
+```powershell
+$n = 'C:\Ensaio\Horus-N.exe'
+$n1 = 'C:\Ensaio\Horus-N1.exe'
+$destino = Join-Path $env:LOCALAPPDATA 'Programs\Horus'
+$produto = 'HKCU:\Software\horus\HORUS'
+$uninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\HORUS'
+$dados = @((Join-Path $env:LOCALAPPDATA 'com.horus.audiovisual'),
+           (Join-Path $env:APPDATA 'com.horus.audiovisual'))
+foreach ($p in @($destino,$produto,$uninstall) + $dados) {
+    if (Test-Path -LiteralPath $p) { throw "VM não está limpa: $p" }
+}
+Get-FileHash -LiteralPath $n,$n1 -Algorithm SHA256
+```
+
+3. Abrir N **sem `/D`** e registrar screenshot do destino proposto
+   `%LOCALAPPDATA%\Programs\Horus`; concluir sem mudar o destino, sem UAC.
+   Alternativamente, para o ramo silencioso: `Start-Process $n -ArgumentList '/S /NS' -Wait`.
+   Conferir `(Get-Item -LiteralPath $produto).GetValue('')`, `InstallLocation` e
+   `DisplayVersion` na chave Uninstall: destino esperado e versão N.
+4. Abrir o app e criar/importar somente um projeto e mídia fictícios; fechar pelo
+   operador. Acrescentar fixtures nos dois diretórios de dados, inclusive SQLite
+   válido, projeto, preferências e mídia, e guardar os hashes fora deles:
+
+```powershell
+foreach ($p in $dados) {
+    New-Item -ItemType Directory -Path $p -Force | Out-Null
+    'projeto fictício' | Set-Content (Join-Path $p 'fixture-project.json')
+    'preferência fictícia' | Set-Content (Join-Path $p 'fixture-preference.json')
+    [IO.File]::WriteAllBytes((Join-Path $p 'fixture-media.bin'), [byte[]](1,2,3,4))
+    python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table fixture(v text)'); c.execute('insert into fixture values (?)', ('preservar',)); c.commit(); c.close()" (Join-Path $p 'fixture.sqlite3')
+    if ($LASTEXITCODE) { throw 'Falha ao criar SQLite' }
+}
+function Hashes-Ficticios {
+    @(foreach ($p in $dados) {
+        Get-ChildItem -LiteralPath $p -Filter 'fixture-*' -File |
+            Get-FileHash -Algorithm SHA256 | Select-Object Path,Hash
+    }) | Sort-Object Path | ConvertTo-Json -Compress
+}
+$antes = Hashes-Ficticios
+$antes | Set-Content C:\Ensaio\hashes-antes.json
+```
+
+5. Atualizar sem `/D`, sem relançar: `Start-Process $n1 -ArgumentList '/S /NS /UPDATE' -Wait`.
+   Conferir versão N+1 e reutilização do mesmo destino nas duas chaves. Exigir
+   `(Hashes-Ficticios) -eq $antes` e `PRAGMA integrity_check` igual a `ok` no SQLite
+   fictício e no banco do app fechado. Reabrir o app, conferir o projeto e fechar.
+6. Criar snapshot da VM. Executar `uninstall.exe` interativamente, registrar que
+   não existe caixa de exclusão e concluir; conferir executáveis/entrada Uninstall
+   removidos, dados e hashes preservados. Restaurar **o snapshot da VM**, repetir
+   com `/S` e conferir as mesmas condições. Não restaurar dados de uso diário.
+7. Guardar resultados, screenshots, versões e hashes fora da VM antes de descartá-la.
+   Registrar separadamente os ramos interativo/silencioso, o código de saída de cada
+   processo e quaisquer arquivos que o app alterou legitimamente ao ser aberto.
+   VM destruída ao fim; não reutilizar registros de ensaio na máquina operacional.
+
+Regressão estática da política final, sem executar instalador:
+`python scripts/test-installer-location.py StaticContract` (3 casos).
+A suíte completa também inclui as nove regressões nativas de seleção inicial;
+executá-la na VM para reproduzir a herança histórica e a política final.
