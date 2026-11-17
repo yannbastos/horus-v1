@@ -128,7 +128,7 @@ class WorkflowService:
     def __init__(self, store: Store, queue: asyncio.Queue, notify, settings=None):
         self.store, self.queue, self.notify = store, queue, notify
         self.settings = settings
-        self.checkpoints = CheckpointService(store, _audit(store))
+        self.checkpoints = CheckpointService(store, _audit(store), settings=settings)
         # Substituição somente em testes; nunca aceitar um executor informado pela API.
         self.executor = simulate
         self.executor_kind = getattr(settings, "workflow_executor", "simulated")

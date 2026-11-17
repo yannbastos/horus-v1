@@ -51,7 +51,8 @@ from .whisper_download import ConfirmDownload as ConfirmWhisperDownload, Downloa
 
 
 from . import egress
-from .human_checkpoints import ACTIONS as CHECKPOINT_ACTIONS, CheckpointService
+from .human_checkpoints import (ACTIONS as CHECKPOINT_ACTIONS, CheckpointService, CheckpointRefused,
+                                DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS)
 from .transmissions import TransmissionLog
 from .whisper_models import ImportModelRequest, InstalledModel, ModelCatalog, ModelConflict, ModelName, RemovedModel, WhisperModels
 
@@ -90,7 +91,7 @@ class CheckpointRequest(BaseModel):
     description: str = Field(min_length=1, max_length=200)
     limit_amount: str | None = Field(default=None, pattern=r"^[0-9]{1,12}(?:\.[0-9]{1,8})?$")
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
-    ttl_seconds: int = Field(default=900, ge=30, le=3600)
+    ttl_seconds: int = Field(default=DEFAULT_TTL_SECONDS, ge=30, le=MAX_TTL_SECONDS)
     approved_by: Literal["human"]
 
 
@@ -287,12 +288,14 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         return FileResponse(path, media_type=media_type)
 
 
-    checkpoints = CheckpointService(store, transmissions)
+    checkpoints = CheckpointService(store, transmissions, settings=settings)
 
     @app.post("/v1/checkpoints", status_code=201)
     def create_checkpoint(request: CheckpointRequest, idempotency_key: str = Header(min_length=1, max_length=128)):
         try:
             return checkpoints.grant(**request.model_dump(), key=idempotency_key)
+        except CheckpointRefused as error:
+            raise HTTPException(409, {"code": error.code, "message": str(error)}) from None
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 

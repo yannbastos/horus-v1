@@ -81,7 +81,7 @@ class NarrationService:
         self.settings, self.store = settings, store
         self.credentials = Credentials(settings.data_dir)
         from ..human_checkpoints import CheckpointService
-        self.providers = provider_registry(settings, CheckpointService(store))
+        self.providers = provider_registry(settings, CheckpointService(store, settings=settings))
         self.preference = settings.data_dir / 'narration-preference.json'
         self.previews = {}
         self.lock = threading.Lock()

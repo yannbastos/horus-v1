@@ -244,7 +244,7 @@ class ScriptService:
                     (uuid.uuid4().hex, workflow_id, request.expected_revision, job_id, artifact["id"], "script:" + key, encoded, attempt_id, timestamp))
                 # HOR-107: a autorização explícita do roteiro vira checkpoint humano registrado e consumido na mesma transação.
                 from .human_checkpoints import CheckpointService
-                checkpoints = CheckpointService(self.store, self.audit)
+                checkpoints = CheckpointService(self.store, self.audit, settings=self.settings)
                 subject = digest(envelope.model_dump())
                 checkpoints.grant(action="hermes_script", subject=subject, description=f"Roteiro via Hermes do workflow {workflow_id[:12]}",
                                   key="script:" + key, db=db)
