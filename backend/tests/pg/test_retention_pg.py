@@ -28,7 +28,7 @@ def pg_pool(request):
         yield pool
     finally:
         admin.execute(
-            'TRUNCATE horus.workflows, horus.jobs, horus.job_attempts, horus.artifacts, horus.approvals, horus.cognitive_runs, horus.workflow_events RESTART IDENTITY CASCADE'
+            'TRUNCATE horus.workflows, horus.jobs, horus.job_attempts, horus.artifacts, horus.approvals, horus.cognitive_runs, horus.workflow_events, horus.scripts, horus.script_receipts RESTART IDENTITY CASCADE'
         )
 
 
@@ -324,6 +324,45 @@ def test_script_matcher_contract_hook(pg_pool):
     assert data['script_receipt_editorial_literal_matches'] == 1
 
 
-@pytest.mark.skip(reason='Aguardando migração I4/I5 de scripts e script_receipts para PG')
-def test_script_retention_contract_pending_i4_i5():
-    """Substituirá o stub `_script_literal_matches` após I4/I5 migrarem `scripts` e `script_receipts`."""
+def test_script_retention_preserves_editorial_copies_and_counts_literals(pg_pool):
+    """Roteiros e recibos preservados são apenas contados; fontes brutas do Radar são redigidas."""
+    _seed_radar_workflow(pg_pool, 'w1')
+    doc = {
+        'schema_version': 1,
+        'simulated': True,
+        'title': '[DEMONSTRAÇÃO] Título',
+        'sections': [
+            {'id': 'hook', 'kind': 'hook', 'heading': 'Abertura', 'narration': 'Roteiro [DEMONSTRAÇÃO] Título', 'source_ids': []},
+            {'id': 'body', 'kind': 'body', 'heading': 'Corpo', 'narration': 'Referência https://example.org/watch?v=1', 'source_ids': []},
+            {'id': 'conclusion', 'kind': 'conclusion', 'heading': 'Fim', 'narration': 'Limpo', 'source_ids': []},
+        ],
+    }
+    doc_json = encode(doc)
+    req_json = encode({'expected_revision': 1, 'proposal_artifact_id': 'art-prop-w1'})
+    rec = encode({'id': 's-w1', 'document': doc, 'status': 'approved'})
+    with pg_pool.connection() as conn:
+        with conn.transaction():
+            conn.execute(
+                """INSERT INTO horus.scripts(
+                    id, workflow_id, workflow_revision, proposal_artifact_id, proposal_content_hash,
+                    version, status, document, created_at, review, origin, generator, document_canonical, review_canonical
+                ) VALUES('s-w1', 'w1', 1, %s, %s, 1, 'approved', %s::jsonb, %s, NULL, 'simulated', NULL, %s, NULL)""",
+                ('art-prop-w1', 'h' * 64, doc_json, NOW, doc_json.encode('utf-8')),
+            )
+            for scope, key in (('generate:w1', 'k1'), ('review:s-w1', 'k2')):
+                conn.execute(
+                    """INSERT INTO horus.script_receipts(
+                        scope, idempotency_key, request, response, request_canonical, response_canonical
+                    ) VALUES(%s, %s, %s::jsonb, %s::jsonb, %s, %s)""",
+                    (scope, key, req_json, rec, req_json.encode('utf-8'), rec.encode('utf-8')),
+                )
+    report = run_retention(pg_pool, clock=future)
+    assert report.redacted == 1 and report.failed == 0
+    with pg_pool.connection() as conn:
+        data = conn.execute(
+            "SELECT data FROM horus.workflow_events WHERE workflow_id = 'w1' AND kind = 'workflow.radar_redacted'"
+        ).fetchone()[0]
+        saved_doc = conn.execute("SELECT document FROM horus.scripts WHERE id = 's-w1'").fetchone()[0]
+    assert saved_doc == doc
+    assert data['script_editorial_literal_matches'] == 3
+    assert data['script_receipt_editorial_literal_matches'] == 6
