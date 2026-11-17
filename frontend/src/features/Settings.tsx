@@ -11,10 +11,12 @@ import type { UpdateState } from '../services/updates';
 import PrivacySecurity from './PrivacySecurity';
 import NarrationSettings from './narration/NarrationSettings';
 import WhisperModelsPanel from './transcription/WhisperModelsPanel';
+import { DatabaseSettingsSection } from '../components/DatabaseSettingsSection';
+import type { DatabaseStatus } from '../services/database';
 import { readCudaRuntime } from '../services/transcriptionModels';
 
 export type Theme = 'system' | 'light' | 'dark';
-export type SettingsSection = 'general' | 'privacy';
+export type SettingsSection = 'general' | 'database' | 'privacy';
 
 type DiagnosticCheck = { id: string; name: string; available: boolean; detail: string };
 type ProductionDiagnosticCheck = DiagnosticCheck & { required_for: string[] };
@@ -189,6 +191,10 @@ export default function Settings({
   onChangeShortcutPrefs,
   updateState,
   onUpdateStateChange,
+  databaseStatus = null,
+  databaseSupported = false,
+  onDatabaseStatusChange,
+  sectionNonce = 0,
 }: {
   theme: Theme;
   setTheme: (theme: Theme) => void;
@@ -201,8 +207,15 @@ export default function Settings({
   onChangeShortcutPrefs?: (next: ShortcutPreferences) => void;
   updateState?: UpdateState;
   onUpdateStateChange?: (next: UpdateState) => void;
+  databaseStatus?: DatabaseStatus | null;
+  databaseSupported?: boolean;
+  onDatabaseStatusChange?: (next: DatabaseStatus | null, supported: boolean) => void;
+  sectionNonce?: number;
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  useEffect(() => {
+    setSection(initialSection);
+  }, [initialSection, sectionNonce]);
   const [localShortcutPrefs, setLocalShortcutPrefs] = useState<ShortcutPreferences>(loadShortcutPreferences);
   const activeShortcutPrefs = shortcutPrefs ?? localShortcutPrefs;
   function handleShortcutPrefsChange(next: ShortcutPreferences) {
@@ -234,50 +247,66 @@ export default function Settings({
       await api(candidate, '/health'); connect(candidate); setToken(''); setMessage('Backend local conectado.');
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : String(reason)); }
   }
+  const SETTINGS_TABS: { id: SettingsSection; tabId: string; label: string }[] = [
+    { id: 'general', tabId: 'tab-general', label: 'GERAL' },
+    { id: 'privacy', tabId: 'tab-privacy', label: 'PRIVACIDADE E SEGURANÇA' },
+    { id: 'database', tabId: 'tab-database', label: 'BANCO DE DADOS' },
+  ];
+
+  function moveSettingsTab(currentIndex: number, key: string): SettingsSection | null {
+    if (key === 'ArrowRight' || key === 'ArrowDown') {
+      return SETTINGS_TABS[(currentIndex + 1) % SETTINGS_TABS.length].id;
+    }
+    if (key === 'ArrowLeft' || key === 'ArrowUp') {
+      return SETTINGS_TABS[(currentIndex - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length].id;
+    }
+    if (key === 'Home') return SETTINGS_TABS[0].id;
+    if (key === 'End') return SETTINGS_TABS[SETTINGS_TABS.length - 1].id;
+    return null;
+  }
+
   return <div className="page settings">
     <div className="page-heading">
       <div>
         <p className="eyebrow accent">AJUSTES</p>
-        <h1>{section === 'privacy' ? 'Privacidade e Segurança' : 'Aparência'}</h1>
-        <p className="muted">{section === 'privacy' ? 'Superfície de segurança local, permissões do agente e integridade de dados.' : 'A mesma identidade, no tema que combina com seu espaço.'}</p>
+        <h1>
+          {section === 'privacy'
+            ? 'Privacidade e Segurança'
+            : section === 'database'
+              ? 'Banco de dados'
+              : 'Aparência'}
+        </h1>
+        <p className="muted">
+          {section === 'privacy'
+            ? 'Superfície de segurança local, permissões do agente e integridade de dados.'
+            : section === 'database'
+              ? 'Conexão operacional com o Supabase PostgreSQL, diagnóstico e credenciais no cofre.'
+              : 'A mesma identidade, no tema que combina com seu espaço.'}
+        </p>
       </div>
       <div className="settings-tabs" role="tablist" aria-label="Seções de Ajustes">
-        <button
-          role="tab"
-          id="tab-general"
-          aria-selected={section === 'general'}
-          aria-controls="panel-general"
-          tabIndex={section === 'general' ? 0 : -1}
-          className={`button ${section === 'general' ? 'active' : ''}`}
-          onClick={() => setSection('general')}
-          onKeyDown={e => {
-            if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'End') {
+        {SETTINGS_TABS.map((tab, index) => (
+          <button
+            key={tab.id}
+            role="tab"
+            id={tab.tabId}
+            aria-selected={section === tab.id}
+            aria-controls={`panel-${tab.id}`}
+            tabIndex={section === tab.id ? 0 : -1}
+            className={`button ${section === tab.id ? 'active' : ''}`}
+            onClick={() => setSection(tab.id)}
+            onKeyDown={e => {
+              const next = moveSettingsTab(index, e.key);
+              if (!next) return;
               e.preventDefault();
-              setSection('privacy');
-              document.getElementById('tab-privacy')?.focus();
-            }
-          }}
-        >
-          GERAL
-        </button>
-        <button
-          role="tab"
-          id="tab-privacy"
-          aria-selected={section === 'privacy'}
-          aria-controls="panel-privacy"
-          tabIndex={section === 'privacy' ? 0 : -1}
-          className={`button ${section === 'privacy' ? 'active' : ''}`}
-          onClick={() => setSection('privacy')}
-          onKeyDown={e => {
-            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'Home') {
-              e.preventDefault();
-              setSection('general');
-              document.getElementById('tab-general')?.focus();
-            }
-          }}
-        >
-          PRIVACIDADE E SEGURANÇA
-        </button>
+              setSection(next);
+              const nextTab = SETTINGS_TABS.find(item => item.id === next);
+              if (nextTab) document.getElementById(nextTab.tabId)?.focus();
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
     </div>
 
@@ -295,6 +324,15 @@ export default function Settings({
         <NarrationSettings connection={connection} />
         <ShortcutsSettings preferences={activeShortcutPrefs} onChange={handleShortcutPrefsChange} />
         <UpdateSection state={updateState} onStateChange={onUpdateStateChange} />
+      </div>
+    ) : section === 'database' ? (
+      <div id="panel-database" role="tabpanel" aria-labelledby="tab-database" className="settings-panel">
+        <DatabaseSettingsSection
+          connection={connection}
+          status={databaseStatus}
+          supported={databaseSupported}
+          onStatusChange={(next, supported) => onDatabaseStatusChange?.(next, supported)}
+        />
       </div>
     ) : (
       <div id="panel-privacy" role="tabpanel" aria-labelledby="tab-privacy" className="settings-panel">

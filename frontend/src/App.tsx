@@ -4,9 +4,18 @@ import { NotificationBellButton, NotificationsPanel } from './components/Notific
 import { navigation, Overview, SectionHeader, sections } from './components/Sections';
 import type { Page } from './components/Sections';
 import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
+import { DatabaseGateNotice } from './components/DatabaseGateNotice';
 import { connectDesktop, nativeDesktop } from './platform/desktop';
 import { api } from './services/api';
 import type { Connection, HermesStatus } from './services/api';
+import {
+  getDatabaseStatus,
+  inferDatabaseStateFromErrorCode,
+  isDatabaseBlocking,
+  subscribeDatabaseApiErrors,
+  testDatabaseConnection,
+} from './services/database';
+import type { DatabaseStatus } from './services/database';
 import { useNotificationsBell } from './services/notifications';
 import type { NotificationItem } from './services/notifications';
 import { useProductionObserver } from './services/productionNotices';
@@ -25,7 +34,7 @@ import {
 import type { ShortcutId, ShortcutPreferences } from './services/shortcuts';
 import type { EditorialFocusTarget } from './features/EditorialWorkflows';
 import type { ErrorCenterItem } from './services/errorCenter';
-import type { Theme } from './features/Settings';
+import type { SettingsSection, Theme } from './features/Settings';
 
 const Library = lazy(() => import('./features/Library'));
 const JobWorkspace = lazy(() => import('./features/JobWorkspace'));
@@ -115,6 +124,11 @@ export default function App() {
   const [navAnnouncement, setNavAnnouncement] = useState('');
   const [updateState, setUpdateState] = useState<UpdateState>(() => createDisabledUpdateState());
   const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
+  const [databaseStatus, setDatabaseStatus] = useState<DatabaseStatus | null>(null);
+  const [databaseSupported, setDatabaseSupported] = useState(false);
+  const [databaseTesting, setDatabaseTesting] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('general');
+  const [settingsSectionNonce, setSettingsSectionNonce] = useState(0);
   const bellButtonRef = useRef<HTMLButtonElement | null>(null);
   const shortcutsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const prevUnreadRef = useRef(0);
@@ -130,6 +144,108 @@ export default function App() {
     setBellAnnouncement('');
     prevUnreadRef.current = 0;
   }, [connection]);
+
+  useEffect(() => {
+    if (!connection) {
+      setDatabaseStatus(null);
+      setDatabaseSupported(false);
+      return;
+    }
+    const controller = new AbortController();
+    void getDatabaseStatus(connection, controller.signal)
+      .then(result => {
+        if (controller.signal.aborted) return;
+        if (result.supported) {
+          setDatabaseSupported(true);
+          setDatabaseStatus(result.status);
+        } else {
+          setDatabaseSupported(false);
+          setDatabaseStatus(null);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDatabaseSupported(false);
+          setDatabaseStatus(null);
+        }
+      });
+    return () => controller.abort();
+  }, [connection]);
+
+  useEffect(() => {
+    if (!connection) return;
+    return subscribeDatabaseApiErrors(code => {
+      const nextState = inferDatabaseStateFromErrorCode(code);
+      if (nextState) {
+        setDatabaseSupported(true);
+        setDatabaseStatus(prev => ({
+          state: nextState,
+          latency_ms: prev?.latency_ms ?? null,
+          schema_version: prev?.schema_version ?? null,
+          expected_schema_version: prev?.expected_schema_version ?? null,
+          last_error_code: code,
+          host_label: prev?.host_label ?? null,
+          checked_at: new Date().toISOString(),
+        }));
+      }
+      void getDatabaseStatus(connection)
+        .then(result => {
+          if (result.supported) {
+            setDatabaseSupported(true);
+            setDatabaseStatus(result.status);
+          }
+        })
+        .catch(() => {
+          /* Mantém o estado inferido do erro de API até nova verificação. */
+        });
+    });
+  }, [connection]);
+
+  useEffect(() => {
+    if (!connection || !databaseSupported || !databaseStatus) return;
+    if (databaseStatus.state !== 'connecting' && databaseStatus.state !== 'migrating') return;
+    const timer = window.setInterval(() => {
+      void getDatabaseStatus(connection)
+        .then(result => {
+          if (result.supported) setDatabaseStatus(result.status);
+        })
+        .catch(() => {
+          /* Mantém estado atual até próxima tentativa. */
+        });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [connection, databaseSupported, databaseStatus]);
+
+  const openDatabaseSettings = useCallback(() => {
+    setSettingsInitialSection('database');
+    setSettingsSectionNonce(n => n + 1);
+    setPage('settings');
+    requestAnimationFrame(() => {
+      document.getElementById('tab-database')?.focus();
+    });
+  }, []);
+
+  const retryDatabaseConnection = useCallback(async () => {
+    if (!connection || databaseTesting) return;
+    setDatabaseTesting(true);
+    try {
+      const next = await testDatabaseConnection(connection);
+      setDatabaseSupported(true);
+      setDatabaseStatus(next);
+    } catch {
+      void getDatabaseStatus(connection)
+        .then(result => {
+          if (result.supported) setDatabaseStatus(result.status);
+        })
+        .catch(() => {
+          /* Mantém o estado atual se o backend não respondeu. */
+        });
+    } finally {
+      setDatabaseTesting(false);
+    }
+  }, [connection, databaseTesting]);
+
+  const databaseBlocked = isDatabaseBlocking(databaseSupported, databaseStatus);
 
   useEffect(() => {
     if (unreadCount > prevUnreadRef.current && !notificationsOpen) {
@@ -264,6 +380,15 @@ export default function App() {
       <div className="sidebar-bottom"><div className="integration"><p className="eyebrow">HERMES AGENT</p><p className="muted"><span className="status-dot" />{hermes?.connected ? 'API verificada' : hermes?.cli_available ? 'CLI localizado' : 'Integração pendente'}</p></div><button ref={shortcutsTriggerRef} type="button" className="shortcuts-help-trigger" data-testid="shortcuts-help-button" aria-keyshortcuts={shortcutPrefs.enabled ? shortcutPrefs.bindings['help.open'] || undefined : undefined} onClick={() => setShortcutsHelpOpen(true)}>Atalhos ({shortcutPrefs.bindings['help.open'] || '?'})</button><button className="settings-navigation" aria-current={page === 'settings' ? 'page' : undefined} onClick={() => setPage('settings')}>Ajustes</button><p className="eyebrow signature">SEU ESPAÇO DE CRIAÇÃO</p></div>
     </aside>
     <div className="workspace-shell"><header className="topbar"><div className="row"><span className="eyebrow accent">HORUS</span><span className="muted">/</span><span className="eyebrow">CENTRAL AUDIOVISUAL</span></div><span className="tag">APLICATIVO EM DESENVOLVIMENTO</span></header>
+      {databaseBlocked && databaseStatus && (
+        <DatabaseGateNotice
+          status={databaseStatus}
+          variant="banner"
+          testing={databaseTesting}
+          onRetry={() => void retryDatabaseConnection()}
+          onOpenSettings={openDatabaseSettings}
+        />
+      )}
       {updateState.phase === 'available' &&
         updateState.available &&
         dismissedUpdateVersion !== updateState.available.version && (
@@ -352,18 +477,111 @@ export default function App() {
         </div>
       )}
       <main id="main" tabIndex={-1}><Suspense fallback={<p className="loading" role="status">Abrindo seu espaço…</p>}>
-        {page === 'overview' ? <Overview navigate={setPage} connection={connection} />
-          : page === 'settings' ? <Settings theme={theme} setTheme={setTheme} connection={connection} connect={candidate => { setConnection(candidate); setBackendError(''); }} hermes={hermes} onHermesStatus={setHermes} shortcutPrefs={shortcutPrefs} onChangeShortcutPrefs={handleShortcutPrefsChange} updateState={updateState} onUpdateStateChange={setUpdateState} />
-          : page === 'library' ? <Library connection={connection} searchFocusNonce={librarySearchNonce} searchShortcutBinding={shortcutPrefs.enabled ? shortcutPrefs.bindings['library.search'] : undefined} />
+        {page === 'overview' ? (
+          <Overview
+            navigate={setPage}
+            connection={connection}
+            databaseStatus={databaseStatus}
+            databaseSupported={databaseSupported}
+            databaseTesting={databaseTesting}
+            onRetryDatabase={() => void retryDatabaseConnection()}
+            onOpenDatabaseSettings={openDatabaseSettings}
+          />
+        )
+          : page === 'settings' ? (
+            <Settings
+              theme={theme}
+              setTheme={setTheme}
+              connection={connection}
+              connect={candidate => { setConnection(candidate); setBackendError(''); }}
+              hermes={hermes}
+              onHermesStatus={setHermes}
+              initialSection={settingsInitialSection}
+              sectionNonce={settingsSectionNonce}
+              shortcutPrefs={shortcutPrefs}
+              onChangeShortcutPrefs={handleShortcutPrefsChange}
+              updateState={updateState}
+              onUpdateStateChange={setUpdateState}
+              databaseStatus={databaseStatus}
+              databaseSupported={databaseSupported}
+              onDatabaseStatusChange={(next, supported) => {
+                setDatabaseSupported(supported);
+                setDatabaseStatus(next);
+              }}
+            />
+          )
+          : page === 'library' ? (
+            <>
+              {databaseBlocked && databaseStatus && (
+                <div className="page" style={{ paddingBottom: 0 }}>
+                  <DatabaseGateNotice
+                    status={databaseStatus}
+                    variant="card"
+                    testing={databaseTesting}
+                    onRetry={() => void retryDatabaseConnection()}
+                    onOpenSettings={openDatabaseSettings}
+                    contextLabel="Biblioteca"
+                  />
+                </div>
+              )}
+              <Library connection={connection} searchFocusNonce={librarySearchNonce} searchShortcutBinding={shortcutPrefs.enabled ? shortcutPrefs.bindings['library.search'] : undefined} />
+            </>
+          )
           : page === 'transcription' ? null
-          : page === 'production-center' ? <div className="page"><ProductionCenter connection={connection} onOpenProduction={stepId => {
-              if (stepId) {
-                setNotificationFocusTarget({ kind: 'guide_step', id: stepId, nonce: Date.now() });
-              }
-              setPage('production');
-            }} onOpenSettings={() => setPage('settings')} /></div>
-          : page === 'radar' ? <div className="page"><SectionHeader section={sections.radar} /><Radar connection={connection} onOpenProduction={() => setPage('production')} /></div>
-          : <div className="page"><SectionHeader section={sections[page]} />{page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} focusTarget={notificationFocusTarget} />}{(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} focusJobId={focusJobId} />}{page === 'history' && <ErrorCenter connection={connection} onNavigateItem={handleNavigateFromError} focusNonce={errorCenterFocusNonce} />}</div>}
+          : page === 'production-center' ? (
+            <div className="page">
+              {databaseBlocked && databaseStatus && (
+                <DatabaseGateNotice
+                  status={databaseStatus}
+                  variant="card"
+                  testing={databaseTesting}
+                  onRetry={() => void retryDatabaseConnection()}
+                  onOpenSettings={openDatabaseSettings}
+                  contextLabel="Central de Produção"
+                />
+              )}
+              <ProductionCenter connection={connection} onOpenProduction={stepId => {
+                if (stepId) {
+                  setNotificationFocusTarget({ kind: 'guide_step', id: stepId, nonce: Date.now() });
+                }
+                setPage('production');
+              }} onOpenSettings={() => setPage('settings')} />
+            </div>
+          )
+          : page === 'radar' ? (
+            <div className="page">
+              <SectionHeader section={sections.radar} />
+              {databaseBlocked && databaseStatus && (
+                <DatabaseGateNotice
+                  status={databaseStatus}
+                  variant="card"
+                  testing={databaseTesting}
+                  onRetry={() => void retryDatabaseConnection()}
+                  onOpenSettings={openDatabaseSettings}
+                  contextLabel="Radar"
+                />
+              )}
+              <Radar connection={connection} onOpenProduction={() => setPage('production')} />
+            </div>
+          )
+          : (
+            <div className="page">
+              <SectionHeader section={sections[page]} />
+              {databaseBlocked && databaseStatus && (
+                <DatabaseGateNotice
+                  status={databaseStatus}
+                  variant="card"
+                  testing={databaseTesting}
+                  onRetry={() => void retryDatabaseConnection()}
+                  onOpenSettings={openDatabaseSettings}
+                  contextLabel={sections[page].caption}
+                />
+              )}
+              {page === 'production' && <EditorialWorkflows connection={connection} onOpenCenter={() => setPage('production-center')} focusTarget={notificationFocusTarget} databaseBlocked={databaseBlocked} />}
+              {(page === 'production' || page === 'channels') && <JobWorkspace connection={connection} focusJobId={focusJobId} />}
+              {page === 'history' && <ErrorCenter connection={connection} onNavigateItem={handleNavigateFromError} focusNonce={errorCenterFocusNonce} />}
+            </div>
+          )}
         {(transcriptionOpened || page === 'transcription') && (
           <Transcription
             connection={connection}

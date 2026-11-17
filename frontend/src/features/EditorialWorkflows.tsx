@@ -75,10 +75,12 @@ export default function EditorialWorkflows({
   connection,
   onOpenCenter,
   focusTarget,
+  databaseBlocked = false,
 }: {
   connection: Connection | null;
   onOpenCenter?: () => void;
   focusTarget?: EditorialFocusTarget | null;
+  databaseBlocked?: boolean;
 }) {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -457,6 +459,7 @@ export default function EditorialWorkflows({
                 type="button"
                 className="button"
                 data-testid="new-manual-script-button"
+                disabled={databaseBlocked}
                 onClick={() => {
                   setManualFormOpen(true);
                   setManualError('');
@@ -523,7 +526,7 @@ export default function EditorialWorkflows({
             <button
               type="submit"
               className="button primary"
-              disabled={creatingManual || !manualTitle.trim()}
+              disabled={creatingManual || !manualTitle.trim() || databaseBlocked}
             >
               {creatingManual ? 'Criando…' : 'Criar e abrir editor'}
             </button>
@@ -553,6 +556,7 @@ export default function EditorialWorkflows({
             <button
               type="button"
               className="button primary"
+              disabled={databaseBlocked}
               onClick={() => {
                 setManualFormOpen(true);
                 setManualError('');

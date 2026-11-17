@@ -340,6 +340,7 @@ test.describe('SEC-A2 · Refinamento da interface de Privacidade e Segurança', 
       await connectAndOpen(page);
       const general = page.getByRole('tab', { name: 'GERAL', exact: true });
       const privacy = page.getByRole('tab', { name: 'PRIVACIDADE E SEGURANÇA', exact: true });
+      const database = page.getByRole('tab', { name: 'BANCO DE DADOS', exact: true });
       await expect(privacy).toHaveAttribute('tabindex', '0');
       await expect(general).toHaveAttribute('tabindex', '-1');
       await privacy.focus();
@@ -347,6 +348,9 @@ test.describe('SEC-A2 · Refinamento da interface de Privacidade e Segurança', 
       await expect(general).toBeFocused();
       await expect(general).toHaveAttribute('aria-selected', 'true');
       await page.keyboard.press('End');
+      await expect(database).toBeFocused();
+      await expect(database).toHaveAttribute('aria-selected', 'true');
+      await page.keyboard.press('ArrowLeft');
       await expect(privacy).toBeFocused();
       await expect(privacy).toHaveAttribute('aria-selected', 'true');
       await page.keyboard.press('ArrowLeft');
