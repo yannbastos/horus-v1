@@ -114,14 +114,14 @@ export default function CheckpointsHistory({
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      <div className="row spread" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <div className="row" role="group" aria-label="Filtrar checkpoints por estado" style={{ flexWrap: 'wrap', gap: '6px' }}>
+    <div className="checkpoints-history">
+      <div className="row spread checkpoints-toolbar">
+        <div className="row checkpoints-filters" role="group" aria-label="Filtrar checkpoints por estado">
           {FILTER_OPTIONS.map(option => (
             <button
               key={option.id}
               type="button"
-              className={`button ${filter === option.id ? 'primary' : ''}`}
+              className={`button sm ${filter === option.id ? 'active' : ''}`}
               aria-pressed={filter === option.id}
               onClick={() => setFilter(option.id)}
             >
@@ -160,15 +160,15 @@ export default function CheckpointsHistory({
       )}
 
       {visible.length > 0 && (
-        <div className="data-table-container">
+        <div className="data-table-container" tabIndex={0}>
           <table className="data-table" aria-label="Checkpoints humanos recentes">
             <thead>
               <tr>
-                <th>Ação e descrição</th>
-                <th>Estado</th>
-                <th>Limite (USD)</th>
-                <th>Aprovação</th>
-                <th>Validade / consumo</th>
+                <th scope="col">Ação e descrição</th>
+                <th scope="col">Estado</th>
+                <th scope="col">Limite (USD)</th>
+                <th scope="col">Aprovação</th>
+                <th scope="col">Validade / consumo</th>
               </tr>
             </thead>
             <tbody>
