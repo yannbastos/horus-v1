@@ -16,6 +16,7 @@ test = [
     "psycopg[binary]>=3.3,<4",
     "psycopg-pool>=3.3,<4",
     "pgserver==0.1.4",
+    "pytest-xdist>=3.8,<4",
 ]
 bundle = ["pyinstaller>=6.12,<7"]
 measure = ["psutil>=7,<8"]

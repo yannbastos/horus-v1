@@ -48,6 +48,7 @@ def test_postgresql_semantics(pg_pool):
                 conn.execute("INSERT INTO horus.event(key,payload,parent_id) VALUES ('invalid','{}',999)")
 
 
+@pytest.mark.pg_strong
 def test_clone_isolation_and_drop(pg_cluster):
     with pg_cluster.database() as first, pg_cluster.database() as second:
         with first.connection() as conn:
@@ -69,3 +70,49 @@ def test_cleanup_after_exception():
     assert not cluster.active
     with pytest.raises(ValueError):
         cluster.dsn()
+
+
+@pytest.mark.parametrize("case", range(4))
+def test_fast_reset_seeds_and_identity(pg_pool, case):
+    with pg_pool.connection() as conn:
+        assert conn.execute("SHOW application_name").fetchone() == ("",)
+        assert conn.execute("SELECT count(*) FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory'").fetchone() == (0,)
+        assert conn.execute("SELECT pg_try_advisory_lock(164)").fetchone() == (True,)
+        conn.execute("SET application_name='synthetic-reset'")
+        assert conn.execute("SELECT * FROM horus.parent").fetchall() == [(1,)]
+        assert conn.execute("SELECT count(*) FROM horus.event").fetchone() == (0,)
+        assert conn.execute("INSERT INTO horus.event(key,payload,parent_id) VALUES ('reset','{}',1) RETURNING id").fetchone() == (1,)
+        conn.execute("INSERT INTO horus.parent VALUES (999)")
+
+
+@pytest.mark.pg_strong
+def test_marker_uses_exclusive_clone(pg_pool, _pg_worker_database):
+    shared_pool, _ = _pg_worker_database
+    with pg_pool.connection() as exclusive, shared_pool.connection() as shared:
+        assert exclusive.info.dbname != shared.info.dbname
+
+
+@pytest.mark.pg_strong
+def test_reset_refuses_borrowed_connection(pg_cluster, pg_pool):
+    borrowed = pg_pool.getconn()
+    try:
+        with pg_cluster.connect(borrowed.info.dbname, autocommit=True) as admin:
+            with pytest.raises(RuntimeError, match="não devolvida"):
+                pg_cluster.reset(admin, pg_pool)
+    finally:
+        pg_pool.putconn(borrowed)
+
+
+@pytest.mark.pg_strong
+def test_reset_refuses_external_idle_connection(pg_cluster, pg_pool):
+    with pg_pool.connection() as conn:
+        name = conn.info.dbname
+    with pg_cluster.connect(name, autocommit=True) as admin:
+        with pg_cluster.connect(name, user="horus_app", autocommit=True):
+            with pytest.raises(RuntimeError, match="Conexão extra"):
+                pg_cluster.reset(admin, pg_pool)
+
+
+def test_benchmark_cycle(pg_pool, pg_benchmark_case):
+    with pg_pool.connection() as conn:
+        assert conn.execute("INSERT INTO horus.event(key,payload,parent_id) VALUES ('bench','{}',1) RETURNING id").fetchone() == (1,)

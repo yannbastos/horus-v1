@@ -37,12 +37,15 @@ RESET ROLE;
 
 
 class Cluster:
-    def __init__(self):
+    def __init__(self, *, tuned=True):
         self.root = Path(tempfile.mkdtemp(prefix="horus-test-pg-")).resolve()
         self.data = self.root / "data"
         self.timings = {}
         self.databases = {"postgres", "horus_template"}
         self.active = False
+        self.tuned = tuned
+        self.seeds = []
+        self.sequences = []
         configured = os.environ.get("HORUS_TEST_PG_BIN")
         if configured:
             self.bin = Path(configured).resolve()
@@ -94,6 +97,9 @@ class Cluster:
                 "host all all 127.0.0.1/32 trust\n", encoding="ascii")
             with (self.data / "postgresql.conf").open("a", encoding="ascii") as config:
                 config.write("\nunix_socket_directories = ''\n")
+                if self.tuned:
+                    # APENAS este pgdata sintético descartável; nunca configuração do produto.
+                    config.write("fsync = off\nsynchronous_commit = off\nfull_page_writes = off\nshared_buffers = '16MB'\n")
             self.timings["start_seconds"] = self.run("pg_ctl", "-D", str(self.data),
                 "-l", str(self.root / "server.log"), "-o",
                 f"-h 127.0.0.1 -p {self.port}", "-w", "start")
@@ -107,6 +113,18 @@ class Cluster:
             with self.connect("horus_template") as conn:
                 conn.execute(DDL)
                 conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+                tables = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='horus' ORDER BY tablename").fetchall()
+                for (table,) in tables:
+                    target = sql.Identifier("horus", table)
+                    columns = conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='horus' AND table_name=%s AND is_generated='NEVER' ORDER BY ordinal_position", (table,)).fetchall()
+                    column_sql = sql.SQL(',').join(sql.Identifier(c[0]) for c in columns)
+                    statement = sql.SQL("COPY {} ({}) TO STDOUT (FORMAT BINARY)").format(target, column_sql)
+                    with conn.cursor().copy(statement) as copy:
+                        data = b''.join(bytes(block) for block in copy)
+                    self.seeds.append((target, column_sql, data))
+                for (sequence,) in conn.execute("SELECT sequencename FROM pg_sequences WHERE schemaname='horus'").fetchall():
+                    value, called = conn.execute(sql.SQL("SELECT last_value,is_called FROM {}").format(sql.Identifier("horus", sequence))).fetchone()
+                    self.sequences.append((sequence, value, called))
             self.timings["ddl_seconds"] = time.perf_counter() - start
             with self.connect(autocommit=True) as conn:
                 conn.execute("ALTER DATABASE horus_template IS_TEMPLATE true")
@@ -117,19 +135,21 @@ class Cluster:
             raise
 
     @contextmanager
-    def database(self):
+    def database(self, strategy="wal_log"):
+        if strategy not in {"wal_log", "file_copy"}:
+            raise ValueError("Estratégia de clone desconhecida")
         name = "horus_case_" + uuid.uuid4().hex
         pool = None
         start = time.perf_counter()
         with self.connect(autocommit=True) as conn:
-            conn.execute(sql.SQL("CREATE DATABASE {} TEMPLATE horus_template OWNER horus_owner").format(sql.Identifier(name)))
+            conn.execute(sql.SQL("CREATE DATABASE {} TEMPLATE horus_template OWNER horus_owner STRATEGY {}").format(sql.Identifier(name), sql.SQL(strategy)))
             conn.execute(sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(sql.Identifier(name)))
             conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO horus_app").format(sql.Identifier(name)))
         self.timings.setdefault("clone_seconds", []).append(time.perf_counter() - start)
         self.databases.add(name)
         try:
             pool = ConnectionPool(self.dsn(name, "horus_app"), min_size=1, max_size=4,
-                                  kwargs={"autocommit": True}, open=True)
+                                  kwargs={"autocommit": True, "prepare_threshold": None}, open=True)
             pool.wait(timeout=10)
             yield pool
         finally:
@@ -138,6 +158,37 @@ class Cluster:
             with self.connect(autocommit=True) as conn:
                 conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
             self.databases.remove(name)
+
+    def reset(self, conn, pool):
+        """Admin de teste restaura snapshot binário do template; app continua sem DDL."""
+        stats = pool.get_stats()
+        if stats.get("pool_available") != stats.get("pool_size") or stats.get("requests_waiting", 0):
+            raise RuntimeError("Conexão não devolvida; use pg_strong para isolamento forte")
+        # Limpa também GUCs, LISTEN e advisory locks; evita estado de sessão entre casos.
+        borrowed = []
+        try:
+            for _ in range(stats["pool_size"]):
+                borrowed.append(pool.getconn())
+            for app in borrowed:
+                if app.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+                    raise RuntimeError("Transação pendente; use pg_strong")
+                app.execute("DISCARD ALL")
+        finally:
+            for app in borrowed:
+                pool.putconn(app)
+        conn.execute("SET lock_timeout='2s'")
+        count, active = conn.execute("SELECT count(*),count(*) FILTER (WHERE state<>'idle') FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()").fetchone()
+        if count != stats["pool_size"] or active:
+            raise RuntimeError("Conexão extra/transação ativa durante reset; use pg_strong")
+        with conn.transaction():
+            conn.execute("SET CONSTRAINTS ALL DEFERRED")
+            targets = sql.SQL(',').join(seed[0] for seed in self.seeds)
+            conn.execute(sql.SQL("TRUNCATE {} RESTART IDENTITY CASCADE").format(targets))
+            for target, columns, data in self.seeds:
+                with conn.cursor().copy(sql.SQL("COPY {} ({}) FROM STDIN (FORMAT BINARY)").format(target, columns)) as copy:
+                    copy.write(data)
+            for sequence, value, called in self.sequences:
+                conn.execute("SELECT setval(%s::regclass,%s,%s)", (f'horus.{sequence}', value, called))
 
     def close(self):
         if (self.data / "postmaster.pid").exists():
