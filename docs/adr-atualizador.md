@@ -14,6 +14,17 @@ O Hórus distribui no Windows um aplicativo desktop Tauri 2 com instalador NSIS 
 4. Nenhuma atualização durante renderizações ou outros trabalhos críticos.
 5. Não armazenar credenciais privilegiadas do GitHub no aplicativo.
 
+### Decisões complementares (16/11/2026, noite)
+
+6. **Canal durante a validação:** pasta local ou de rede indicada pelo usuário, sem hospedagem externa. A arquitetura deve permitir migrar depois para um proxy HTTPS privado com autenticação revogável por instalação.
+7. **Ensaios instalados:** somente em VM Windows descartável, com dados fictícios, sem tocar a instalação operacional.
+8. **Núcleo × recursos:** autorizados o estudo técnico e a proposta arquitetural; a implementação aguarda aprovação.
+9. **Chave minisign:** autorizada a preparação do procedimento de geração e custódia, em [custodia-chave-atualizador.md](custodia-chave-atualizador.md). A chave definitiva só é gerada depois de o usuário aprovar o procedimento e a opção de armazenamento; nenhum serviço externo de armazenamento sem autorização.
+10. **Authenticode:** adiado para a distribuição pública. A verificação criptográfica do atualizador continua obrigatória.
+11. **Desinstalador:** sem opção de apagar dados pessoais; arquivos e projetos do usuário são preservados (HOR-147).
+
+Estas decisões resolvem os itens 1, 3 e 4 de "Decisões pendentes" abaixo para a fase atual; o item 2 fica em estudo.
+
 ## Consequências
 
 - Fica descartada a instalação silenciosa automática e o reinício forçado adotados no MIPE.

@@ -41,7 +41,7 @@ Quando o Authenticode for adotado no futuro, a ordem obrigatória de assinatura 
 O projeto fixa `@tauri-apps/cli` na versão `2.12.4` (`frontend/package-lock.json`) e `tauri-plugin-updater` na versão `2.14.1` (`frontend/src-tauri/Cargo.toml`). Conforme a [documentação oficial do Tauri Updater](https://v2.tauri.app/plugin/updater/), a geração do par Ed25519 compatível com minisign usa `tauri signer generate`:
 
 ```powershell
-npm --prefix frontend run tauri -- signer generate -- -w <caminho-fora-do-repo>\horus-updater-prod.key
+npm --prefix frontend run tauri -- signer generate -w <caminho-fora-do-repo>\horus-updater-prod.key
 ```
 
 Ou diretamente pelo binário da CLI fixada:
