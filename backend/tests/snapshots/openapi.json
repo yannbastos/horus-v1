@@ -145,6 +145,75 @@
         "title": "ChannelProfile",
         "type": "object"
       },
+      "CheckpointRequest": {
+        "additionalProperties": false,
+        "description": "Aprovação humana prévia para gastar (narração paga) ou publicar. Execução cognitiva do Hermes nasce em /authorize.",
+        "properties": {
+          "action": {
+            "enum": [
+              "paid_narration",
+              "publish"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "approved_by": {
+            "const": "human",
+            "title": "Approved By",
+            "type": "string"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "description": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "limit_amount": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{1,12}(?:\\.[0-9]{1,8})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Amount"
+          },
+          "subject": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Subject",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "default": 900,
+            "maximum": 3600.0,
+            "minimum": 30.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "approved_by",
+          "description",
+          "subject"
+        ],
+        "title": "CheckpointRequest",
+        "type": "object"
+      },
       "CommentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -594,6 +663,39 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HermesScriptRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authorize": {
+            "const": true,
+            "title": "Authorize",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "proposal_artifact_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Proposal Artifact Id",
+            "type": "string"
+          },
+          "source": {
+            "const": "hermes",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize",
+          "expected_revision",
+          "proposal_artifact_id",
+          "source"
+        ],
+        "title": "HermesScriptRequest",
         "type": "object"
       },
       "ImportModelRequest": {
@@ -1572,6 +1674,101 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/v1/checkpoints": {
+      "get": {
+        "operationId": "list_checkpoints_v1_checkpoints_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Checkpoints"
+      },
+      "post": {
+        "operationId": "create_checkpoint_v1_checkpoints_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Checkpoint"
       }
     },
     "/v1/data-deletion/audit": {
@@ -4205,6 +4402,55 @@
         "summary": "Rollback Token Rotation"
       }
     },
+    "/v1/security/transmissions": {
+      "get": {
+        "description": "Registro append-only de envios ao Hermes: somente metadados (tamanho/SHA-256), nunca conteúdo.",
+        "operationId": "list_transmissions_v1_security_transmissions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Transmissions"
+      }
+    },
     "/v1/shutdown": {
       "post": {
         "operationId": "stop_v1_shutdown_post",
@@ -5150,6 +5396,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/ManualScriptRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/HermesScriptRequest"
                   }
                 ],
                 "title": "Request"
@@ -5179,6 +5428,54 @@
           }
         },
         "summary": "Generate Script"
+      }
+    },
+    "/v1/workflows/{workflow_id}/scripts/reconcile": {
+      "post": {
+        "description": "Conciliação de roteiro Hermes com desfecho desconhecido; nunca reenvia nem cria nova reserva.",
+        "operationId": "reconcile_script_v1_workflows__workflow_id__scripts_reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Script"
       }
     }
   }

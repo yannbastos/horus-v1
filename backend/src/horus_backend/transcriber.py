@@ -23,6 +23,8 @@ LANGUAGES = ("auto", "pt", "en", "es")
 FILE_MARKER = "HORUS_FILE:"
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
+# Fonte única dos hosts de download aceitos (o gateway de saída deriva a allowlist daqui; teste garante a paridade).
+YOUTUBE_DOWNLOAD_HOSTS = frozenset(_YOUTUBE_HOSTS | {"youtu.be"})
 
 
 def is_youtube_url(value: str) -> bool:

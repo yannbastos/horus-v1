@@ -6,7 +6,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 12
 MIGRATIONS = {
     1: (
         """CREATE TABLE jobs (
@@ -161,6 +161,52 @@ MIGRATIONS = {
     9: (
         """ALTER TABLE scripts ADD COLUMN origin TEXT NOT NULL DEFAULT 'simulated'
             CHECK(origin IN ('simulated','human'))""",
+    ),
+    # Proveniência efetiva Hermes; o CHECK de origin da v9 permanece intacto.
+    10: ("ALTER TABLE scripts ADD COLUMN generator TEXT CHECK(generator IS NULL OR generator = 'hermes')",),
+    # Auditoria de transmissões externas (HOR-115, C5): append-only, somente metadados (nunca conteúdo).
+    11: (
+        """CREATE TABLE transmissions (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, at TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('submit','outcome','gate_refusal','probe')),
+            stage TEXT NOT NULL, workflow_id TEXT, job_id TEXT, attempt_id TEXT, run_id TEXT,
+            destination TEXT, provider TEXT, model TEXT,
+            envelope_bytes INTEGER CHECK(envelope_bytes IS NULL OR envelope_bytes >= 0),
+            envelope_sha256 TEXT CHECK(envelope_sha256 IS NULL OR length(envelope_sha256) = 64),
+            authorization_id TEXT,
+            result TEXT NOT NULL CHECK(result IN ('attempted','sent','error','unknown','refused_gate','completed',
+                'failed','cancelled','interrupted','invalid_output','policy_violation')),
+            detail TEXT CHECK(detail IS NULL OR length(detail) <= 120),
+            tokens_total INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0), cost_usd TEXT)""",
+        "CREATE INDEX transmissions_run ON transmissions(run_id, seq)",
+        """CREATE TRIGGER transmissions_no_update BEFORE UPDATE ON transmissions
+            BEGIN SELECT RAISE(ABORT, 'transmissions é append-only'); END""",
+        """CREATE TRIGGER transmissions_no_delete BEFORE DELETE ON transmissions
+            BEGIN SELECT RAISE(ABORT, 'transmissions é append-only'); END""",
+    ),
+    # Checkpoints humanos para gastar/publicar (HOR-107): append-only; só consumed_at/consumed_ref mudam, uma vez.
+    12: (
+        """CREATE TABLE human_checkpoints (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+            action TEXT NOT NULL CHECK(action IN ('hermes_run','hermes_script','paid_narration','publish')),
+            subject TEXT NOT NULL CHECK(length(subject) = 64),
+            description TEXT NOT NULL CHECK(length(description) BETWEEN 1 AND 200),
+            approved_by TEXT NOT NULL CHECK(approved_by = 'human'), operator_id TEXT NOT NULL,
+            approved_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+            limit_amount TEXT, currency TEXT CHECK(currency IS NULL OR length(currency) = 3),
+            consumed_at TEXT, consumed_ref TEXT, idempotency_key TEXT UNIQUE, request TEXT NOT NULL,
+            CHECK((limit_amount IS NULL) = (currency IS NULL)))""",
+        "CREATE INDEX human_checkpoints_lookup ON human_checkpoints(action, subject, seq)",
+        """CREATE TRIGGER human_checkpoints_no_delete BEFORE DELETE ON human_checkpoints
+            BEGIN SELECT RAISE(ABORT, 'human_checkpoints é append-only'); END""",
+        """CREATE TRIGGER human_checkpoints_consume_once BEFORE UPDATE ON human_checkpoints
+            WHEN NOT (OLD.consumed_at IS NULL AND NEW.consumed_at IS NOT NULL AND NEW.id = OLD.id AND NEW.seq = OLD.seq
+                AND NEW.action = OLD.action AND NEW.subject = OLD.subject AND NEW.description = OLD.description
+                AND NEW.approved_by = OLD.approved_by AND NEW.operator_id = OLD.operator_id
+                AND NEW.approved_at = OLD.approved_at AND NEW.expires_at = OLD.expires_at
+                AND NEW.limit_amount IS OLD.limit_amount AND NEW.currency IS OLD.currency
+                AND NEW.request = OLD.request AND NEW.idempotency_key IS OLD.idempotency_key)
+            BEGIN SELECT RAISE(ABORT, 'human_checkpoints só aceita o consumo único'); END""",
     ),
 }
 

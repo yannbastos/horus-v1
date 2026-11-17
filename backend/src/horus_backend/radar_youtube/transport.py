@@ -1,6 +1,9 @@
 """Somente GET nos endpoints públicos oficiais; rede exige opt-in explícito."""
 import json
 from http.client import HTTPException
+
+
+from .. import egress
 import socket
 import ssl
 from urllib.error import HTTPError, URLError
@@ -32,6 +35,7 @@ class GoogleTransport:
             raise ValueError('Endpoint/parâmetros não autorizados.')
         # Chave somente no transporte, nunca em parâmetros persistidos, datasets ou mensagens de erro.
         url = 'https://www.googleapis.com/youtube/v3/' + resource + '?' + urlencode({**params, 'key': self._key.get_secret_value()})
+        egress.gateway().authorize('radar_youtube', 'GET', url.split('?', 1)[0])  # a chave (query) nunca vai ao registro
         try:
             opener = build_opener(NoRedirect(), HTTPSHandler(context=ssl.create_default_context()))
             with opener.open(Request(url, headers={'Accept': 'application/json'}), timeout=self.timeout) as response:

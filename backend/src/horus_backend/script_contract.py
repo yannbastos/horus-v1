@@ -38,7 +38,7 @@ class ScriptSection(_StrictInput):
 
 class ScriptDocument(_StrictInput):
     schema_version: Literal[1] = 1
-    simulated: bool = True  # coerente com a origem: simulated => true, human => false (validate_script)
+    simulated: bool = True  # simulated => true; human/hermes => false (validate_script)
     title: str = Field(min_length=1, max_length=200)
     sections: list[ScriptSection] = Field(min_length=MIN_SECTIONS, max_length=MAX_SECTIONS)
 
@@ -70,12 +70,12 @@ class ScriptDocument(_StrictInput):
 
 
 def validate_script(document: dict | ScriptDocument, allowed_source_ids: set[str],
-                    origin: Literal["simulated", "human"] = "simulated") -> ScriptDocument:
+                    origin: Literal["simulated", "human", "hermes"] = "simulated") -> ScriptDocument:
     """Valida estrutura e referências; devolve um modelo novo. Levanta ValidationError/ValueError.
 
-    `simulated` acompanha a origem: simulated => true (padrão legado), human => false (omitido vira false).
+    `simulated` acompanha a origem: simulated => true; human/hermes => false (omitido vira false).
     """
-    if origin not in ("simulated", "human"):
+    if origin not in ("simulated", "human", "hermes"):
         raise ValueError("origem de roteiro desconhecida.")
     if isinstance(document, ScriptDocument):
         document = document.model_dump()  # revalida: instância pode ter sido alterada após a construção
@@ -83,7 +83,7 @@ def validate_script(document: dict | ScriptDocument, allowed_source_ids: set[str
         raise ValueError("documento de roteiro deve ser um objeto.")
     if not isinstance(allowed_source_ids, (set, frozenset)):
         raise ValueError("allowed_source_ids deve ser um conjunto de ids.")
-    if origin == "human" and isinstance(document, dict) and "simulated" not in document:
+    if origin in ("human", "hermes") and isinstance(document, dict) and "simulated" not in document:
         document = {**document, "simulated": False}
     script = ScriptDocument.model_validate(document)
     if script.simulated is not (origin == "simulated"):

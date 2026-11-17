@@ -220,7 +220,7 @@ def test_migration_v8_preserves_data_is_idempotent_and_adds_only_table(settings,
         migrate(path)
         with sqlite3.connect(path) as db:
             db.execute('PRAGMA foreign_keys=ON')
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 9
+            assert db.execute('PRAGMA user_version').fetchone()[0] == __import__("horus_backend.migrations", fromlist=["SCHEMA_VERSION"]).SCHEMA_VERSION
             for name, rows in tables.items():
                 # v9 acrescenta scripts.origin (HOR-133); os valores anteriores permanecem intactos.
                 assert [tuple(r)[:len(rows[0])] if rows else tuple(r) for r in db.execute(f'SELECT * FROM {name} ORDER BY 1')] == rows
