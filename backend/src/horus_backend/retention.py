@@ -185,14 +185,27 @@ def _script_literal_matches(
     *,
     script_matcher: ScriptLiteralMatcher | None = None,
 ) -> tuple[int, int]:
-    """Contrato/stub para inventário das cópias editoriais de scripts/recibos (I4/I5).
-
-    Implementação efetiva depende dos contratos/dados de `scripts` e `script_receipts`
-    em I4/I5; enquanto não integrados, retorna `(0, 0)` ou delega a `script_matcher`.
-    """
+    """Inventário das cópias editoriais de roteiros e recibos preservados (I5); somente lê/conta."""
     if script_matcher is not None:
         return script_matcher(db, workflow_id, literals)
-    return 0, 0
+    if not literals:
+        return 0, 0
+    with db.cursor(row_factory=dict_row) as cur:
+        script_rows = cur.execute(
+            "SELECT id, document FROM horus.scripts WHERE workflow_id = %s",
+            (workflow_id,),
+        ).fetchall()
+        script_hits = sum(_hits(_as_json(row["document"]), literals) for row in script_rows)
+        scopes = [f"generate:{workflow_id}"]
+        for row in script_rows:
+            scopes.append(f"review:{row['id']}")
+            scopes.append(f"version:{row['id']}")
+        receipt_rows = cur.execute(
+            "SELECT response FROM horus.script_receipts WHERE scope = ANY(%s)",
+            (scopes,),
+        ).fetchall()
+        receipt_hits = sum(_hits(_as_json(row["response"]), literals) for row in receipt_rows)
+    return script_hits, receipt_hits
 
 
 def _scrub_errors(db, workflow_id: str, literals: list[str]) -> int:
