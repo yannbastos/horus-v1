@@ -1,12 +1,17 @@
-"""Gerador de bases SQLite 100% sintéticas usando o DDL legado de migrations.py."""
+"""Gerador de bases SQLite 100% sintéticas usando o DDL legado de legacy_schema.py."""
 from __future__ import annotations
 
 from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+import sys
 
-from horus_backend.migrations import MIGRATIONS
+_TOOLS_DIR = Path(__file__).resolve().parents[3] / "tools"
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
+
+from migrate_sqlite_pg.legacy_schema import MIGRATIONS
 
 
 PRIVATE_MARKER_PROMPT = "PRIVATE_SECRET_PROMPT_XYZ_999"

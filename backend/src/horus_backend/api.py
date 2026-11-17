@@ -9,13 +9,14 @@ import os
 import re
 import secrets
 from typing import Literal
-import sqlite3
 import tempfile
 import time
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import psycopg
+from psycopg.rows import dict_row
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -25,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .narration.service import NarrationService, narration_router
 from .config import Settings
-from .database import install_database
+from .database import DatabaseRefused, install_database
 from .database.router import error_response as database_error_response
 from .diagnostics import diagnose
 from .exports import ExportService
@@ -45,7 +46,7 @@ from .review_comments import CommentRequest, DecisionRequest, ReviewCommentServi
 from .data_deletion import DataDeletionService, DeletionExecuteRequest, DeletionPreviewRequest
 from .notifications import NotificationService
 from .project_import import ImportRefused, ImportService
-from .storage import Store
+from .storage import DatabaseUnavailable, Store
 from .update_backup import create_update_backup
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ManualWorkflowRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
@@ -118,10 +119,40 @@ class JobEventsResponse(StreamingResponse):
 def create_app(settings: Settings, shutdown=None, ready=None):
     if len(settings.token) < 24:
         raise ValueError("A API exige um token local aleatório de pelo menos 24 caracteres.")
-    store = Store(settings.data_dir / "horus.sqlite3")
     if settings.radar_executor not in {"hermes_simulated", "hermes"}:
         raise ValueError("HORUS_RADAR_EXECUTOR inválido. Use hermes_simulated ou hermes.")
-    radar_state = RadarState(settings.data_dir / "radar" / "radar-youtube.sqlite3")
+
+    worker_start_lock = asyncio.Lock()
+
+    async def ensure_worker_started():
+        async with worker_start_lock:
+            if manager.worker is None and db_manager.snapshot.state == "connected":
+                with contextlib.suppress(DatabaseUnavailable):
+                    await manager.start()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        if db_manager.snapshot.state == "connecting":
+            await asyncio.to_thread(db_manager.test)
+        if db_manager.snapshot.state == "connected":
+            await ensure_worker_started()
+        if ready:
+            ready()
+        try:
+            yield
+        finally:
+            try:
+                narration.close()
+                await manager.close()
+            finally:
+                await asyncio.to_thread(db_manager.close)
+
+    app = FastAPI(title="Hórus local", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    install_database(app, settings.data_dir, lambda: update_reserved or mutations > 1 or
+                     manager.active_id is not None or manager.active_process is not None or narration.active_previews > 0)
+    db_manager = app.state.database
+    store = Store(db_manager, data_dir=settings.data_dir)
+    radar_state = RadarState(db_manager)
     manager = JobManager(store, settings)
     transmissions = TransmissionLog(store)
     egress.configure(egress.build_gateway(audit=transmissions))  # ponto único de saída HTTP (HOR-111)
@@ -136,27 +167,18 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     update_gate = threading.Lock()
     update_reserved, mutations = False, 0
 
-    @asynccontextmanager
-    async def lifespan(app):
-        await manager.start()
-        if ready:
-            ready()
-        try:
-            yield
-        finally:
-            narration.close()
-            await manager.close()
-
-    app = FastAPI(title="Hórus local", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(narration_router(narration))
-    install_database(app, settings.data_dir, lambda: update_reserved or mutations > 1 or
-                     manager.active_id is not None or manager.active_process is not None or narration.active_previews > 0)
     app.state.narration = narration
     app.state.radar = radar_state
     app.state.store, app.state.manager = store, manager
     app.add_middleware(DatabaseBodyLimitMiddleware, manager=app.state.database)  # interno à autenticação
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.origins), allow_methods=["GET", "POST", "PUT", "DELETE"],
                        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"])
+
+    @app.exception_handler(DatabaseRefused)
+    async def database_refused_handler(request: Request, error: DatabaseRefused):
+        code = "database_unavailable" if error.http_status == 503 else error.code
+        return database_error_response(app.state.database, code, error.http_status)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_payload(request: Request, error: RequestValidationError):
@@ -200,6 +222,12 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             if mutation:
                 with update_gate:
                     mutations -= 1
+        if request.method == "POST" and request.url.path in {"/v1/database/connection", "/v1/database/test"}:
+            if db_manager.snapshot.state == "connected" and manager.worker is None:
+                await ensure_worker_started()
+        elif request.method == "DELETE" and request.url.path == "/v1/database/connection":
+            if manager.worker is not None:
+                await manager.close()
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -245,7 +273,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 
-    imports = ImportService(settings.data_dir)
+    imports = ImportService(settings.data_dir, store=store)
 
     def refused(error: ImportRefused):
         return HTTPException(error.status, {"code": error.code, "message": str(error), **error.extra})
@@ -313,7 +341,12 @@ def create_app(settings: Settings, shutdown=None, ready=None):
 
     @app.get("/health")
     async def health():
-        return {"status": "ready", "database_id": store.database_id, "factory_available": settings.command() is not None,
+        try:
+            database_id = store.database_id if db_manager.snapshot.state == "connected" else None
+        except DatabaseUnavailable:
+            database_id = None
+        return {"status": "ready", "database_id": database_id, "database_state": db_manager.snapshot.state,
+                "factory_available": settings.command() is not None,
                 "hermes_connected": hermes.status()["connected"], "version": "0.1.0"}
 
     @app.get("/v1/security/transmissions")
@@ -323,7 +356,10 @@ def create_app(settings: Settings, shutdown=None, ready=None):
 
     @app.get("/v1/security/status")
     async def inspect_security():
-        report = security_status(settings, store)
+        try:
+            report = security_status(settings, store if db_manager.snapshot.state == "connected" else None)
+        except DatabaseUnavailable:
+            report = security_status(settings, None)
         # A limpeza automática roda no JobManager (início + a cada 6 h); o estado vem do último ciclo real.
         report["radar"]["automatic_cleanup"] = {"available": True, "interval_hours": RETENTION_INTERVAL_SECONDS // 3600,
                                                 **manager.retention_status}
@@ -356,8 +392,15 @@ def create_app(settings: Settings, shutdown=None, ready=None):
     @app.get("/v1/update/activity")
     def update_activity():
         # Sem LIMIT: /v1/jobs mostra somente os últimos 100 e pode ocultar um job ativo.
-        with store.connect() as db:
-            count = db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running','cancel_requested')").fetchone()[0]
+        count = 0
+        if db_manager.snapshot.state == "connected":
+            try:
+                with store.uow(readonly=True) as db:
+                    count = db.execute(
+                        "SELECT COUNT(*) FROM horus.jobs WHERE status IN ('queued','running','cancel_requested')"
+                    ).fetchone()[0]
+            except DatabaseUnavailable:
+                count = 0
         with narration.lock:
             previews = narration.active_previews
         # O worker pode já ter gravado status terminal enquanto ainda fecha o processo
@@ -367,20 +410,19 @@ def create_app(settings: Settings, shutdown=None, ready=None):
 
     @app.get("/v1/update/health")
     def update_health():
-        with store.connect() as db:
-            integrity=[row[0] for row in db.execute('PRAGMA integrity_check')]
-            version=db.execute('PRAGMA user_version').fetchone()[0]
-        if integrity!=['ok']:
-            raise HTTPException(503,"Verificação dos dados falhou; preserve o banco.")
-        return {"ok":True,"integrity_check":"ok","schema_version":version}
+        snap = db_manager.snapshot
+        if snap.state != "connected":
+            return {"ok": False, "integrity_check": snap.state, "schema_version": snap.schema_version}
+        _ = store.database_id
+        return {"ok": True, "integrity_check": "ok", "schema_version": snap.schema_version}
 
     @app.post("/v1/update/backup")
     def update_backup():
         if update_activity()["busy"]:
             raise HTTPException(409, "Há trabalho crítico pendente ou em execução.")
         try:
-            return create_update_backup(settings.data_dir)
-        except (OSError, ValueError, sqlite3.Error):
+            return create_update_backup(settings.data_dir, store=store)
+        except (OSError, ValueError):
             raise HTTPException(409, "Backup pré-atualização falhou; não atualize.") from None
 
     @app.get("/v1/jobs")
@@ -486,7 +528,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         path = script_call(lambda: manager.productions.artifact(production_id, artifact_id))
         return FileResponse(path, filename=path.name)
 
-    review_comments = ReviewCommentService(settings.data_dir, manager.productions)
+    review_comments = ReviewCommentService(settings.data_dir, manager.productions, store=store)
 
     def comment_call(action):
         try:
@@ -659,7 +701,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             dataset = demo(identifier, radar_state.clock())
             try:
                 radar_state.save(dataset)
-            except sqlite3.IntegrityError:
+            except psycopg.IntegrityError:
                 dataset = radar_state.load(identifier, 1)
         return summary(dataset)
 
@@ -882,14 +924,27 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         async with model_mutation:
             key = 'whisper-download:' + idempotency_key
             payload = {'operation': 'whisper.model.download', 'model': model}
-            with store.connect() as db:
-                previous = db.execute('SELECT id,payload FROM jobs WHERE idempotency_key=?', (key,)).fetchone()
-                if previous:
-                    if json.loads(previous['payload']) != payload:
-                        raise HTTPException(409, 'Chave de idempotência já usada para outro modelo.')
-                    return {'job_id': previous['id']}
-                active = any(json.loads(row['payload']).get('operation') == 'whisper.model.download'
-                             for row in db.execute("SELECT payload FROM jobs WHERE status IN ('queued','running','cancel_requested')"))
+            with store.uow(readonly=True) as db:
+                with db.cursor(row_factory=dict_row) as cur:
+                    previous = cur.execute(
+                        "SELECT id, payload FROM horus.jobs WHERE idempotency_key = %s",
+                        (key,),
+                    ).fetchone()
+                    if previous:
+                        prev_payload = previous["payload"]
+                        if isinstance(prev_payload, (str, bytes, bytearray)):
+                            prev_payload = json.loads(prev_payload)
+                        if prev_payload != payload:
+                            raise HTTPException(409, "Chave de idempotência já usada para outro modelo.")
+                        return {"job_id": previous["id"]}
+                    rows = cur.execute(
+                        "SELECT payload FROM horus.jobs WHERE status IN ('queued','running','cancel_requested')"
+                    ).fetchall()
+                    active = any(
+                        (json.loads(r["payload"]) if isinstance(r["payload"], (str, bytes, bytearray)) else r["payload"]).get("operation")
+                        == "whisper.model.download"
+                        for r in rows
+                    )
             if active:
                 raise HTTPException(409, 'Aguarde ou cancele o download em andamento.')
             if any(item['model'] == model and item['installed'] for item in whisper_models.list()['models']):
