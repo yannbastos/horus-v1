@@ -1,6 +1,6 @@
 # Retomada do Maestro
 
-Procedimento único para iniciar, retomar, sincronizar ou transferir a coordenação do Hórus em uma sessão nova, em qualquer computador. É usado pelas skills `horus-maestro` (`.claude/skills/` para Claude Code e `.agents/skills/` para Codex) e pode ser seguido manualmente. Não depende do histórico de conversas: o estado oficial está no Git e no GitHub Projects.
+Procedimento único para iniciar, retomar, sincronizar ou transferir a coordenação do Hórus em uma sessão nova, em qualquer computador. É usado pelas skills `horus-maestro` (`.claude/skills/` para Claude Code e `.agents/skills/` para Codex e Antigravity) e pode ser seguido manualmente. Não depende do histórico de conversas: o estado oficial está no Git e no GitHub Projects.
 
 **Descoberta da skill:** o Claude Code só encontra `.claude/skills/` da pasta em que a sessão foi aberta. Abra a sessão na raiz do repositório `horus`. Se ela for aberta na pasta de trabalho que contém vários repositórios (ou em um nível acima, como a pasta configurada no Orca), a skill não aparece: invoque-a depois de abrir na raiz certa, gere uma ponte local em `<pasta de trabalho>/.claude/skills/horus-maestro/` com `scripts/install-workspace-skill-bridge.ps1` (passando `-WorkspacePath <pasta>` quando a sessão abrir acima da pasta-mãe imediata; sem regras próprias), ou siga este documento manualmente.
 
@@ -32,13 +32,14 @@ Só depois do resumo da etapa E o Maestro volta a operar, dentro do que a [gover
 
 Leia progressivamente, nesta ordem, buscando os cabeçalhos antes de abrir trechos:
 
-1. Sempre: [AGENTS.md](../AGENTS.md), [CLAUDE.md](../CLAUDE.md) e [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md) (leitura obrigatória integral da governança, incluindo papéis, autonomia, restrições e eficiência).
+1. Identifique o papel: todos leem [AGENTS.md](../AGENTS.md) e as seções obrigatórias da [governança](AGENT-GOVERNANCE.md) indicadas nele, buscando por cabeçalho. O Maestro lê a governança inteira e [CLAUDE.md](../CLAUDE.md) quando usar Claude; worker segue apenas o escopo atribuído.
+   Após identificar o papel e antes de coordenar, o Maestro lê [MAESTRO-OPERATIONS.md](MAESTRO-OPERATIONS.md) uma vez; não reler se inalterado. Worker não precisa desse documento.
 2. [ROADMAP.md](ROADMAP.md): somente a seção de fase/estado pertinente. Localize-a com `rg -n '^## ' docs/ROADMAP.md`; o estado operacional vigente é confirmado no Project/Issues na etapa C, não nos checkpoints datados do ROADMAP.
 3. [ARCHITECTURE.md](ARCHITECTURE.md#implementação-atual): somente "Implementação atual".
 4. [CONTINUAR-EM-OUTRO-PC.md](CONTINUAR-EM-OUTRO-PC.md): somente em máquina nova.
 5. Documentos da fase atual: **sob demanda**, quando a tarefa tocar o tema, lendo somente a seção pertinente. Para piloto, mídia ou qualidade, por exemplo: [piloto-local.md](piloto-local.md), [contratos-midia.md](contratos-midia.md) e [qualidade-piloto.md](qualidade-piloto.md). A presença de um link no ROADMAP não exige leitura integral nem recursiva.
 
-Preferência vigente de modelos e cotas: ver “Uso dos modelos” e “Eficiência de consumo” em [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md).
+Preferências de modelos, cotas e coordenação: [MAESTRO-OPERATIONS.md](MAESTRO-OPERATIONS.md); a governança prevalece.
 
 ## B. Git
 
@@ -67,13 +68,13 @@ Confirme:
 
 ```text
 gh auth status
-gh project item-list 1 --owner yannbastos --limit 300 --format json
-gh issue list -R yannbastos/horus-management --state open --limit 300
+gh project item-list 1 --owner yannbastos --limit 300 --format json --jq '.items[] | select(.status == "Em andamento" or .status == "Em revisão" or .status == "Bloqueado") | {titulo: .title, status: .status, Agente: .agente, Prioridade: .prioridade, issue: .content.url}'
+# Consulte as Issues selecionadas acima, sem listar todas as abertas:
 gh issue view <número> -R yannbastos/horus-management --comments
 gh pr list -R yannbastos/horus
 ```
 
-- No Project, filtre os itens **Em andamento**, **Em revisão** e **Bloqueado**, com Agente e Prioridade.
+- O comando do Project filtra na saída do próprio `gh` somente **Em andamento**, **Em revisão** e **Bloqueado**, com título, Agente, Prioridade e URL da Issue. Consulte apenas essas Issues; sem listagem ampla de abertas. Se houver mais itens que o limite, pagine antes de concluir o inventário.
 - Para cada um, o último comentário da Issue é o ponto de retomada: branch, commits, evidências e pendências.
 - Antes de criar qualquer Issue, procure o ID `HOR-XXX` em Issues abertas e fechadas, para não duplicar.
 - Se o `gh` não estiver autenticado ou não tiver o escopo `project`, registre só o bloqueio e o procedimento: `gh auth login`, ou `gh auth refresh -s project`. Siga com o que não depende do GitHub.

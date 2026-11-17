@@ -44,12 +44,12 @@ Conflitos prováveis ao integrar na `main` de hoje: `backend/src/horus_backend/a
 
 1. **Migração v9→v12 em CÓPIA** de um banco de teste (nunca o real): criar o banco na v9, copiar, abrir a cópia com `horus_backend.migrations.migrate`, conferir `PRAGMA user_version = 12`, integridade, o backup automático `horus.backup-v9-*` (verificável com `python -m horus_backend.backups verify`) e que reabrir é idempotente. Antes de migrar o banco real do usuário, gerar o pacote verificável: `python -m horus_backend.local_data_export export <pasta-de-dados> --to <pacote.zip>` e `verify`.
 2. Frontend da ordem paralela (`feat-hor-115-transmissions-ui`): `npm --prefix frontend ci --ignore-scripts`, `npm --prefix frontend run build`, `npm --prefix frontend test` (Playwright). Integrar por último, com a identidade visual preservada.
-3. Jornada real opcional (`node frontend/scripts/e2e-backend.mjs run`, variáveis em [piloto-local.md](piloto-local.md)); com a máquina carregada os tempos sobem ~2,5× e a auditoria de rede do render já espera até 30 s pelo NetLog.
+3. Jornada real opcional (`node frontend/scripts/e2e-backend.mjs run`, variáveis em [piloto-local.md](../piloto-local.md)); com a máquina carregada os tempos sobem ~2,5× e a auditoria de rede do render já espera até 30 s pelo NetLog.
 4. Atualizar as Issues #121, #103, #99 e #95 (evidência + Status) e mover para Concluído.
 
 Não ativar inferência real, provedores pagos nem publicação ao integrar: o gate de segurança e os checkpoints humanos continuam bloqueando por padrão.
 
-Siga a seção "Eficiência de consumo" de [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md).
+Referência histórica: seção "Eficiência de consumo" da governança, vigente neste checkpoint. As preferências operacionais atuais ficam em [MAESTRO-OPERATIONS.md](../MAESTRO-OPERATIONS.md), subordinadas à [governança](../AGENT-GOVERNANCE.md).
 
 ## G. Ponto de pausa (14/11/2026, noite)
 
@@ -88,7 +88,7 @@ Programação pausada a pedido do usuário; nenhum agente ativo. Abra a sessão 
 ## K. Checkpoint de 16/11/2026 (fim da tarde) — HOR-100
 
 - **Estado:** `main` em `ec3a3b8` + este commit. HOR-100 (#88) com as três etapas do protótipo local integradas: dados fora da instalação e backup (etapa 1), plugin updater com guardas (etapa 2), ciclo instalado N→N+1 com saúde pós-reinício (etapa 3, `scripts/test-updater-e2e.ps1`). Updater segue desabilitado no build padrão.
-- **Critérios de segurança S1–S6** (pedido do usuário, registrados na #88): bloqueio confirmado pelo backend, backup WAL com restauração validada, sem downgrade automático, sem operações concorrentes, assinatura inválida nunca instalada, sucesso só após saúde pós-reinício (`GET /v1/update/health`). Cobertos em pytest, `cargo test`, `frontend/tests/updater-security.spec.ts` e no ensaio instalado. Política binário × dados em [adr-atualizador.md](adr-atualizador.md).
+- **Critérios de segurança S1–S6** (pedido do usuário, registrados na #88): bloqueio confirmado pelo backend, backup WAL com restauração validada, sem downgrade automático, sem operações concorrentes, assinatura inválida nunca instalada, sucesso só após saúde pós-reinício (`GET /v1/update/health`). Cobertos em pytest, `cargo test`, `frontend/tests/updater-security.spec.ts` e no ensaio instalado. Política binário × dados em [adr-atualizador.md](../adr-atualizador.md).
 - **Pitfall do ensaio instalado:** o script compara as pastas reais (`%LOCALAPPDATA%\com.horus.audiovisual`) antes e depois e aborta se variarem. O app de desenvolvimento (`desktop:dev`) usa essa mesma pasta: feche-o antes de rodar o ensaio.
 - **#88 fica Em revisão** até as decisões do usuário: caixa "apagar dados do aplicativo" no desinstalador NSIS, canal privado, custódia da chave, Authenticode, retenção/abrangência do backup. Não homologado: Windows limpo, queda de energia, canal remoto. Sem hospedagem nem distribuição pública.
 - **Limpeza:** worktrees e branches `feat-hor-100-*` integradas foram removidas (local e remoto).

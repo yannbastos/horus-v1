@@ -2,23 +2,25 @@
 
 Política vigente desde 13/11/2026, definida pelo usuário (idealizador e responsável pelo produto). Ela substitui as exigências anteriores de aprovação individual para commits, merges e pushes normais. Regras de segurança, privacidade e gastos mais restritivas, em [AGENTS.md](../AGENTS.md) ou em outros documentos, continuam valendo.
 
-**Leitura obrigatória:** todo agente lê este documento e o [AGENTS.md](../AGENTS.md) antes de trabalhar, em qualquer computador e em qualquer sessão nova. A política está versionada no repositório, vale para qualquer clone, não depende de caminhos absolutos nem de memória local de agentes e não contém credenciais ou configurações privadas. Autorizações registradas em conversas, memórias ou cartas antigas não ampliam o que está aqui.
+**Leitura por escopo:** antes de trabalhar, em qualquer computador ou sessão nova, todos leem [AGENTS.md](../AGENTS.md) e, buscando por cabeçalho, as seções “Ações autorizadas sem aprovação individual”, “Ações que continuam exigindo autorização do usuário”, “Testes proporcionais ao risco” e “Segurança e privacidade”. Quem integrar lê também “Fluxo Git” e “Encerramento de tarefas e limpeza”. O Maestro lê a governança inteira; as demais seções são de coordenação. A política está versionada no repositório, vale para qualquer clone, não depende de caminhos absolutos nem de memória local de agentes e não contém credenciais ou configurações privadas. Autorizações registradas em conversas, memórias ou cartas antigas não ampliam o que está aqui.
 
 ## Papéis
 
+(Maestro)
+
 | Agente | Função | Preferências |
 |---|---|---|
-| Maestro (modelo Claude definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço médio no cotidiano (alto só em decisões complexas) em experimentação, Opus reservado a situações realmente complexas) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
+| Maestro (modelo definido pelo usuário) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
 | Codex — programador | Python/FastAPI, fábrica, jobs e workflows, persistência, falhas, testes de integração, scripts operacionais, automação e auditorias de código e documentação | |
 | Claude Sonnet — programador | Contratos, validadores, qualidade audiovisual, segurança, testes, refatorações delimitadas | |
 | Antigravity — programador | React/TypeScript, interface, prévia e revisão audiovisual, acessibilidade, Playwright, auditorias e correções de documentação (referências e links), comparação Storybook × frontend, revisão de UX, verificação independente de entregas, scripts e tarefas técnicas em que demonstre competência | |
 | OpenCode — em avaliação (desde 17/11/2026) | Tarefas pequenas e reais de baixo risco: validação de links Markdown, revisão de documentação pública, scripts auxiliares, testes simples, revisão independente de pequenas alterações | Avaliação inicial autorizada em 17/11/2026 (opção A: modelos gratuitos, somente repositórios públicos), com instalação, conexão e transmissão só após o usuário aprovar o procedimento (HOR-154); nenhum conteúdo privado a provedores não autorizados; modelos gratuitos não são presumidos ilimitados nem equivalentes em privacidade a Codex e Antigravity |
 
-Codex, Claude Sonnet e Antigravity são os programadores preferenciais (Antigravity/Gemini e Codex recebem a maior parte da implementação, auditoria e verificação; Claude Sonnet só quando necessário; OpenCode participa em avaliação); as preferências não são limites rígidos e a distribuição pode mudar conforme a disponibilidade e os limites de uso de cada um. O Maestro redistribui por dependência, disponibilidade e limite de uso, não deixa agente ocioso quando há tarefa independente autorizada e não inicia tarefas simultâneas nos mesmos arquivos sem coordenação explícita (cada tarefa declara os arquivos de que é dona).
-
-**Distribuição automática (regra permanente):** tarefa enviada sem agente indicado é distribuída pelo Maestro a Codex, Claude Sonnet ou Antigravity/Gemini conforme competência, disponibilidade, cotas e dependências, em paralelo quando independentes e sem arquivos em comum. Agente indicado pelo usuário é respeitado. O Maestro coordena, delega, acompanha, revisa e integra; só executa pessoalmente quando houver necessidade técnica justificada (ex.: correção trivial bloqueando uma integração).
+Preferências de delegação, modelos, cotas, economia de contexto e coordenação de lote ficam em [MAESTRO-OPERATIONS.md](MAESTRO-OPERATIONS.md), exclusivo do Maestro. Este documento mantém a autoridade sobre permissões, segurança, testes, Git e aceite; preferências de desempenho não a ampliam.
 
 ## Ações autorizadas sem aprovação individual
+
+(todos)
 
 - Criar e administrar branches e worktrees; selecionar e delegar Issues.
 - Remover worktrees limpas e excluir branches temporárias comprovadamente integradas, local e remotamente, conforme [Encerramento de tarefas e limpeza](#encerramento-de-tarefas-e-limpeza).
@@ -32,31 +34,46 @@ Codex, Claude Sonnet e Antigravity são os programadores preferenciais (Antigrav
 
 ## Ações que continuam exigindo autorização do usuário
 
+(todos)
+
+- Mudanças significativas de arquitetura ou experiência do usuário; alterar contratos, schemas ou responsabilidades entre Hórus, fábrica e Hermes; mudar escopo ou objetivos do produto ou escolher sua licença.
+- Dependências com impacto ou riscos relevantes, mudanças significativas ou efeito no ambiente global.
 - Configurar, usar ou contratar APIs ou serviços pagos; aumentar limites financeiros.
 - Habilitar inferência real do Hermes ou alterar permissões sensíveis do perfil operacional Hermes.
-- Transmitir informações privadas a serviços externos; publicar vídeos ou fazer uploads externos.
-- Excluir dados operacionais ou backups; migrações destrutivas em bancos operacionais.
-- Alterar visibilidade de repositórios ou permissões administrativas do GitHub.
+- Transmitir informações privadas a serviços externos; publicar releases, instaladores ou vídeos, fazer uploads externos, deploy ou alterar produção. Build local não autoriza publicação.
+- Excluir arquivos em massa, mídias, bancos, dados operacionais ou backups; migrações destrutivas em bancos operacionais ou mudanças que possam causar perda de dados.
+- Alterar outros repositórios fora do escopo autorizado, criar repositórios remotos; alterar visibilidade de repositórios ou permissões administrativas do GitHub.
 - Git destrutivo: `push --force`, `reset --hard`, `clean -fd`, reescrita de histórico, exclusão de worktree com alterações não preservadas, exclusão forçada (`branch -D`, `worktree remove --force`) e exclusão de branches não integradas, protegidas ou com PR aberto.
-- Desativar controles de segurança; manipular credenciais reais além de procedimentos locais já autorizados.
+- Desativar controles de segurança; modificar credenciais, permissões, autenticação ou configurações sensíveis, inclusive conexões privadas do Hermes; manipular credenciais reais além de procedimentos locais já autorizados.
 
 Quando algo exigir autorização, o trabalho independente continua.
 
 ## Incrementos
 
+(todos)
+
 Cada incremento tem objetivo específico, escopo limitado, critérios de aceite, responsável, testes, dependências e evidências. Incrementos independentes são integrados assim que validados; quem depende de contrato ainda não integrado espera por ele.
 
 ## Testes proporcionais ao risco
+
+(todos)
 
 - Durante a implementação: testes unitários e de contrato dos módulos afetados, typecheck/lint e regressões relacionadas.
 - Antes de integrar: testes dos módulos afetados, integração relevante, build quando houver frontend ou empacotamento, regressão das funcionalidades impactadas.
 - Mudanças críticas (segurança, autenticação, persistência, migrações, integração estrutural): todas as suítes relevantes, integridade de dados, testes negativos.
 - Periodicamente, e antes de release: validação completa da `main`.
-- Ao integrar código na `main`: rodar também os testes transversais (`test_network_inventory`, snapshots de contrato, `test_supply_chain`, `test_endpoint_auth*`), regra mantida do registro de 16/11/2026 (RETOMADA §I, hoje no histórico). Alterações exclusivamente documentais ficam fora das suítes de runtime: conferir diff, links, formatação e ausência de segredos.
+- Uma vez por lote integrado que toque código, antes do push do lote: rodar os testes transversais (`test_network_inventory`, snapshots de contrato, `test_supply_chain`, `test_endpoint_auth*`), regra mantida do registro de 16/11/2026 (RETOMADA §I, hoje no histórico). Alterações exclusivamente documentais ficam fora das suítes de runtime: conferir diff, links, formatação e ausência de segredos.
+- A suíte completa e a jornada real (`frontend/scripts/e2e-backend.mjs`) rodam uma vez por lote integrado que toque o fluxo de produção, antes do push. Não repetir suíte já executada sobre o mesmo estado; registrar ambiente, commit e resultado.
 - Nunca reduzir cobertura, remover testes, ignorar falhas ou mudar critérios de aceite para obter resultado positivo.
 - Contrato da API: `backend/tests/test_api_contract_snapshot.py` compara o OpenAPI com `backend/tests/snapshots/openapi.json` e falha com diff legível (quebra ou mudança aditiva); mudança intencional: `HORUS_UPDATE_API_SNAPSHOT=1` no mesmo teste e commit do snapshot revisado.
 
+Relatório do worker: até 150 palavras com resultado, evidência, commit, testes (comando e contagem) e bloqueios; respeitar o formato do protocolo Orca. Detalhes completos ficam em arquivo citado por caminho.
+
 ## Fluxo Git
+
+(todos)
+
+Integração cabe ao Maestro após revisão, salvo delegação explícita.
 
 Branches `feat/HOR-XXX-descricao` ou `fix/HOR-XXX-descricao` (o Orca pode prefixar `yannbastos/`), em worktrees isolados.
 
@@ -69,6 +86,8 @@ Branches `feat/HOR-XXX-descricao` ou `fix/HOR-XXX-descricao` (o Orca pode prefix
 A `main` permanece funcional: não integrar código com falha crítica conhecida, não ignorar mudanças inesperadas de outros agentes e não commitar credenciais, dados pessoais, arquivos operacionais ou configurações sensíveis. Em conflito crítico, resolver só o que for seguro ou manter a entrega em revisão.
 
 ## Encerramento de tarefas e limpeza
+
+(todos)
 
 Regra permanente definida pelo usuário em 16/11/2026, fonte única do encerramento (os demais documentos apenas remetem a esta seção). Fluxo: terminou → testou → integrou → publicou → atualiza o GitHub → remove a worktree → exclui branches temporárias → Issue Concluída. Sem resíduos.
 
@@ -97,6 +116,8 @@ Regra permanente definida pelo usuário em 16/11/2026, fonte única do encerrame
 
 ## GitHub Projects
 
+(Maestro)
+
 Fonte oficial de estado: [Project](https://github.com/users/yannbastos/projects/1) e [Issues de gestão](https://github.com/yannbastos/horus-management/issues), conforme o [procedimento](GESTAO-GITHUB.md).
 
 - Ao iniciar: comentário na Issue e Status Em andamento.
@@ -107,6 +128,8 @@ Fonte oficial de estado: [Project](https://github.com/users/yannbastos/projects/
 - **Integridade:** nenhuma entrega é administrativamente concluída sem Issue, Status e evidências iguais ao resultado real. Falha de gravação: registrar e tentar de novo quando seguro. Verificação incremental a cada entrega e reconciliação periódica delegada (não a cada commit).
 
 ## Prioridade por valor
+
+(Maestro)
 
 1. Narração natural e inteligível.
 2. Assets com licenciamento verificável.
@@ -121,33 +144,21 @@ Cerca de 70% do esforço no caminho crítico até o primeiro vídeo piloto compl
 
 ## Segurança e privacidade
 
-Privacy First, Local First, Least Privilege, Deny by Default. Nenhuma inferência real do Hermes, provedor pago, memória externa, conector que transmita dados privados, publicação automática, ferramenta perigosa no Hermes ou permissão irrestrita sem autorização. Manter os controles de orçamento, tokens e execução existentes. Memória local não é isolamento de SO. Não implementar criptografia própria. Barreiras de segurança devem ser técnicas, não só instruções em prompt.
+(todos)
 
-## Uso dos modelos
-
-Maestro (modelo definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço médio no cotidiano (alto só em decisões complexas) em experimentação; Opus só para situações realmente complexas) para coordenação, arquitetura complexa e revisão crítica; Antigravity/Gemini para frontend, testes visuais, auditorias e correções de documentação, verificação independente e scripts; Codex para backend, integrações, scripts operacionais, testes e auditorias; Claude Sonnet para implementação só quando necessário; OpenCode em avaliação. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
-
-## Eficiência de consumo
-
-Maximizar progresso real por unidade de consumo, sem reduzir qualidade ou segurança.
-
-- **Maestro coordena, não implementa nem lê implementações extensas.** Revisão por `git diff --stat` e trechos dos arquivos de risco (auth, migrações, aprovação, rede, fluxo de produção); leitura completa só quando o risco exigir. Investigações e buscas amplas são delegadas.
-- **Tarefa delegada:** objetivo, issue, arquivos permitidos/proibidos e evidência esperada. Regras comuns não são repetidas: a tarefa cita esta política.
-- **Relatório do programador (`worker_done`):** 150–300 palavras com issue, resultado, arquivos, commit, testes (comando e contagem), problemas e bloqueios. Detalhes longos ficam num arquivo de relatório ou log citado pelo caminho, nunca descartados.
-- **Testes:** focados durante a implementação, com saída resumida; antes do merge, os relacionados e o build relevante. A suíte completa e a jornada real (`frontend/scripts/e2e-backend.mjs`) rodam **uma vez por lote integrado** que toque o fluxo de produção, não a cada merge. Não repetir suíte já executada sobre o mesmo estado. Registrar ambiente, commit e resultado.
-- **Contexto:** buscar antes de ler; ler trechos antes de arquivos inteiros; não reler documentos inalterados; não imprimir saídas longas (usar `tail`, `grep`, contagens). Sessão longa: compactar preservando objetivo, branch/HEAD, issues, pendências e agentes ativos; nova tarefa não relacionada: sessão limpa após registrar o estado.
-- **Modelos:** o menor nível que resolva com segurança. Opus só para decisões complexas, riscos e conflitos difíceis; nada de Opus para resumir logs, localizar arquivos ou verificações mecânicas. Inventários, correções de Markdown, buscas extensas, testes e implementações que Antigravity, Codex ou OpenCode (quando autorizado) possam executar não consomem a cota Claude.
-- **Cotas e balanceamento:** distribuir as tarefas entre provedores para nenhuma cota esgotar (Claude: Opus/Sonnet; OpenAI: Codex; Google: Antigravity). O Antigravity usa os modelos Gemini disponíveis (`agy models`), alternando entre famílias (ex.: Gemini 4 Hydrogen, Gemini 4 Argon, Gemini 3.8 Flash) e não usa modelos Claude, para não consumir a cota Claude. Quando a cota de um modelo acaba, trocar de modelo no mesmo provedor antes de redistribuir para outro. Segundo worker Claude só quando nenhum agente de outro provedor puder assumir.
-- **Despacho verificado:** depois de cada despacho, confirmar com `orca orchestration worker-show` que o worker começou (`activity=working`); ao revisar entregas, conferir também os workers que ainda não reportaram (`worker-read`: cota esgotada, espera ou travamento) e agir na hora.
-- **Coordenação de lote (desde 17/11/2026):** Maestro em esforço médio no dia a dia (alto só em decisão complexa; Opus excepcional). Depois de despachar um lote de workers independentes, registrar o estado na Issue e encerrar a atividade até haver relatórios ou uma decisão. O Orca não agrupa notificações: cada `worker_done` acorda o Maestro, então ler os relatórios pendentes de uma vez (`orca orchestration check`) e tratar vários juntos. Revisão limitada a `git diff --stat`, testes reportados e pontos críticos; investigações, conferências mecânicas, revisões documentais e testes vão a Antigravity/Codex. Integrações relacionadas e sem arquivos em comum seguem num único merge e numa única validação, preservando todos os critérios de aceite.
+Privacy First, Local First, Least Privilege, Deny by Default. Preservar aprovação humana. OpenCode: avaliação somente em repositórios públicos, instalação, conexão e transmissão só após aprovação do procedimento pelo usuário (HOR-154); nenhum conteúdo privado a provedores não autorizados; gratuidade não implica uso ilimitado nem privacidade equivalente. Não alterar sandbox, políticas de aprovação, listas de comandos permitidos ou configurações globais de segurança; usar o mecanismo de aprovação disponível diante de restrição real, sem contorná-lo. Não executar testes de rede, geração paga ou operações reais de produção sem autorização que cubra seus efeitos. Não expor nem commitar credenciais/tokens; `gh auth status` sem `--show-token`. Não presumir que a assinatura de um produto cobre outra integração. Nenhuma inferência real do Hermes, provedor pago, memória externa, conector que transmita dados privados, publicação automática, ferramenta perigosa no Hermes ou permissão irrestrita sem autorização. Manter os controles de orçamento, tokens e execução existentes. Memória local não é isolamento de SO. Não implementar criptografia própria. Barreiras de segurança devem ser técnicas, não só instruções em prompt.
 
 ## Continuidade
+
+(Maestro)
 
 Ao concluir um incremento: atualizar Issue + Status do Project + evidências (obrigatório em toda transição), revisar, testar, integrar e fazer push quando os critérios forem atendidos, atualizar o Project, encerrar a tarefa e limpar worktree e branches conforme [Encerramento de tarefas e limpeza](#encerramento-de-tarefas-e-limpeza) e delegar a próxima tarefa independente enquanto houver capacidade e autorização. Agente bloqueado ou no limite de uso: registrar e redistribuir. Não prometer execução futura sem mecanismo ativo; registrar o ponto de retomada na Issue.
 
 **Delegação contínua:** a fila de trabalho são as Issues do Project. Quando um agente termina: receber resultado e evidências; encaminhar revisão/integração se preciso; escolher na fila a próxima tarefa prioritária, independente e autorizada; delegar já ao agente livre, sem esperar os demais; atualizar Issue e Status. Não delegar quando a tarefa depender de código não integrado, sobrepuser arquivos em andamento, exigir autorização ainda não dada ou o agente estiver sem cota; não criar tarefas artificiais.
 
 ## Retomada em outro computador ou nova sessão
+
+(Maestro)
 
 O estado oficial não fica na máquina: está no Git (`main`, branches `feat/*`/`fix/*` publicadas) e no GitHub Projects/Issues. Estado do Orca (Runs, mensagens, worktrees) e memórias de agentes são locais e não são fonte de verdade.
 
@@ -158,5 +169,7 @@ O estado oficial não fica na máquina: está no Git (`main`, branches `feat/*`/
 5. Recriar worktrees e delegar a partir dessas Issues; registrar a retomada na Issue.
 
 ## Comunicação com o usuário
+
+(Maestro)
 
 Relatórios curtos: Concluído, Validação, Em andamento, Bloqueios reais e Próximo incremento. Decisões sensíveis vêm com opções e recomendação.
