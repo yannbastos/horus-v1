@@ -6,6 +6,11 @@ recusas usam `detail: {code, message, status}`. A senha é somente escrita.
 O POST salva descritor e senha juntos no cofre nativo, relê e verifica antes
 de conectar. Não há arquivo, variável de ambiente ou banco alternativo.
 GET consulta apenas snapshot imutável, sem rede/cofre e sem alterar checked_at.
+POST test concorrente é deduplicado e responde 200 com o snapshot connecting;
+o bloqueio por troca em andamento aplica-se somente a POST/DELETE connection.
+Reserva de atualização continua bloqueando mutações, sem bloquear o diagnóstico.
+Falha do cofre sempre remove host_label do snapshot. Corpos chunked acima de
+16 KiB recebem 422 sem invalidar o pool ou alterar o diagnóstico existente.
 
 O pool síncrono tem 1–4 conexões e mais uma conexão dedicada de coordenação.
 Troca/exclusão fecham admissão, aguardam até 3 s pelas UoWs e invalidam a

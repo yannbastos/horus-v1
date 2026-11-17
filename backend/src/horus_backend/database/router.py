@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from .manager import DatabaseManager, DatabaseRefused, MESSAGES
 from .models import ConnectionRequest, DatabaseErrorResponse, DatabaseStatus
@@ -21,10 +22,15 @@ def error_response(manager, code, status):
 
 async def payload(request, manager):
     data = bytearray()
-    async for chunk in request.stream():
-        data.extend(chunk)
-        if len(data) > BODY_LIMIT:
-            raise DatabaseRefused("database_invalid_connection", 422)
+    try:
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > BODY_LIMIT:
+                raise DatabaseRefused("database_invalid_connection", 422)
+    except ClientDisconnect:
+        # O limitador ASGI interrompe o receive ao exceder o teto. Corpo
+        # incompleto não é falha do banco e não pode fechar um pool válido.
+        raise DatabaseRefused("database_invalid_connection", 422) from None
     return bytes(data)
 
 

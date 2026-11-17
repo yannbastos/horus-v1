@@ -184,13 +184,15 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         request.state.token_kind = token_kind
         nonlocal mutations
         mutation = request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path not in {
-            "/v1/update/reservation", "/v1/update/backup", "/v1/shutdown"}
+            "/v1/update/reservation", "/v1/update/backup", "/v1/shutdown", "/v1/database/test"}
         if mutation:
             with update_gate:
-                if update_reserved or app.state.database.changing:
+                if update_reserved:
                     if request.url.path.startswith("/v1/database/"):
                         return database_error_response(app.state.database, "database_busy", 409)
                     return JSONResponse({"detail": "Atualização reservada; tente após reiniciar."}, status_code=409)
+                if app.state.database.changing and request.url.path == "/v1/database/connection":
+                    return database_error_response(app.state.database, "database_busy", 409)
                 mutations += 1
         try:
             response = await call_next(request)

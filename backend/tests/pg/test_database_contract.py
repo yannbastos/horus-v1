@@ -103,6 +103,13 @@ def test_eight_states_poll_is_cached(diagnostic, monkeypatch, state, code):
     {"host": "aws-0-sa-east-1.pooler.supabase.com.evil.com"},
     {"host": "postgresql://aws-0-sa-east-1.pooler.supabase.com"},
     {"host": "aws-0-sa-east-1.pooler.supabase.com,evil.com"}, {"options": "sslmode=disable"},
+    {"host": "AWS-0-SA-EAST-1.pooler.supabase.com"},
+    {"host": "são-paulo.pooler.supabase.com"}, {"host": "例子.pooler.supabase.com"},
+    {"host": "user@aws-0-sa-east-1.pooler.supabase.com"},
+    {"host": "aws-0-sa-east-1.pooler.supabase.com#fragment"},
+    {"host": "aws-0-sa-east-1.pooler.supabase.com/path"},
+    {"host": "aws-0-sa-east-1.pooler.supabase.com."},
+    {"host": "::1"}, {"host": "[2001:4860:4860::8888]"}, {"host": "2130706433"},
 ])
 def test_invalid_connection_never_saved_or_reflected(diagnostic, patch):
     client, manager, backend = diagnostic
@@ -131,10 +138,12 @@ def test_vault_missing_and_fail_closed(diagnostic):
     assert client.post("/v1/database/test").json()["state"] == "not_configured"
     backend.fail = True
     assert client.post("/v1/database/test").json()["state"] == "vault_unavailable"
-    assert client.get("/v1/database/status").status_code == 200
+    status = client.get("/v1/database/status")
+    assert status.status_code == 200 and status.json()["host_label"] is None
     for response in (client.post("/v1/database/connection", json=CONFIG), client.delete("/v1/database/connection")):
         assert response.status_code == 503
         assert response.json()["detail"]["code"] == "database_vault_unavailable"
+        assert response.json()["detail"]["status"]["host_label"] is None
         assert PASSWORD not in response.text
     assert manager._pool is None and manager._coordination is None
 
@@ -198,15 +207,20 @@ def test_no_sqlite_or_file_fallback(tmp_path, monkeypatch):
     assert not list(tmp_path.rglob("*"))
 
 
-def test_api_auth_body_limits_and_update_busy(tmp_path, monkeypatch):
+@pytest.fixture
+def api_diagnostic(tmp_path, monkeypatch):
     from horus_backend.api import create_app
     from horus_backend.config import Settings
-    from horus_backend.database.router import install_database
     backend = MemoryKeyring()
     # A fixture global já proíbe acesso ao keyring real. Esta injeção habilita
     # apenas o cofre em memória para exercitar o wiring de produção.
     def install(app, data_dir, busy):
         manager = DatabaseManager(ConnectionVault(data_dir, backend), busy=busy)
+        class Offline:
+            @classmethod
+            def connect(cls):
+                raise ConnectFailure("database_dns_failed")
+        monkeypatch.setattr(manager, "_make_connection_type", lambda _: Offline)
         app.state.database = manager
         app.include_router(database_router(manager))
     monkeypatch.setattr("horus_backend.api.install_database", install)
@@ -216,24 +230,102 @@ def test_api_auth_body_limits_and_update_busy(tmp_path, monkeypatch):
                         hermes_config=tmp_path/"hermes.json")
     app = create_app(settings)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        assert client.post("/v1/database/connection", content=b"x"*17000).status_code == 401
-        client.headers["Authorization"] = "Bearer "+token
-        for body in (b"x"*17000, b"x"*(3*1024*1024)):
-            result = client.post("/v1/database/connection", content=body)
-            assert result.status_code == 422
-            assert result.json()["detail"]["code"] == "database_invalid_connection"
-            assert result.headers["cache-control"] == "no-store"
-        app.state.manager.active_id = "synthetic-active-job"
-        try:
-            result = client.post("/v1/database/connection", json=CONFIG)
-            assert result.status_code == 409
-            assert not backend.values
-        finally:
-            app.state.manager.active_id = None
-        assert client.post("/v1/update/reservation").status_code == 200
-        result = client.delete("/v1/database/connection")
+        yield client, app.state.database, backend, token
+
+
+def test_api_auth_body_limits_and_update_busy(api_diagnostic):
+    client, manager, backend, token = api_diagnostic
+    app = client.app
+    assert client.post("/v1/database/connection", content=b"x"*17000).status_code == 401
+    client.headers["Authorization"] = "Bearer "+token
+    for body in (b"x"*17000, b"x"*(3*1024*1024)):
+        result = client.post("/v1/database/connection", content=body)
+        assert result.status_code == 422
+        assert result.json()["detail"]["code"] == "database_invalid_connection"
+        assert result.headers["cache-control"] == "no-store"
+    app.state.manager.active_id = "synthetic-active-job"
+    try:
+        result = client.post("/v1/database/connection", json=CONFIG)
         assert result.status_code == 409
-        assert result.json()["detail"]["code"] == "database_busy"
+        assert not backend.values
+    finally:
+        app.state.manager.active_id = None
+    assert client.post("/v1/update/reservation").status_code == 200
+    result = client.delete("/v1/database/connection")
+    assert result.status_code == 409
+    assert result.json()["detail"]["code"] == "database_busy"
+    assert client.post("/v1/database/test").status_code == 200
+
+
+def test_api_concurrent_diagnostic_deduplicates_and_limits_busy(api_diagnostic, monkeypatch):
+    client, manager, _, token = api_diagnostic
+    client.headers["Authorization"] = "Bearer "+token
+    manager.vault.write(ConnectionRequest.model_validate(CONFIG))
+    entered, release = threading.Event(), threading.Event()
+    calls, responses, failures = [], [], []
+    class Pending:
+        @classmethod
+        def connect(cls):
+            calls.append(1)
+            entered.set()
+            assert release.wait(5)
+            raise ConnectFailure("database_dns_failed")
+    monkeypatch.setattr(manager, "_make_connection_type", lambda _: Pending)
+    def first():
+        try:
+            responses.append(client.post("/v1/database/test"))
+        except Exception as error:
+            failures.append(type(error).__name__)
+    thread = threading.Thread(target=first)
+    thread.start()
+    try:
+        assert entered.wait(3)
+        assert manager.changing and manager.snapshot.state == "connecting"
+        result = client.post("/v1/database/test")
+        assert result.status_code == 200 and result.json()["state"] == "connecting"
+        assert result.headers["cache-control"] == "no-store" and len(calls) == 1
+        for method in ("post", "delete"):
+            result = client.request(method, "/v1/database/connection", json=CONFIG if method == "post" else None)
+            assert result.status_code == 409 and result.json()["detail"]["code"] == "database_busy"
+        # Alteração local sem relação com conexão não recebe a mensagem de update.
+        result = client.post("/v1/notifications/read-state", json={"all": True, "read": True})
+        assert result.status_code == 200
+        assert "Atualização reservada" not in result.text
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive() and not failures
+    assert len(responses) == 1 and responses[0].status_code == 200 and len(calls) == 1
+
+
+@pytest.mark.parametrize("size,status", [(16*1024, 200), (16*1024+1, 422)])
+def test_api_streamed_body_limit_without_content_length(api_diagnostic, size, status):
+    import asyncio
+    import httpx
+    client, manager, backend, token = api_diagnostic
+    initial = manager.snapshot
+    chunks = []
+    async def content():
+        data = b"{}"+b" "*(size-2)
+        for offset in range(0, size, 4096):
+            chunks.append(1)
+            yield data[offset:offset+4096]
+    async def app(scope, receive, send):
+        headers = dict(scope["headers"])
+        assert b"content-length" not in headers
+        assert headers[b"transfer-encoding"] == b"chunked"
+        await client.app(scope, receive, send)
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as sender:
+            return await sender.post("/v1/database/test", content=content(),
+                                     headers={"Authorization": "Bearer "+token})
+    response = asyncio.run(exercise())
+    assert response.status_code == status
+    assert response.headers["cache-control"] == "no-store"
+    assert len(chunks) >= 4 and not backend.values
+    if status == 422:
+        assert response.json()["detail"]["code"] == "database_invalid_connection"
+        assert manager.snapshot == initial
 
 
 @pytest.mark.parametrize("code,attempts", [("database_unreachable", 3), ("database_auth_failed", 1),

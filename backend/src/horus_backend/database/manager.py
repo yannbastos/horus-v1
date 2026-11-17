@@ -136,7 +136,7 @@ class DatabaseManager:
             try:
                 self.vault.write(config)
             except VaultUnavailable:
-                self._set("vault_unavailable", "database_vault_unavailable")
+                self._set("vault_unavailable", "database_vault_unavailable", configured=False)
                 raise DatabaseRefused("database_vault_unavailable") from None
             return self._test_saved()
 
@@ -146,7 +146,7 @@ class DatabaseManager:
             try:
                 self.vault.delete()
             except VaultUnavailable:
-                self._set("vault_unavailable", "database_vault_unavailable")
+                self._set("vault_unavailable", "database_vault_unavailable", configured=False)
                 raise DatabaseRefused("database_vault_unavailable") from None
             return self._set("not_configured", configured=False)
 
@@ -171,7 +171,7 @@ class DatabaseManager:
         try:
             config = self.vault.read()
         except VaultUnavailable:
-            return self._set("vault_unavailable", "database_vault_unavailable")
+            return self._set("vault_unavailable", "database_vault_unavailable", configured=False)
         if config is None:
             return self._set("not_configured", configured=False)
         self._set("connecting", checked=False)
@@ -288,8 +288,12 @@ class DatabaseManager:
             import psycopg
             if isinstance(error, psycopg.OperationalError):
                 code = failure_code(error)
-                self._close()
-                self._set("auth_failed" if code == "database_auth_failed" else "unreachable", code)
+                with self._operation:
+                    # Outra UoW pode ter invalidado esta mesma geração enquanto
+                    # aguardávamos o lock; não fechar/transicionar duas vezes.
+                    if self._pool is pool:
+                        self._close()
+                        self._set("auth_failed" if code == "database_auth_failed" else "unreachable", code)
                 raise DatabaseRefused(code) from None
             raise
         finally:

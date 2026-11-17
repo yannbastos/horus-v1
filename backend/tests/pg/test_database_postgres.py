@@ -221,6 +221,14 @@ def test_actual_self_signed_tls_refused(tmp_path, monkeypatch):
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
+    from horus_backend.database import transport
+    classify = transport.failure_code
+    certificate_rejections = []
+    def observed_failure(error):
+        if "certificate verify failed" in str(error).lower():
+            certificate_rejections.append(True)
+        return classify(error)
+    monkeypatch.setattr(transport, "failure_code", observed_failure)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -236,8 +244,10 @@ def test_actual_self_signed_tls_refused(tmp_path, monkeypatch):
                     client.sendall(b"S")
                     with context.wrap_socket(client, server_side=True):
                         errors.append("TLS aceitou CA inválida")
-            except ssl.SSLError:
-                pass  # alerta TLS esperado do cliente que rejeitou o certificado
+            except (ssl.SSLError, ConnectionResetError):
+                # libpq/Windows pode encerrar TCP em vez de enviar alerta TLS.
+                # A asserção abaixo exige rejeição explícita de certificado.
+                pass
             except Exception as error:
                 errors.append(type(error).__name__)
         server = threading.Thread(target=serve)
@@ -250,7 +260,7 @@ def test_actual_self_signed_tls_refused(tmp_path, monkeypatch):
                 connection_type(config).connect()
         finally:
             server.join(6)
-        assert not server.is_alive() and not errors
+        assert not server.is_alive() and not errors and certificate_rejections
 
 
 @pytest.mark.pg_strong
@@ -302,8 +312,11 @@ def test_privileged_role_rejected(local_database, pg_cluster):
             admin.execute("ALTER ROLE horus_app NOBYPASSRLS")
 
 
-def test_environment_cannot_override_connection(monkeypatch):
-    monkeypatch.setenv("PGSERVICE", "unexpected-service")
+@pytest.mark.parametrize("name", ["PGSERVICE", "pgservice", "PgService"])
+def test_environment_cannot_override_connection(monkeypatch, name):
+    # Dict literal preserva a caixa também no Windows, onde os.environ
+    # normalmente a normaliza; exercita a compatibilidade com outro SO.
+    monkeypatch.setattr("horus_backend.database.transport.os.environ", {name: "unexpected-service"})
     with pytest.raises(ConnectFailure, match="database_endpoint_not_allowed"):
         connection_type(ConnectionRequest.model_validate(CONFIG)).connect()
 
@@ -333,6 +346,7 @@ def test_vault_failure_discards_pool(local_database):
     pool, coordination = manager._pool, manager._coordination
     manager.vault._backend.fail = True
     assert manager.test().state == "vault_unavailable"
+    assert manager.snapshot.host_label is None
     assert pool.closed and coordination.closed
     assert manager._pool is None and manager._coordination is None
 
@@ -343,3 +357,47 @@ def test_expected_schema_contract_with_i2():
     if not operational:
         pytest.skip("I2 ainda não integrado neste worktree; versão final informada pelo coordenador: 20261117160300")
     assert EXPECTED_SCHEMA_VERSION == operational[-1].name.split("_", 1)[0]
+
+
+def test_simultaneous_uow_failures_serialize_generation_teardown(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    manager = DatabaseManager(ConnectionVault(tmp_path, MemoryKeyring()))
+    class Pool:
+        closed = 0
+        @contextmanager
+        def connection(self, **kwargs):
+            yield object()
+        def close(self, **kwargs):
+            self.closed += 1
+    class Coordination:
+        closed = 0
+        def close(self):
+            self.closed += 1
+    pool, coordination = Pool(), Coordination()
+    manager._pool, manager._coordination = pool, coordination
+    manager._set("connected", latency=1)
+    original_close = manager._close
+    calls = []
+    def close_locked():
+        assert manager._operation.locked()
+        calls.append(1)
+        original_close()
+    monkeypatch.setattr(manager, "_close", close_locked)
+    barrier = threading.Barrier(2)
+    errors = []
+    def failing_uow():
+        try:
+            with manager.connection():
+                barrier.wait(timeout=3)
+                raise psycopg.OperationalError("synthetic connection lost")
+        except Exception as error:
+            errors.append(error)
+    threads = [threading.Thread(target=failing_uow) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(errors) == 2 and all(isinstance(error, DatabaseRefused) for error in errors)
+    assert len(calls) == pool.closed == coordination.closed == 1
+    assert manager._active == 0 and manager.snapshot.state == "unreachable"

@@ -59,7 +59,7 @@ def connection_type(config):
                 # libpq aplica PGSERVICE antes dos parâmetros explícitos;
                 # service='' também tenta abrir um serviço vazio. Recusar
                 # opções ambientais impede configurações concorrentes ocultas.
-                if any(name.startswith("PG") for name in os.environ):
+                if any(name.upper().startswith("PG") for name in os.environ):
                     raise ConnectFailure("database_endpoint_not_allowed")
                 address = resolve_public(config.host, config.port)
                 return super().connect(host=config.host, hostaddr=address, port=config.port,
