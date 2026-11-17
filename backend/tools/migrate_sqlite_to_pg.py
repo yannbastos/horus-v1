@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import sys
 
-from migrate_sqlite_pg.guards import MigrationGuardError
+from migrate_sqlite_pg.guards import MigrationGuardError, validate_report_out
 from migrate_sqlite_pg.pg_loader import check_migration_run
 from migrate_sqlite_pg.runner import run_migration
 
@@ -63,6 +63,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
+    validated_report_out: Path | None = None
+    if args.report_out:
+        try:
+            validated_report_out = validate_report_out(args.report_out)
+        except MigrationGuardError as exc:
+            print(json.dumps({"status": "refused", "error_code": "guard_refused", "error": str(exc)}, ensure_ascii=False))
+            return 1
+
     report = run_migration(
         target_dsn=args.target_dsn,
         source_dir=args.source_dir,
@@ -73,9 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         apply=args.apply,
     )
 
-    if args.report_out:
-        args.report_out.parent.mkdir(parents=True, exist_ok=True)
-        args.report_out.write_text(
+    if validated_report_out is not None:
+        validated_report_out.parent.mkdir(parents=True, exist_ok=True)
+        validated_report_out.write_text(
             json.dumps(report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

@@ -78,7 +78,18 @@ def _ensure_target_ready(
             "Destino já possui migração anterior registrada; use um banco descartável novo."
         )
 
-    for tbl in LOAD_ORDER:
+    coordination_tables = (
+        "worker_instances",
+        "review_comments",
+        "review_comment_events",
+        "review_comment_receipts",
+        "notification_state",
+        "preferences",
+        "deletion_events",
+        "imports",
+        "publishing_receipts",
+    )
+    for tbl in (*LOAD_ORDER, *coordination_tables):
         count = conn.execute(
             sql.SQL("SELECT COUNT(*) AS c FROM horus.{}").format(sql.Identifier(tbl))
         ).fetchone()["c"]
