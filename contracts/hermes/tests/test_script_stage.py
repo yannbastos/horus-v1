@@ -5,8 +5,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from conftest import load
-from fake_server import Scenario
+from ..conftest import load
+from ..fake_server import Scenario
 from horus_backend.hermes_contract.script import (
     SCRIPT_INSTRUCTIONS, ScriptRunEnvelope, build_script_request, validate_script_output)
 from horus_backend.hermes_contract.validator import OutputError, parse_output

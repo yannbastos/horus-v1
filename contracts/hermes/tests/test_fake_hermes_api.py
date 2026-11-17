@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from conftest import Http
-from fake_server import Scenario
+from ..conftest import Http
+from ..fake_server import Scenario
 from horus_backend.hermes_contract.mapping import (
     ATTEMPT_OUTCOME, Observation, decide, idempotency_key, may_repair, may_retry_after,
     may_retry_automatically)

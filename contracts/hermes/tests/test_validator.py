@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from conftest import load
+from ..conftest import load
 from horus_backend.hermes_contract.validator import OutputError, parse_output, validate_result
 
 
