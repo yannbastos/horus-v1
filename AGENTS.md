@@ -79,7 +79,7 @@ O [contexto original](docs/historico/contexto-original/README.md) é histórico,
 - Exclusões em massa, mídias/bancos, dados operacionais/backups, migrações destrutivas ou mudanças que possam causar perda de dados.
 - Git destrutivo: `push --force`, `reset --hard`, `clean -fd`, reescrita de histórico, `branch -D`, `worktree remove --force`; nunca perder alterações ou commits exclusivos. Proteja `main`, `develop`, branches protegidas, não integradas ou com PR aberto. Limpeza temporária integrada segue a governança, sem exclusão forçada.
 - Releases, instaladores, vídeos, uploads externos, deploy ou alterações em produção. Build local não autoriza publicação.
-- Alterar outros repositórios, sua visibilidade ou permissões administrativas do GitHub fora do escopo autorizado.
+- Alterar outros repositórios fora do escopo autorizado ou criar repositórios remotos; alterar visibilidade de repositórios ou permissões administrativas do GitHub (sempre exige autorização do usuário).
 
 Apresente a mudança concreta e o motivo da aprovação exigida. Autorizações antigas não ampliam permissões vigentes.
 

@@ -50,7 +50,7 @@ Quando algo exigir autorização, o trabalho independente continua.
 
 ## Incrementos
 
-(todos)
+(Maestro)
 
 Cada incremento tem objetivo específico, escopo limitado, critérios de aceite, responsável, testes, dependências e evidências. Incrementos independentes são integrados assim que validados; quem depende de contrato ainda não integrado espera por ele.
 
@@ -71,7 +71,7 @@ Relatório do worker: até 150 palavras com resultado, evidência, commit, teste
 
 ## Fluxo Git
 
-(todos)
+(quem integrar)
 
 Integração cabe ao Maestro após revisão, salvo delegação explícita.
 
@@ -87,7 +87,7 @@ A `main` permanece funcional: não integrar código com falha crítica conhecida
 
 ## Encerramento de tarefas e limpeza
 
-(todos)
+(quem integrar)
 
 Regra permanente definida pelo usuário em 16/11/2026, fonte única do encerramento (os demais documentos apenas remetem a esta seção). Fluxo: terminou → testou → integrou → publicou → atualiza o GitHub → remove a worktree → exclui branches temporárias → Issue Concluída. Sem resíduos.
 
