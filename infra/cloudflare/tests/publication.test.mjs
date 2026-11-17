@@ -17,12 +17,12 @@ import { createStore } from '../storage.mjs';
 // https://github.com/kaito-tokyo/minisign-js/tree/main/@kaito-tokyo/minisign-verify/test_fixtures
 // Nenhuma chave privada copiada/gerada. Esta chave pública nunca deve entrar em builds.
 const data = Buffer.from('test\n');
-const sig = `untrusted comment: signature from minisign secret key
+const sig = `untrusted comment: horus test signature
 RUSBf6Tu0QagxTohs9/kgLitMaShsRf5NEjOn9/aO03tpklkYTBR250i64LYccpTqx4Y02iJHmFCJ5FqmfbP1QlnlxYvdcmeTgM=
 trusted comment: timestamp:1774593131\tfile:test.dat\thashed
 0vQ/suz1GmbJHBoQMKOqYsTQ6Yi+baQj2Km6d222R2x1AQYGcW6UBf5iRU16fWr43R6+DTqwk5u5JKXTJ/TSBA==
 `;
-const pub = `untrusted comment: minisign public key C5A006D1EEA47F81
+const pub = `untrusted comment: horus test public key
 RWSBf6Tu0QagxVJavce10/fhuZs6PVLtjH/OfT0ma6nrwbyzTaqFXB9s
 `;
 const encodedSig = Buffer.from(sig).toString('base64');
