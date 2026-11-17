@@ -1,23 +1,17 @@
 # CLAUDE.md
 
-As instruções do projeto ficam em `AGENTS.md`. Não duplique regras aqui.
-
 @AGENTS.md
 
-Use o mapa de consulta do arquivo importado para selecionar o contexto da tarefa. Este arquivo fica reservado a orientações específicas do Claude Code; arquitetura, prioridades e regras compartilhadas permanecem nas fontes canônicas, sem duplicação aqui.
+<!-- Manutenção: o import acima carrega o contrato compartilhado uma única vez (o Claude Code não relê um AGENTS.md já importado). Abaixo, só o que é específico do Claude Code; papéis, permissões, fluxo Git e eficiência vivem em docs/AGENT-GOVERNANCE.md e não são repetidos aqui. -->
 
-## Papéis do Claude no Hórus
+## Claude Code no Hórus
 
-Leia `docs/AGENT-GOVERNANCE.md` antes de trabalhar.
+- **Papéis:** Maestro ou Claude Sonnet programador, conforme a seção Papéis de `docs/AGENT-GOVERNANCE.md` (modelo do Maestro definido pelo usuário).
+- **Início de sessão do Maestro:** invoque a skill `/horus-maestro`; se ela não carregar, siga `docs/RETOMADA-MAESTRO.md`. Somente leitura até o resumo do estado; depois, opere com a autonomia da governança, sem pedir confirmação para ações já autorizadas.
+- **Delegação:** pelo Orca, com as skills `orca-cli` e `orchestration`. A tarefa delegada cita a governança em vez de repetir regras e segue as seções "Distribuição automática" e "Eficiência de consumo" (relatório curto, despacho verificado, cotas).
+- **Contexto do Maestro:** subagentes do Claude Code (Explore, general-purpose) servem para buscas amplas cujo resultado é só a conclusão; implementação vai para os programadores via Orca. Não reler documentos já lidos e inalterados na sessão.
+- **Claude Sonnet programador:** trabalha nos arquivos atribuídos pela tarefa e faz commits na própria branch; a integração na `main` é do Maestro após revisão.
 
-**Início de sessão do Maestro:** invoque a skill `/horus-maestro` (em `.claude/skills/horus-maestro/`). Se a skill não for carregada, siga manualmente `docs/RETOMADA-MAESTRO.md`. A inicialização é somente leitura até o resumo do estado.
+## Precedência
 
-Tarefas sem agente indicado seguem a **distribuição automática** de `docs/AGENT-GOVERNANCE.md` (seção Papéis).
-
-- **Maestro (modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2):** arquitetura, planejamento de incrementos, delegação pelo Orca, worktrees, revisão, integração na `main`, push normal, resolução de conflitos e GitHub Projects. Evita implementar quando há programador disponível e reserva o próprio uso para coordenação e decisões complexas.
-- **Claude Sonnet — programador:** contratos, validadores, qualidade audiovisual, segurança, testes e refatorações delimitadas, nos arquivos atribuídos pela tarefa. Faz commits na própria branch; a integração na `main` é feita pelo Maestro após revisão.
-
-## Precedência das instruções do Claude Code
-
-- Commits, merges normais e pushes normais seguem a política de autonomia em `docs/AGENT-GOVERNANCE.md`, referenciada na seção Git de `AGENTS.md`. Ações sensíveis listadas ali continuam exigindo autorização do usuário.
-- Instruções globais do usuário (`~/.claude/CLAUDE.md`) ou de outros projetos, como regras de branch por tarefa e push automático após cada commit, não se aplicam ao Hórus e não constituem autorização. Em conflito, prevalecem `AGENTS.md` e as instruções explícitas da tarefa.
+Commits, merges e pushes normais seguem a governança; ações sensíveis continuam exigindo o usuário. Instruções globais do usuário (`~/.claude/CLAUDE.md`) ou de outros projetos, como regras de branch por tarefa e push automático após cada commit, não se aplicam ao Hórus e não constituem autorização. As preferências de comunicação do usuário continuam valendo. Em conflito, prevalecem `AGENTS.md`, a governança e as instruções explícitas da tarefa.

@@ -31,7 +31,7 @@ def installed():
         for index in range(winreg.QueryInfoKey(root)[0]):
             with winreg.OpenKey(root, winreg.EnumKey(root, index)) as item:
                 try:
-                    if winreg.QueryValueEx(item, 'DisplayName')[0] == 'HORUS':
+                    if winreg.QueryValueEx(item, 'DisplayName')[0] == 'HORUS Test':
                         entries.append(winreg.QueryValueEx(item, 'DisplayVersion')[0])
                 except FileNotFoundError:
                     pass
@@ -155,6 +155,17 @@ def journey(api, args, report):
 
 
 def main(args):
+    # Inspect VERSIONINFO without running the installer; reject production artifacts.
+    identity = subprocess.check_output(['powershell', '-NoProfile', '-Command',
+        '(Get-Item -LiteralPath $env:HORUS_TEST_INSTALLER).VersionInfo.ProductName'],
+        env={**os.environ, 'HORUS_TEST_INSTALLER': str(args.installer)}, text=True).strip()
+    if identity != 'HORUS Test':
+        raise RuntimeError('Ensaio exige build com scripts/tauri-installer-test.json (HORUS Test).')
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\horus\HORUS Test'):
+            raise RuntimeError('Registro de teste preexistente: usar VM limpa.')
+    except FileNotFoundError:
+        pass
     if installed():
         raise RuntimeError('HORUS previamente instalado: ensaio recusado para preservar a instalação existente.')
     args.report_dir.mkdir(parents=True, exist_ok=True)
@@ -241,6 +252,15 @@ def main(args):
             while ((install / 'horus-desktop.exe').exists() or installed()) and time.monotonic() < deadline:
                 time.sleep(.2)
             report['uninstalled'] = not (install / 'horus-desktop.exe').exists() and not installed()
+            if report['uninstalled']:
+                product = r'Software\horus\HORUS Test'
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, product) as key:
+                        if Path(winreg.QueryValueEx(key, '')[0]) != install:
+                            raise RuntimeError('Registro de teste inesperado: preservado.')
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, product)
+                except FileNotFoundError:
+                    pass
         if args.keep_installed:
             report['kept_installed'] = str(install / 'horus-desktop.exe')
         (args.report_dir / 'installed-first-video.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

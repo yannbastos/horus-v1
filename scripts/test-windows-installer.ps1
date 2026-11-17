@@ -12,12 +12,16 @@ $ErrorActionPreference = 'Stop'
 if (-not $Python) { $Python = Join-Path (Split-Path $PSScriptRoot -Parent) 'backend/.venv/Scripts/python.exe' }
 $existing = Get-ChildItem HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall |
     ForEach-Object { Get-ItemProperty $_.PSPath } |
-    Where-Object { $_.DisplayName -eq 'HORUS' }
+    Where-Object { $_.DisplayName -eq 'HORUS Test' }
 if ($existing) { throw 'Instalação HORUS preexistente: execute em outro usuário/VM para preservá-la.' }
-$productRegistry = 'HKCU:/Software/horus/HORUS'
+$productRegistry = 'HKCU:/Software/horus/HORUS Test'
 $productRegistryExisted = Test-Path -LiteralPath $productRegistry
+if ($productRegistryExisted) { throw 'Registro de teste preexistente: preservar e usar VM limpa.' }
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
 $upgradePath = if ($UpgradeInstaller) { (Resolve-Path -LiteralPath $UpgradeInstaller).Path } else { '' }
+foreach ($package in @($installerPath, $upgradePath)) {
+    if ($package -and (Get-Item -LiteralPath $package).VersionInfo.ProductName -ne 'HORUS Test') { throw 'Ensaio exige instalador HORUS Test; nunca executar produto real.' }
+}
 $smokeOptions = @()
 if ($WithFirstVideo) { $WithTranscription = $true; $smokeOptions += '--with-first-video' }
 if ($WithTranscription) { $smokeOptions += '--with-transcription' }
@@ -28,7 +32,7 @@ function Assert-InstalledVersion([string]$Package) {
     $expected = (Get-Item -LiteralPath $Package).VersionInfo.ProductVersion
     if (-not $expected) { throw 'Instalador sem versão de produto.' }
     $entry = @(Get-ChildItem HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall |
-        ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq 'HORUS' })
+        ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq 'HORUS Test' })
     if ($entry.Count -ne 1 -or [version]$entry[0].DisplayVersion -ne [version]$expected) {
         throw "Versão registrada não corresponde ao instalador $expected."
     }
@@ -108,7 +112,7 @@ try {
             while ((Test-Path -LiteralPath (Join-Path $install 'horus-desktop.exe')) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 200 }
             if (Test-Path -LiteralPath (Join-Path $install 'horus-desktop.exe')) { throw "Desinstalação incompleta: $install" }
             $remaining = Get-ChildItem HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall |
-                ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq 'HORUS' }
+                ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq 'HORUS Test' }
             if ($remaining) { throw 'Entrada de desinstalação HORUS permaneceu no HKCU.' }
             # O NSIS mantém o local de instalação para reinstalações. Só remover a chave
             # criada por ESTE ensaio quando ela aponta exatamente para a pasta exclusiva.
@@ -122,7 +126,7 @@ try {
                 $parent = Get-Item -LiteralPath 'HKCU:/Software/horus'
                 if ($parent.SubKeyCount -eq 0 -and $parent.ValueCount -eq 0) { Remove-Item -LiteralPath 'HKCU:/Software/horus' }
             }
-            $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/HORUS.lnk'
+            $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/HORUS Test.lnk'
             if (Test-Path -LiteralPath $shortcut) { throw 'Atalho HORUS permaneceu após desinstalar.' }
             if ($upgradePath -and (Test-Path -LiteralPath (Join-Path $env:HORUS_DATA_DIR 'installer-fixture-hashes.json'))) {
                 & $Python (Join-Path $PSScriptRoot 'check-installer-data.py') $env:HORUS_DATA_DIR verify

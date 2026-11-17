@@ -28,6 +28,8 @@ if (-not (Test-Path -LiteralPath ($key+'.pub'))) { throw 'Chave pública de test
 $overlay = Join-Path $testRoot 'tauri-updater-test.generated.json'
 $configuration = @{
     version=$Version
+    productName='HORUS Test'
+    identifier='com.horus.installer-test'
     bundle=@{createUpdaterArtifacts=$true}
     plugins=@{updater=@{
         pubkey=[IO.File]::ReadAllText($key+'.pub').Trim()
@@ -57,7 +59,7 @@ try {
     $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=''
     & npm --prefix (Join-Path $root 'frontend') run tauri build -- --config $overlay
     if ($LASTEXITCODE) { throw 'Build assinado de teste falhou.' }
-    $installer=Join-Path $root "frontend/src-tauri/target/release/bundle/nsis/HORUS_${Version}_x64-setup.exe"
+    $installer=Join-Path $root "frontend/src-tauri/target/release/bundle/nsis/HORUS Test_${Version}_x64-setup.exe"
     $release=Join-Path $OutputDirectory $Version
     New-Item -ItemType Directory -Path $release -Force | Out-Null
     Copy-Item -LiteralPath $installer -Destination (Join-Path $release 'setup.exe')

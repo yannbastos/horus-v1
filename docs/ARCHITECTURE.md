@@ -60,7 +60,7 @@ backend/tests/         Testes do backend
 docs/                  Documentação canônica, guias e histórico
 ~~~
 
-Fábrica e Storybook ficam em repositórios independentes. Na organização local, consulte o [README da fábrica](../../../fabrica-canais/README.md), o [contrato proposto Hórus–fábrica](../../../fabrica-canais/docs/CONTRATO-HORUS-FABRICA.md) e o [README do Storybook](<../../HORUS Storybook/README.md>). Esses links dependem da disposição local dos repositórios; não implicam que seus arquivos estejam presentes em um clone isolado do Hórus.
+Fábrica e Storybook ficam em repositórios independentes. Na organização local com repositórios irmãos (`fabrica-canais` é privado), consulte o [README da fábrica](../../fabrica-canais/README.md), o [contrato proposto Hórus–fábrica](../../fabrica-canais/docs/CONTRATO-HORUS-FABRICA.md) e o [README do Storybook](../../horus-storybook/README.md). Esses caminhos relativos dependem do layout local com repositórios irmãos; não implicam que seus arquivos estejam presentes em um clone isolado do Hórus.
 
 Não há consolidação em monorepo autorizada. O desktop C#/Avalonia foi removido (HOR-010). O código Python do backend está organizado em módulos de arquivo, não nas subpastas idealizadas no planejamento inicial.
 
@@ -116,8 +116,8 @@ A migração tecnológica deve preservar integralmente design, cores, tipografia
 
 | Elemento | Critério a preservar |
 |---|---|
-| Referência | Desktop audiovisual atual e [capturas](layout-desktop.md), complementados pelo Storybook; não recuperar navegação antiga como direção atual |
-| Navegação | Visão geral, Radar, Biblioteca, Produção, Canais, Histórico operacional, Transcrição e Ajustes |
+| Referência | Interface React/Tauri vigente ([tokens.css](../frontend/src/styles/tokens.css)) e Storybook; [capturas do layout desktop](layout-desktop.md) permanecem apenas como registro histórico do desktop Avalonia removido em HOR-010 (não recuperar navegação antiga como direção atual) |
+| Navegação | Visão geral, Radar, Biblioteca, Produção, Central de Produção, Canais, Histórico operacional, Transcrição e Ajustes |
 | Geometria | Barra lateral de 216 px, organização de cabeçalho/conteúdo/rodapé; referência 1320 × 840 e mínimo 1040 × 680, com rolagem |
 | Cores | Temas claro, escuro e sistema; índigo, superfícies rebaixadas, linhas finas, cantos retos e botões de alto contraste |
 | Tokens React | [frontend/src/styles/tokens.css](../frontend/src/styles/tokens.css); não copiar valores para documentos ou componentes |

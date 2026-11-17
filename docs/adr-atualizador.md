@@ -14,6 +14,17 @@ O Hórus distribui no Windows um aplicativo desktop Tauri 2 com instalador NSIS 
 4. Nenhuma atualização durante renderizações ou outros trabalhos críticos.
 5. Não armazenar credenciais privilegiadas do GitHub no aplicativo.
 
+### Decisões complementares (16/11/2026, noite)
+
+6. **Canal durante a validação:** pasta local ou de rede indicada pelo usuário, sem hospedagem externa. A arquitetura deve permitir migrar depois para um proxy HTTPS privado com autenticação revogável por instalação.
+7. **Ensaios instalados:** somente em VM Windows descartável, com dados fictícios, sem tocar a instalação operacional.
+8. **Núcleo × recursos:** autorizados o estudo técnico e a proposta arquitetural; a implementação aguarda aprovação.
+9. **Chave minisign:** autorizada a preparação do procedimento de geração e custódia, em [custodia-chave-atualizador.md](custodia-chave-atualizador.md). A chave definitiva só é gerada depois de o usuário aprovar o procedimento e a opção de armazenamento; nenhum serviço externo de armazenamento sem autorização.
+10. **Authenticode:** adiado para a distribuição pública. A verificação criptográfica do atualizador continua obrigatória.
+11. **Desinstalador:** sem opção de apagar dados pessoais; arquivos e projetos do usuário são preservados (HOR-147).
+
+Estas decisões resolvem os itens 1, 3 e 4 de "Decisões pendentes" abaixo para a fase atual; o item 2 fica em estudo.
+
 ## Consequências
 
 - Fica descartada a instalação silenciosa automática e o reinício forçado adotados no MIPE.
@@ -70,13 +81,14 @@ Esses padrões de estado não ficam na pasta de instalação. Caminhos explicita
 pelo usuário podem ser externos: não há promessa de proteger mídia que ele colocar dentro
 da instalação. Keyring não é arquivo no workspace e não foi acessado no ensaio.
 
-**Desinstalação não é garantia universal de preservação:** o `installer.nsi` efetivamente
-gerado contém exclusão recursiva de `$APPDATA\${BUNDLEID}` e
-`$LOCALAPPDATA\${BUNDLEID}` quando `DeleteAppDataCheckboxState = 1` **e** `UpdateMode <> 1`.
-`/UPDATE` define `UpdateMode = 1`; a exclusão fica impedida nesse fluxo. Desinstalar com `/S`
-não exibe nem marca a caixa; a variável inicia em zero. Não foi ensaiada exclusão interativa
-nem se tocou nos dados reais. Decisão pendente do usuário: manter ou remover a caixa;
-recomendação: removê-la em futuro incremento, deixando exclusão no fluxo explícito de dados.
+**Histórico da opção de exclusão no desinstalador:** o `installer.nsi` efetivamente
+da validação histórica continha exclusão recursiva de dados, condicionada à caixa
+interativa e fora de `/UPDATE`; o modo `/S` não marcava essa caixa.
+**Decisão aplicada na HOR-147 (16/11/2026):** a caixa e todo o bloco de exclusão
+foram removidos do template NSIS versionado. Desinstalação interativa, silenciosa
+e atualização sempre preservam banco, projetos, arquivos e configurações do usuário.
+A exclusão de dados fica fora do instalador. Regressão estática cobre configuração,
+ausência do controle e ausência de remoção recursiva; ensaio final em VM descartável.
 
 ### Primitivas para a etapa 2
 
@@ -205,7 +217,7 @@ Modo escolhido: **passive**, após confirmação humana; mostra progresso e evit
 perguntas redundantes do instalador. A implementação Windows do plugin fixado
 `tauri-plugin-updater-2.14.1/src/updater.rs` acrescenta `/UPDATE`, `/P` e `/R` para
 NSIS, aguardando o fim do desktop antes de sobrescrever. `/UPDATE` impede o bloco
-de exclusão de dados no template NSIS atual. Referência:
+de exclusão de dados no template NSIS então vigente; na HOR-147 esse bloco foi removido. Referência:
 [updater oficial](https://v2.tauri.app/plugin/updater/).
 Isso foi conferido no código do plugin; a instalação real é a etapa 3.
 
@@ -395,6 +407,26 @@ Verificado: jornada instalada pelo plugin, confirmação real, todos os negativo
 WAL/restauração/saúde/rollback compatível e limpeza. Não verificado: máquina limpa,
 queda de energia, atualizações com migração real, canal remoto ou assinatura
 Authenticode. Distribuição, custódia da chave real, retenção/cobertura do backup e
-caixa de exclusão do desinstalador continuam decisões do usuário.
+política de exclusão de dados fora do instalador continuam decisões do usuário;
+a caixa do desinstalador foi removida na HOR-147.
 Contagens, hashes, comandos, screenshots e logs ficam no relatório local
 `%LOCALAPPDATA%\Horus\dev-reports\HOR-100-C.md`.
+
+### Correção do isolamento dos instaladores — HOR-147
+
+Os builds de ensaio agora usam `productName=HORUS Test` e
+`identifier=com.horus.installer-test`, inclusive o baseline sem canal.
+Isso separa chaves de produto/Uninstall e atalhos da instalação operacional.
+`test-updater-e2e.ps1` e `updater-e2e.mjs` recusam artefatos cujo VERSIONINFO
+não seja `HORUS Test`; todos os artefatos antigos devem ser reconstruídos.
+As guardas de registro e a limpeza referem-se exclusivamente ao produto de teste.
+O overlay `-E2eRoot` continua obrigatório para isolar dados/WebView após relançar.
+
+O template NSIS mantém locais personalizados permanentes, ignora apenas a lembrança
+TEMP sem instalação registrada e interrompe se houver instalação registrada em TEMP,
+exigindo decisão explícita de migração. Ver procedimento e proposta não aplicada em
+[empacotamento-windows.md](empacotamento-windows.md#diretório-inicial-e-isolamento-de-ensaios-hor-147).
+A HOR-147 validou NSIS N→N+1→N e desinstalação silenciosa com identidade isolada,
+SQLite e arquivos externos preservados por hash; não repetiu a jornada CDP/plugin,
+assinatura, inferência ou primeiro vídeo. A evidência histórica HOR-100-C permanece
+válida para a versão ensaiada, sem homologar automaticamente os novos overlays.

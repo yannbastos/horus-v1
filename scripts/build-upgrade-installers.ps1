@@ -11,10 +11,10 @@ $override = Join-Path ([IO.Path]::GetTempPath()) ('horus-build-version-' + [guid
 try {
     foreach ($number in @($config.version, "$($version.Major).$($version.Minor).$($version.Build + 1)")) {
         # Override de build: nenhum manifesto versionado é modificado.
-        [IO.File]::WriteAllText($override, (@{ version = $number } | ConvertTo-Json))
+        [IO.File]::WriteAllText($override, (@{ version = $number; productName = 'HORUS Test'; identifier = 'com.horus.installer-test' } | ConvertTo-Json))
         & npm --prefix $frontend run tauri build -- --config $override
         if ($LASTEXITCODE) { throw "Build $number falhou." }
-        $installer = Join-Path $frontend "src-tauri/target/release/bundle/nsis/HORUS_${number}_x64-setup.exe"
+        $installer = Join-Path $frontend "src-tauri/target/release/bundle/nsis/HORUS Test_${number}_x64-setup.exe"
         Copy-Item -LiteralPath $installer -Destination $output
         Get-FileHash -LiteralPath (Join-Path $output (Split-Path $installer -Leaf)) -Algorithm SHA256
     }
