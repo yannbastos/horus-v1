@@ -341,5 +341,5 @@ def test_expected_schema_contract_with_i2():
     migrations = Path(__file__).resolve().parents[3] / "supabase/migrations"
     operational = sorted(migrations.glob("*_horus_*.sql"))
     if not operational:
-        pytest.skip("I2 ainda não integrado; contrato fixado pelo coordenador em 20261117130000")
+        pytest.skip("I2 ainda não integrado neste worktree; versão final informada pelo coordenador: 20261117160300")
     assert EXPECTED_SCHEMA_VERSION == operational[-1].name.split("_", 1)[0]
