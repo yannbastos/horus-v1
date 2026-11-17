@@ -305,3 +305,71 @@ com mensagem explícita no stderr e SHA-256 do banco inalterado. Isso valida
 o guard de incompatibilidade, sem certificar uma migração real ou a mensagem
 na interface. Ensaio no computador de desenvolvimento, não em máquina limpa;
 os critérios mais amplos de instalação/migração em VM continuam pendentes.
+
+## Diretório inicial e isolamento de ensaios (HOR-147)
+
+O template `frontend/src-tauri/installer.nsi` é a cópia do template oficial
+`tauri-cli-v2.12.4` (`crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi`),
+com alterações limitadas ao destino inicial e `RestorePreviousInstallLocation`.
+Ao atualizar a CLI, revisar o diff com upstream e repetir os testes abaixo.
+Não substituímos o fluxo Tauri de atualização/desinstalação.
+
+Instalação nova: `%LOCALAPPDATA%\Programs\Horus`, `currentUser`, sem elevação.
+Locais personalizados permanentes continuam sendo respeitados. O template original
+lia `Software\horus\HORUS` e restaurava seu valor padrão sem validar TEMP;
+`/D=` grava esse valor na instalação e a desinstalação `/S` mantém o local lembrado.
+O harness de primeiro vídeo não limpava essa chave. Isso explica a herança de
+pasta de ensaio; o valor histórico exato já foi substituído pela instalação real,
+portanto não pode ser recuperado do registro atual.
+
+Uma lembrança sob TEMP sem entrada de desinstalação é ignorada somente na seleção
+inicial, sem escrever registro. Se houver uma instalação registrada sob TEMP, o
+instalador interrompe com código 2: não muda o destino silenciosamente nem deixa
+os executáveis antigos órfãos. `/D=` continua sendo uma escolha explícita.
+
+**Migração proposta, ainda dependente de aprovação do usuário:** inventariar
+local/versão atuais; fechar o app por ação do operador; guardar instalador anterior,
+backup verificado dos dados e inventário de mídias/segredos/perfil WebView;
+desinstalar explicitamente a versão antiga sem selecionar exclusão de dados;
+confirmar remoção dos executáveis, entrada Uninstall e atalhos; remover somente a
+lembrança de instalação comprovadamente antiga, com autorização; instalar no destino
+aprovado e conferir saúde, dados e atalhos antes de limpar qualquer sobra.
+Instalações permanentes personalizadas permanecem no local atual até essa decisão.
+Nenhuma migração ou limpeza da instalação operacional foi aplicada nesta entrega.
+
+Todos os artefatos usados pelos harnesses devem ser construídos com identidade
+`HORUS Test` / `com.horus.installer-test`; só mudar o identificador não isola as
+chaves NSIS, que dependem do nome do produto. Para transcrição/primeiro vídeo:
+
+```powershell
+npm --prefix frontend run tauri build -- --config ../scripts/tauri-first-video.json --config ../scripts/tauri-installer-test.json
+```
+
+`build-upgrade-installers.ps1` e `build-updater-test.ps1` já aplicam a identidade.
+Os harnesses verificam `ProductName` do instalador antes de executá-lo e recusam
+artefatos antigos HORUS; reconstruí-los, nunca reutilizar o instalador privado de
+validação como fixture. Os testes usam `/D=` sob TEMP e `HORUS_DATA_DIR` externo a
+`app/`. O smoke de executável não instala produto nem escreve registro NSIS.
+O ciclo de updater deve usar o mesmo overlay E2E em N e N+1 para isolar também o
+WebView após relançamento. Não executar ensaios concorrentes com a mesma identidade.
+O modo diagnóstico `--keep-installed` é excepcional: exige limpeza posterior do
+produto de teste e não é um ensaio concluído com limpeza.
+
+Regressões sem dependências Python extras:
+
+```powershell
+python scripts/test-installer-location.py
+powershell -NoProfile -File scripts/test-installer-data-isolation.ps1 -Installer '<HORUS Test N>' -UpgradeInstaller '<HORUS Test N+1>'
+```
+
+O primeiro compila/executa a função NSIS em chave aleatória de fixture: reproduz a
+herança original e verifica instalação nova, TEMP removido/raiz/maiúsculas/`..`,
+instalação TEMP ainda registrada, local permanente, prefixo semelhante e `/D=`.
+O segundo instala N→N+1→N e desinstala `/S`, sem abrir o desktop; compara SHA-256
+de SQLite, projeto, preferência e mídia descartáveis fora de `INSTDIR` e limpa
+somente a identidade de teste. A fixture de mídia é uma sequência de bytes; esse
+teste verifica preservação, não decodificação audiovisual nem migração de schema.
+Na HOR-147 foram gerados dois NSIS de teste com o template completo, reutilizando
+um desktop compilado e sem recursos backend; esse ciclo valida o instalador,
+não a inicialização do aplicativo ou o fluxo completo pelo plugin de atualização.
+Relatório local: `%LOCALAPPDATA%\Horus\dev-reports\HOR-147.md`.

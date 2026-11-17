@@ -345,3 +345,22 @@ Authenticode. Distribuição, custódia da chave real, retenção/cobertura do b
 caixa de exclusão do desinstalador continuam decisões do usuário.
 Contagens, hashes, comandos, screenshots e logs ficam no relatório local
 `%LOCALAPPDATA%\Horus\dev-reports\HOR-100-C.md`.
+
+### Correção do isolamento dos instaladores — HOR-147
+
+Os builds de ensaio agora usam `productName=HORUS Test` e
+`identifier=com.horus.installer-test`, inclusive o baseline sem canal.
+Isso separa chaves de produto/Uninstall e atalhos da instalação operacional.
+`test-updater-e2e.ps1` e `updater-e2e.mjs` recusam artefatos cujo VERSIONINFO
+não seja `HORUS Test`; todos os artefatos antigos devem ser reconstruídos.
+As guardas de registro e a limpeza referem-se exclusivamente ao produto de teste.
+O overlay `-E2eRoot` continua obrigatório para isolar dados/WebView após relançar.
+
+O template NSIS mantém locais personalizados permanentes, ignora apenas a lembrança
+TEMP sem instalação registrada e interrompe se houver instalação registrada em TEMP,
+exigindo decisão explícita de migração. Ver procedimento e proposta não aplicada em
+[empacotamento-windows.md](empacotamento-windows.md#diretório-inicial-e-isolamento-de-ensaios-hor-147).
+A HOR-147 validou NSIS N→N+1→N e desinstalação silenciosa com identidade isolada,
+SQLite e arquivos externos preservados por hash; não repetiu a jornada CDP/plugin,
+assinatura, inferência ou primeiro vídeo. A evidência histórica HOR-100-C permanece
+válida para a versão ensaiada, sem homologar automaticamente os novos overlays.

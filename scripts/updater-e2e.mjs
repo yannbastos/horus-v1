@@ -11,6 +11,13 @@ import { chromium } from '../frontend/node_modules/@playwright/test/index.mjs';
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const [root,channel,baseline]=process.argv.slice(2);
 assert(root && channel && baseline,'Informe sandbox, canal e instalador padrão');
+for (const installer of [baseline, path.join(channel,'0.1.0/setup.exe'), path.join(channel,'0.1.1/setup.exe')]) {
+  const identity=spawnSync('powershell',['-NoProfile','-Command',
+    '(Get-Item -LiteralPath $env:HORUS_TEST_INSTALLER).VersionInfo.ProductName'],
+    {env:{...process.env,HORUS_TEST_INSTALLER:installer},encoding:'utf8',windowsHide:true});
+  assert.equal(identity.status,0,identity.stderr);
+  assert.equal(identity.stdout.trim(),'HORUS Test','Ensaio exige identidade isolada HORUS Test');
+}
 const python=path.join(repo,'backend/.venv/Scripts/python.exe');
 const support=path.join(repo,'scripts/updater-e2e-support.py');
 const install=path.join(root,'app'), data=path.join(root,'data');
