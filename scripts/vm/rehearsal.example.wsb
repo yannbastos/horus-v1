@@ -1,0 +1,10 @@
+<Configuration>
+  <!-- Replace absolute host paths; never map operational app/data folders. -->
+  <Networking>Disable</Networking>
+  <ClipboardRedirection>Disable</ClipboardRedirection>
+  <MappedFolders>
+    <MappedFolder><HostFolder>C:\REPLACE\horus-vm-input\input</HostFolder><SandboxFolder>C:\HorusInput</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>C:\REPLACE\horus-vm-evidence</HostFolder><SandboxFolder>C:\HorusEvidence</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
+  </MappedFolders>
+  <LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\HorusInput\guest.ps1 -InputDirectory C:\HorusInput -OutputDirectory C:\HorusEvidence -DisposableVm</Command></LogonCommand>
+</Configuration>

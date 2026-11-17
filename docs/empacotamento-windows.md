@@ -459,3 +459,127 @@ Regressão estática da política final, sem executar instalador:
 `python scripts/test-installer-location.py StaticContract` (3 casos).
 A suíte completa também inclui as nove regressões nativas de seleção inicial;
 executá-la na VM para reproduzir a herança histórica e a política final.
+
+### Roteiro automatizado para convidado descartável (HOR-147 / HOR-100)
+
+Os arquivos em `scripts/vm/` automatizam o roteiro acima. Preparação e execução
+são separadas: `prepare-host.ps1` somente consulta pré-requisitos ou gera pacotes;
+`guest.ps1` instala e só pode ser usado no convidado descartável. O manifesto
+registra o nome do hospedeiro, que o convidado recusa antes de qualquer instalação
+ou escrita de evidência. Essa guarda e `-DisposableVm` evitam execução acidental;
+não constituem uma fronteira contra alguém que edite o manifesto ou o script.
+Não executar o convidado no computador operacional nem editar a guarda para fazê-lo
+passar. Nenhum roteiro ativa Sandbox/Hyper-V, reinicia o Windows ou baixa dependências.
+
+**Preparação no hospedeiro, sem instalar:**
+
+```powershell
+# Apenas consulta ferramentas/versões; não compila nem cria pacotes.
+powershell -NoProfile -File scripts/vm/prepare-host.ps1
+# Executar posteriormente, quando autorizado o custo do build:
+powershell -NoProfile -File scripts/vm/prepare-host.ps1 -Build -VersionN 0.1.0 -VersionNext 0.1.1
+```
+
+`-Build` exige Node, dependências locais e Rust/MSVC já preparados, reutiliza o
+hook oficial do backend e faz dois builds completos, sem alterar manifestos
+versionados. O target Rust e os dois instaladores ficam exclusivamente sob uma
+nova `%TEMP%\horus-vm-input-<uuid>\`; a pasta `input/` contém os instaladores de
+produção `HORUS` / `com.horus.audiovisual`, manifesto com versão/SHA-256/commit e
+os dois scripts convidados. Não publica nem executa instaladores e não reutiliza
+o diretório temporário da entrega anterior. Backend/dist e dist frontend são
+saídas ignoradas normais do build, não dados operacionais. Estimativa **não medida**:
+15–60 minutos e vários GiB num build frio; a segunda compilação pode aproveitar
+incrementais no mesmo target, mas o hook do backend roda novamente. Sem `-Build`
+não instala dependências, não compila nem altera recursos do Windows.
+
+**Pré-requisitos do convidado:** Windows x64 com sessão gráfica desbloqueada,
+Windows PowerShell 5.1, WebView2 Evergreen x64, resolução suficiente para a janela
+do app (recomenda-se 1920×1080), porta loopback 19447 livre e um usuário padrão
+sem token elevado. Não são necessários Python, Node, Playwright, Rust ou rede no
+convidado: CDP usa `ClientWebSocket`, a automação do desinstalador usa UI Automation
+e o SQLite fictício usa `winsqlite3.dll` do Windows. As pastas de dados e registros
+de HORUS precisam estar ausentes; a saída de evidências deve ser nova a cada execução.
+
+**WebView2 no Sandbox:** disponibilidade **não verificada nesta máquina**, pois
+Sandbox e Hyper-V ainda não foram habilitados. Não presumir que a imagem escolhida
+contenha runtime, mesmo que o hospedeiro tenha Edge/WebView2. O convidado procura
+`msedgewebview2.exe` em instalações Evergreen por máquina/usuário e grava a versão;
+ausência gera `results.json` com falha, sem instalar HORUS nem baixar nada.
+Se faltar, obter explicitamente o **Evergreen Standalone Installer x64** oficial,
+conferir assinatura Microsoft e hash, transferir como pré-requisito separado e
+instalá-lo **somente no convidado**, por ação explícita do operador; depois preparar
+snapshot limpo e executar novamente. Não usar bootstrapper que dependa de rede.
+A Microsoft documenta o [Standalone Installer para distribuição offline](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution).
+Isso preserva `webviewInstallMode=skip` do produto, sem alterar o instalador.
+
+**Windows Sandbox:** habilitação do recurso e reinício pertencem ao usuário,
+com administrador; não são feitos pelos scripts. Copiar
+`scripts/vm/rehearsal.example.wsb`, substituir os dois `HostFolder` por caminhos
+absolutos existentes: a pasta `input/` fica somente leitura em `C:\HorusInput`;
+uma pasta vazia independente fica gravável em `C:\HorusEvidence`. O exemplo
+desabilita rede e clipboard e dispara o roteiro pelo comando de logon. Não mapear
+repositório, instalação, credenciais ou dados pessoais. A pasta de saída é a única
+superfície gravável do hospedeiro exposta ao convidado.
+
+A sessão padrão de algumas imagens Sandbox usa conta administrativa: o roteiro
+**interrompe**, registrando esse pré-requisito, se detectar token elevado, pois tal
+sessão não comprova instalação por usuário sem elevação. O operador deve preparar
+explicitamente um usuário padrão no convidado e executar o mesmo comando nessa
+sessão (por exemplo, usando `runas /profile` e credenciais locais descartáveis);
+garantir que esse usuário leia o mapeamento de entrada e grave na saída. O script
+não cria contas nem manipula senhas. Se a imagem Sandbox não permitir uma sessão
+gráfica padrão funcional ou não disponibilizar WebView2 offline, usar Hyper-V.
+O `.wsb` é um exemplo com diagnóstico seguro de pré-requisitos, não uma promessa
+de que qualquer imagem padrão já atenda ao teste. Não aceitar UAC durante o ensaio.
+
+**Hyper-V equivalente:** o operador cria VM Windows x64, instala WebView2 offline,
+prepara usuário padrão e resolução, desconecta o adaptador de rede e cria um
+checkpoint **antes de HORUS**. Transferir `input/` por ISO somente leitura;
+usar disco/pasta exclusivamente de evidências para saída. Em console interativo
+do convidado, sem executar como administrador:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\guest.ps1 `
+  -InputDirectory D:\ -OutputDirectory C:\HorusEvidence -DisposableVm
+```
+
+Ao fim, copiar evidências, restaurar o checkpoint ou destruir a VM; não restaurar
+dados no hospedeiro. Para repetir os ramos em estados independentes, restaurar o
+checkpoint e escolher nova pasta de evidências. O roteiro cobre os dois modos numa
+execução: N → N+1 → desinstalação interativa → reinstalação N+1 → desinstalação `/S`;
+todas as instalações omitem `/D`, inclusive a atualização `/UPDATE` sem relançar.
+
+**Evidência e limites:** o convidado confere destino/versão em ambas as chaves,
+semeia SQLite, projeto, preferência e mídia fictícios nas duas pastas de dados,
+abre o desktop, maximiza por Win32, abre Ajustes via CDP e captura PNG do WebView
+e da tela inteira. Confere `IsZoomed`, dimensões de documento versus viewport e
+amostra fundos brancos por DOM (HOR-148). As imagens ainda precisam de revisão
+visual humana: a amostragem não prova ausência de toda possível falha de pintura.
+Após fechar o app normalmente, verifica integridade SQLite, aguarda estabilidade e
+guarda hashes de **todos** os arquivos nas duas pastas, incluindo o workspace gerado;
+atualização, reinstalação e cada desinstalação devem preservá-los. A desinstalação
+interativa recusa qualquer checkbox, captura a confirmação e aciona Uninstall/
+Desinstalar via UI Automation. Outro idioma/layout não reconhecido falha com
+evidências em vez de clicar por coordenadas. O modo silencioso passa `/S`.
+
+Saída: `results.json` (`passed` somente se todas as etapas passaram), transcript,
+versão WebView2, commit do pacote, hashes antes/depois, `settings-layout.json` e
+capturas PNG. Timeout, falta de pré-requisito, divergência ou falha de UI produz
+saída 1 e resultado de falha; o convidado fica preservado para diagnóstico, sem
+matar processos por nome ou remover dados. Se a falha ocorre antes de validar a
+separação hospedeiro/entrada/saída, só há diagnóstico no console, sem escrita.
+Não confundir o ciclo de instaladores com o updater pelo plugin: assinatura,
+download/confirmação do canal, backup do updater, migração de schema e primeiro
+vídeo não são testados por este roteiro.
+
+Validação segura no hospedeiro:
+
+```powershell
+python scripts/vm/test_vm_rehearsal.py
+```
+
+Sete testes cobrem recusas sem efeitos, versões, XML/mapeamentos e preflight;
+incluem parse de quatro scripts PowerShell, cinco asserções com processo simulado
+e integridade/hash de um SQLite temporário criado pelo helper nativo. Não executam
+instalador, app, CDP, UI Automation nem build. A execução real do roteiro, a tela de
+Ajustes, ausência de UAC e preservação instalada continuam dependentes da VM.
