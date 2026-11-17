@@ -1,0 +1,31 @@
+{
+  "name": "horus-updates",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --env test",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "admin": "node admin/tokens.mjs",
+    "validate-release": "node validate-release.mjs",
+    "publish-manifest": "node publish-manifest.mjs"
+  },
+  "dependencies": {
+    "@kaito-tokyo/minisign-verify": "0.1.4",
+    "aws4fetch": "1.0.20",
+    "semver": "7.7.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261117.1",
+    "@types/node": "24.10.1",
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260730.0",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7",
+    "wrangler": "4.164.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
