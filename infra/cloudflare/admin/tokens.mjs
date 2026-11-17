@@ -52,6 +52,9 @@ export function wranglerAdmin(channel, remote = false) {
       await withFile('{}', path => run(['r2', 'object', 'put', `${bucket}/${channel}/revoked/${hash}`, '--file', path]));
     },
     async list() {
+      // Wrangler 4.164.0 percorre todos os cursores (local: namespace.list;
+      // remoto: fetchListResult/result_info.cursor). A saída já agrega as páginas;
+      // a CLI não expõe --cursor. Não truncar nem repaginar esse array completo.
       const result = JSON.parse(await run(['kv', 'key', 'list', '--binding', 'INSTALLATIONS', '--prefix', 'installation:']));
       if (!Array.isArray(result)) throw new Error('Listagem KV inválida');
       return result.map(entry => entry.name.slice('installation:'.length)).filter(id => hashRE.test(id));
@@ -71,13 +74,16 @@ export async function issue(store, channel, label) {
 export async function revoke(store, channel, id) {
   channelName(channel);
   if (!hashRE.test(id)) throw new Error('ID inválido');
-  // Primeiro a barreira forte. Mesmo falha/atraso na leitura KV não reabre acesso.
+  // Valide a instalação antes de qualquer escrita, inclusive no R2.
+  const record = await store.get(id);
+  if (!record || record.channel !== channel) throw new Error('Canal incorreto ou instalação ausente');
+  // A barreira forte continua sendo gravada antes da flag KV.
   await store.revokeMarker(id);
   try {
-    const record = await store.get(id);
-    if (record.channel !== channel) throw new Error('Canal incorreto');
     await store.put(id, { ...record, revoked: true });
-  } catch { throw new Error('Acesso revogado no R2; atualização da flag KV falhou, repita a revogação pelo mesmo ID'); }
+  } catch (cause) {
+    throw new Error('Acesso revogado no R2; atualização da flag KV falhou, repita a revogação pelo mesmo ID', { cause });
+  }
 }
 
 export async function list(store, channel) {

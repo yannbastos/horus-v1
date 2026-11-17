@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { validateRelease } from '../validate-release.mjs';
 import { publishManifest } from '../publish-manifest.mjs';
-import { issue, revoke, list } from '../admin/tokens.mjs';
+import { issue, revoke, list, wranglerAdmin } from '../admin/tokens.mjs';
+import { getPlatformProxy } from 'wrangler';
 import { createStore } from '../storage.mjs';
 
 // Fixture PÚBLICA CC0-1.0, Kaito Udagawa (2026), minisign-js/test_fixtures/test.dat.
@@ -156,17 +158,50 @@ describe('Administração sem persistir token', () => {
     expect(JSON.stringify(await list(admin, 'test'))).not.toContain(token);
     expect(await list(admin, 'production')).toEqual([]);
   });
-  it('grava marcador R2 antes de ler/gravar flag KV', async () => {
+  it('valida cadastro antes do marcador R2 e grava marcador antes da flag KV', async () => {
     const calls = [];
     await revoke({ revokeMarker: async () => calls.push('r2'), get: async () => { calls.push('kv-get'); return { channel: 'test', revoked: false }; }, put: async (_, value) => { calls.push('kv-put'); expect(value.revoked).toBe(true); } }, 'test', 'a'.repeat(64));
-    expect(calls).toEqual(['r2', 'kv-get', 'kv-put']);
+    expect(calls).toEqual(['kv-get', 'r2', 'kv-put']);
   });
   it('falha R2 interrompe revogação, falha KV reporta revogação parcial segura', async () => {
     let touched = false;
-    await expect(revoke({ revokeMarker: async () => { throw new Error('R2 falhou'); }, get: async () => { touched = true; } }, 'test', 'a'.repeat(64))).rejects.toThrow('R2 falhou');
+    await expect(revoke({ get: async () => ({ channel: 'test' }), revokeMarker: async () => { throw new Error('R2 falhou'); }, put: async () => { touched = true; } }, 'test', 'a'.repeat(64))).rejects.toThrow('R2 falhou');
     expect(touched).toBe(false);
-    await expect(revoke({ revokeMarker: async () => {}, get: async () => { throw new Error('KV falhou'); } }, 'test', 'a'.repeat(64))).rejects.toThrow('Acesso revogado no R2');
+    const cause = new Error('KV falhou');
+    await expect(revoke({ revokeMarker: async () => {}, get: async () => ({ channel: 'test' }), put: async () => { throw cause; } }, 'test', 'a'.repeat(64)))
+      .rejects.toMatchObject({ message: expect.stringContaining('Acesso revogado no R2'), cause });
   });
+  it.each([{ channel: 'production' }, null])('não grava marcador nem flag para outro canal/instalação ausente', async record => {
+    const calls = [];
+    await expect(revoke({ get: async () => record, revokeMarker: async () => calls.push('r2'), put: async () => calls.push('kv') }, 'test', 'a'.repeat(64)))
+      .rejects.toThrow('Canal incorreto ou instalação ausente');
+    expect(calls).toEqual([]);
+  });
+  it('propaga falha de leitura KV antes de qualquer escrita', async () => {
+    const cause = new Error('Leitura KV indisponível');
+    const calls = [];
+    await expect(revoke({ get: async () => { throw cause; }, revokeMarker: async () => calls.push('r2'), put: async () => calls.push('kv') }, 'test', 'a'.repeat(64)))
+      .rejects.toBe(cause);
+    expect(calls).toEqual([]);
+  });
+  it('Wrangler lista todas as chaves quando KV exige mais de uma página', async () => {
+    // Exercita a paginação real da CLI fixada no lockfile, sem API/recurso remoto.
+    const ids = Array.from({ length: 1001 }, (_, i) => createHash('sha256').update(`pagination-${Date.now()}-${i}`).digest('hex'));
+    const proxyOptions = { configPath: fileURLToPath(new URL('../wrangler.toml', import.meta.url)), environment: 'test' };
+    let proxy = await getPlatformProxy(proxyOptions);
+    try {
+      for (let i = 0; i < ids.length; i += 100) await Promise.all(ids.slice(i, i + 100).map(id => proxy.env.INSTALLATIONS.put(`installation:${id}`, '{}')));
+      const first = await proxy.env.INSTALLATIONS.list({ prefix: 'installation:', limit: 1000 });
+      expect(first.list_complete).toBe(false); expect(first.cursor).toBeTruthy();
+      await proxy.dispose(); proxy = undefined;
+      const returned = new Set(await wranglerAdmin('test').list());
+      for (const id of ids) expect(returned.has(id)).toBe(true);
+    } finally {
+      proxy ??= await getPlatformProxy(proxyOptions);
+      try { for (let i = 0; i < ids.length; i += 100) await Promise.all(ids.slice(i, i + 100).map(id => proxy.env.INSTALLATIONS.delete(`installation:${id}`))); }
+      finally { await proxy.dispose(); }
+    }
+  }, 60_000);
   it('recusa entrada inválida antes de manipular storage', async () => {
     await expect(issue({}, 'test', '\n')).rejects.toThrow('Rótulo');
     await expect(issue({}, 'other', 'x')).rejects.toThrow('Canal');
