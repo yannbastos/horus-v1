@@ -1,0 +1,51 @@
+# Revisão de Segurança Independente — Worker Cloudflare (HOR-163)
+
+- **Escopo analisado:** `infra/cloudflare/**` na branch `yannbastos/rel-a-worker` (commit `0881cc6`) sobre `origin/main` em `C:\Users\yannn\01. Projetos\HORUS\horus`.
+- **Metodologia:** inspeção direta do código-fonte e execução local isolada em cópia temporária (`%TEMP%\rev-worker-hor163`, removida ao término) com `npm ci --ignore-scripts`, `npm run typecheck` e `npx vitest run` (60 testes existentes + 7 testes adversariais novos no Miniflare = **67/67 aprovados**). Nenhuma alteração foi feita no repositório e nenhuma ação foi executada na conta Cloudflare.
+
+---
+
+## Veredito: **APROVADO COM RESSALVAS**
+
+Nenhum ataque de bypass de autenticação, path traversal, enumeração pré-autenticação, vazamento de segredos, bypass de revogação ou adulteração de assinatura minisign funcionou. As ressalvas restringem-se a **3 achados de severidade Baixa** (tratamento de erro/marcador órfão em `revoke()`, limitações inerentes de rate limiting em memória/plano gratuito e paginação em `list()`).
+
+---
+
+## Tabela de Achados
+
+| ID | Severidade | Local | Achado (Fato vs. Hipótese) | Reprodução | Correção Proposta (não aplicada) |
+|---|---|---|---|---|---|
+| **SEC-01** | **Baixo** | [tokens.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/admin/tokens.mjs#L71-L81) | **Fato:** `revoke(store, channel, id)` grava o marcador `<channel>/revoked/<id>` no R2 (linha 75) antes de verificar no KV se o ID existe ou pertence a `channel`. Além disso, `if (record.channel !== channel) throw new Error('Canal incorreto')` (linha 78) fica dentro do `try` cujo `catch` (linha 80) engole o erro e lança `'Acesso revogado no R2; atualização da flag KV falhou...'`. | Chamar `revoke(store, 'test', prodId)` com um registro cujo `channel` é `'production'`: o marcador `test/revoked/<prodId>` é gravado no bucket de teste e a função retorna mensagem de falha de KV em vez de `'Canal incorreto'` (reproduzido em teste adversarial). | Validar/distinguir `'Canal incorreto'` fora do `catch` genérico de KV (ou ler o KV antes apenas quando o registro existir, mantendo a gravação do marcador R2 antes da gravação `revoked: true` no KV). |
+| **SEC-02** | **Baixo** | [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L17-L33) | **Fato:** `limited(request)` mantém estado apenas na memória do isolate (`Map` limitado a 2048 IPs) e retorna `false` se `CF-Connecting-IP` estiver ausente. **Hipótese:** em produção atrás da borda Cloudflare `CF-Connecting-IP` é injetado, mas um token válido comprometido (até 120 req/min/IP = 172.800 req/dia) ou tráfego distribuído por múltiplos isolates pode esgotar a franquia diária gratuita de Workers/KV (100k req/dia) até a revogação, e >2048 IPs distintos num mesmo isolate em 60 s bloqueiam o 2049º IP com `429`. | Enviar requisições sem `CF-Connecting-IP` (local/`wrangler dev`) ignora o limite; preencher 2048 chaves ativas no `Map` retorna `429` para novos IPs. | Manter o limite local como defesa de memória e, em caso de abuso em produção, aplicar regra de Rate Limiting no WAF/borda Cloudflare antes do Worker. |
+| **SEC-03** | **Baixo** | [tokens.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/admin/tokens.mjs#L54-L58) | **Fato:** `wranglerAdmin().list()` executa `wrangler kv key list` sem paginação explícita e faz 1 `kv key get` sequencial por instalação. **Hipótese:** acima de 1000 chaves no KV, a listagem administrativa pode vir incompleta ou lenta, dificultando identificar um ID para revogação. | Inspeção estática de `admin/tokens.mjs:54-58`. | Usar `--prefix` com paginação ou documentar o limite operacional para o número esperado de estações. |
+
+---
+
+## Matriz de Ataques e Verificações
+
+### 1. Autenticação, Métodos e Timing
+- **Sem cabeçalho / `Bearer ` vazio / `bearer` minúsculo / `BEARER` / `Basic` / espaços extras (`Bearer  <tok>`) / múltiplos cabeçalhos (`Bearer t1, Bearer t2`) / token em query string:** **BLOQUEADO** (403 `Acesso negado`). Verificado em [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L35-L45) pela regex `/^Bearer ([A-Za-z0-9_-]{43})$/` e confirmado em teste adversarial no Miniflare.
+  - *Observação:* `Authorization: Bearer <token_valido> ` (espaço à direita) retorna `200` no Miniflare porque a API `Headers` do padrão Fetch remove espaços em branco opcionais (OWS) das extremidades do valor do cabeçalho antes de entregá-lo ao Worker — comportamento padrão HTTP que exige posse do token válido de 256 bits.
+- **Métodos `HEAD`, `OPTIONS`, `POST`, `PUT`, `DELETE`, `PATCH`:** **BLOQUEADO**. `authorized()` executa na linha 133 antes da verificação de método (linha 136); sem token válido retorna `403 Acesso negado`; autenticado, métodos fora de `GET`/`HEAD` retornam `405` com `Allow: GET, HEAD`.
+- **Comparação não constante do hash (timing):** **BLOQUEADO / N/A**. Em [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L38-L44), o Worker calcula `crypto.subtle.digest('SHA-256', ...)` e usa o digest hex diretamente como chave de busca no R2 (`head`) e no KV (`get`), sem comparação de segredos ou hashes em JavaScript com `===`. O `head` no R2 curto-circuita antes do `get` no KV apenas para tokens já revogados (2^-256 de chance de acerto por força bruta).
+
+### 2. Path Traversal, Normalização e Isolamento de Canais
+- **Traversal (`..`, `%2e%2e`, `..%2f`, `\\`), barras duplas (`//`), arquivos fora de `<canal>/releases/` (`revoked/<hash>`, `extra.txt`), versão de outro canal, `/production/latest.json` com token de `test`:** **BLOQUEADO** (`403` fora de `/<canal>/` na linha 134; `404` na validação estrita de `releaseRE` + `validVersion` + allowlist `[file, file.sig, 'release.json']` em [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L92-L97)). Confirmado em teste adversarial.
+- **Canal inválido / injeção no nome do canal:** **BLOQUEADO**. `env.CHANNEL` é restringido a `'test' | 'production'` em [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L131), `channelName()` em [tokens.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/admin/tokens.mjs#L14-L17) e `assert` em [validate-release.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/validate-release.mjs#L32).
+- **Enumeração:** **BLOQUEADO** pré-autenticação e entre canais (`403 Acesso negado` uniforme em `fetch` linhas 131-135). Pós-autenticação no próprio canal, artefato ausente retorna `404` e manifesto inconsistente retorna `503`.
+
+### 3. Revogação e Condições de Corrida
+- **Token revogado no R2 com KV ainda `revoked: false` (cache/eventual consistency):** **BLOQUEADO** (`403`). [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L40-L41) consulta `RELEASES.head(`${env.CHANNEL}/revoked/${hash}`)` sem Cache API antes do KV.
+- **Falha do R2 na consulta do marcador:** **BLOQUEADO** (`403`). Exceção em `RELEASES.head` é capturada pelo `try/catch` em [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L140-L143) e retorna `deny()`, sem consultar o KV.
+- **Corrida emissão/revogação:** **SEGURA** para acesso (se revogado logo após emissão antes de o KV propagar, o marcador R2 já bloqueia imediatamente; `revoke()` avisa para repetir a atualização da flag KV quando o `get` no KV falha).
+
+### 4. Range, Cache, CORS e Vazamento de Segredos
+- **Range malformado/gigante (`bytes=0-99999999999999999999`, multi-range, negativo, `If-Range` divergente):** **BLOQUEADO** (`416` para Ranges inválidos/acima de `MAX_SAFE_INTEGER` e clamping `Math.min(end, size - 1)` em [index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L75-L90); `If-Range` divergente serve `200` completo).
+- **`If-None-Match` / Cache compartilhado / `Cache-Control`:** **BLOQUEADO**. Todas as respostas (manifesto, artefatos e erros) incluem `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` e `Vary: Authorization` ([index.ts](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/src/index.ts#L11)), e o Worker não utiliza `caches.default` nem responde `304`.
+- **CORS:** **BLOQUEADO**. Nenhum cabeçalho `Access-Control-Allow-*` é emitido mesmo quando `Origin` é enviado; `OPTIONS` retorna `403`/`405`.
+- **Logs / Stack traces / Credenciais no app:** **BLOQUEADO**. Não há `console.log` no Worker, `wrangler.toml` desativa `observability` e `send_metrics`, `catch` retorna texto fixo `'Acesso negado'`, e nenhuma credencial administrativa existe em `src/index.ts` ou `wrangler.toml`.
+
+### 5. Scripts Admin, Validador de Publicação e Limites Free Tier
+- **Admin ([tokens.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/admin/tokens.mjs)):** gera 256 bits (`randomBytes(32)`), recusa execução sem TTY antes de gerar token (linha 99), persiste apenas SHA-256 no KV, usa `execFile` (sem shell) e arquivos temporários `0o600` removidos no `finally`, grava marcador R2 antes da flag KV. (Ressalvas **SEC-01** e **SEC-03** acima.)
+- **Validador e Publicação ([validate-release.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/validate-release.mjs), [publish-manifest.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/publish-manifest.mjs), [storage.mjs](file:///C:/Users/yannn/01.%20Projetos/HORUS/horus/infra/cloudflare/storage.mjs)):** verifica assinatura criptográfica real via `@kaito-tokyo/minisign-verify` (adulterar `.exe` ou 1 caractere da `.sig` falha mesmo com SHA-256 atualizado), recusa artefatos ausentes, versões regressivas/duplicadas e URLs fora da origem/canal, e publica `latest.json` por último com `PUT` condicional (`If-Match` / `If-None-Match: *`, sem retry).
+- **Limites do plano gratuito:** **Fato:** `latest.json` consome 5 operações R2 Classe B (1 `head` revogação + 1 `get` manifesto + 3 `head` artefatos) + 1 leitura KV; download de `.exe` consome 3 operações R2 Classe B (1 `head` revogação + 1 `head` + 1 `get` streaming) + 1 leitura KV, com CPU < 10 ms por requisição. Ver **SEC-02** para risco de esgotamento de cota por token abusivo.
