@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+from typing import Literal
 import sqlite3
 import tempfile
 import time
@@ -35,7 +36,7 @@ from .radar_youtube.state import RadarState
 from .radar_workflow import RadarWorkflowRequest, adapt, demo, eligibility, summary
 from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
-from .scripts import ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
+from .scripts import HermesScriptRequest, ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
 from .body_limit import BodyLimitMiddleware
 from .error_center import ErrorCenter
 from .review_comments import CommentRequest, DecisionRequest, ReviewCommentService
@@ -47,6 +48,11 @@ from .update_backup import create_update_backup
 from .file_access import PathNotAllowed, client_path
 from .workflows import AuthorizationRequest, ManualWorkflowRequest, ReviewRequest, RevisionRequest, WorkflowConflict, WorkflowRequest
 from .whisper_download import ConfirmDownload as ConfirmWhisperDownload, DownloadStarted as WhisperDownloadStarted, DownloadCatalog
+
+
+from . import egress
+from .human_checkpoints import ACTIONS as CHECKPOINT_ACTIONS, CheckpointService
+from .transmissions import TransmissionLog
 from .whisper_models import ImportModelRequest, InstalledModel, ModelCatalog, ModelConflict, ModelName, RemovedModel, WhisperModels
 
 STREAM_KEEPALIVE_SECONDS = 10
@@ -76,6 +82,18 @@ class ImportRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class CheckpointRequest(BaseModel):
+    """Aprovação humana prévia para gastar (narração paga) ou publicar. Execução cognitiva do Hermes nasce em /authorize."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["paid_narration", "publish"]
+    subject: str = Field(pattern=r"^[a-f0-9]{64}$")
+    description: str = Field(min_length=1, max_length=200)
+    limit_amount: str | None = Field(default=None, pattern=r"^[0-9]{1,12}(?:\.[0-9]{1,8})?$")
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    ttl_seconds: int = Field(default=900, ge=30, le=3600)
+    approved_by: Literal["human"]
+
+
 class TranscriptSave(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str = Field(min_length=1, max_length=4096)
@@ -102,8 +120,10 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         raise ValueError("HORUS_RADAR_EXECUTOR inválido. Use hermes_simulated ou hermes.")
     radar_state = RadarState(settings.data_dir / "radar" / "radar-youtube.sqlite3")
     manager = JobManager(store, settings)
-    hermes = HermesConnector(settings)
-    scripts = ScriptService(store)
+    transmissions = TransmissionLog(store)
+    egress.configure(egress.build_gateway(audit=transmissions))  # ponto único de saída HTTP (HOR-111)
+    hermes = HermesConnector(settings, transmissions)
+    scripts = ScriptService(store, settings)
     license_reviews = LicenseReviewService(store, settings.data_dir)
     exports = ExportService(manager.productions)
     publishing = PublishingService(manager.productions)
@@ -266,10 +286,29 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise refused(error) from None
         return FileResponse(path, media_type=media_type)
 
+
+    checkpoints = CheckpointService(store, transmissions)
+
+    @app.post("/v1/checkpoints", status_code=201)
+    def create_checkpoint(request: CheckpointRequest, idempotency_key: str = Header(min_length=1, max_length=128)):
+        try:
+            return checkpoints.grant(**request.model_dump(), key=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/v1/checkpoints")
+    def list_checkpoints(limit: int = 50, after: int = 0):
+        return checkpoints.page(limit, after)
+
     @app.get("/health")
     async def health():
         return {"status": "ready", "database_id": store.database_id, "factory_available": settings.command() is not None,
                 "hermes_connected": hermes.status()["connected"], "version": "0.1.0"}
+
+    @app.get("/v1/security/transmissions")
+    async def list_transmissions(limit: int = 50, after: int = 0):
+        """Registro append-only de envios ao Hermes: somente metadados (tamanho/SHA-256), nunca conteúdo."""
+        return transmissions.page(limit, after)
 
     @app.get("/v1/security/status")
     async def inspect_security():
@@ -357,6 +396,8 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             raise HTTPException(409, str(error)) from error
         except MetadataTextError as error:  # recusa explicada: nada é descartado em silêncio
             raise HTTPException(422, str(error)) from None
+        except SecurityGate as error:
+            raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         except ValueError as error:
             raise HTTPException(422, "Estrutura do roteiro inválida.") from error
 
@@ -367,10 +408,27 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         return JSONResponse(record, status_code=201 if created else 200)
 
     @app.post("/v1/workflows/{workflow_id}/scripts", status_code=201)
-    def generate_script(workflow_id: str, request: ScriptRequest | ManualScriptRequest,
+    def generate_script(workflow_id: str, request: ScriptRequest | ManualScriptRequest | HermesScriptRequest,
                         idempotency_key: str = Header(min_length=1, max_length=128)):
-        record, created = script_call(lambda: scripts.create(workflow_id, request, idempotency_key))
+        if settings.workflow_executor == "hermes" and isinstance(request, ScriptRequest) and not isinstance(request, HermesScriptRequest):
+            try:
+                require_secure(settings)
+            except SecurityGate as error:
+                scripts.refuse_gate(workflow_id)
+                raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
+            raise HTTPException(409, "Autorize explicitamente cada execução com source=hermes e authorize=true.")
+        try:
+            record, created = script_call(lambda: scripts.create_hermes(workflow_id, request, idempotency_key)
+                                         if isinstance(request, HermesScriptRequest) else scripts.create(workflow_id, request, idempotency_key))
+        except SecurityGate as error:
+            raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         return JSONResponse(record, status_code=201 if created else 200)
+
+    @app.post("/v1/workflows/{workflow_id}/scripts/reconcile")
+    def reconcile_script(workflow_id: str, request: RevisionRequest):
+        """Conciliação de roteiro Hermes com desfecho desconhecido; nunca reenvia nem cria nova reserva."""
+        record, created = script_call(lambda: scripts.reconcile_hermes(workflow_id, request.expected_revision))
+        return JSONResponse(record, status_code=200)
 
     @app.get("/v1/workflows/{workflow_id}/scripts")
     def list_scripts(workflow_id: str):
@@ -645,6 +703,7 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             try:
                 require_secure(settings, store)
             except SecurityGate as error:
+                transmissions.best_effort("gate_refusal", "authorize", "refused_gate", workflow_id=workflow_id, detail="security_gate")
                 raise HTTPException(409, {"code": "security_gate", "message": str(error)}) from None
         try:
             return await manager.workflows.authorize(workflow_id, request, idempotency_key)

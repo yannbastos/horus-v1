@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+from . import egress
 from .config import Settings
 from .file_access import client_path, PathNotAllowed
 from .radar_youtube.state import RadarState
@@ -248,6 +249,7 @@ class JobManager:
             return [*self.settings.worker(), "transcribe", "--path", str(path.resolve()), "--model", request.model,
                     "--language", request.language, "--models-dir", str(self.settings.data_dir / "models")]
         if isinstance(request, DownloadRequest):
+            egress.gateway().authorize("youtube_download", "GET", request.url)
             directory = client_path(request.directory, protected=(self.settings.data_dir,))
             if not directory.is_dir():
                 raise ValueError("Pasta de destino não encontrada.")

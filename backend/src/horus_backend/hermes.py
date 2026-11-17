@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from . import egress
 from .config import Settings
 
 MAX_RESPONSE = 128 * 1024
@@ -54,6 +55,7 @@ def get_json(base_url: str, token: str, path: str):
     validate_origin(base_url)
     # Ignorar proxies de ambiente e recusar redirects: a credencial fica na origem local.
     opener = build_opener(ProxyHandler({}), NoRedirect())
+    egress.gateway().authorize("hermes", "GET", base_url + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     request = Request(base_url + path, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     with opener.open(request, timeout=3) as response:
         raw = response.read(MAX_RESPONSE + 1)
@@ -66,8 +68,9 @@ def get_json(base_url: str, token: str, path: str):
 
 
 class HermesConnector:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, audit=None):
         self.settings = settings
+        self.audit = audit
         self.lock = asyncio.Lock()
         self.last_report = None
         self.last_check = 0.0
@@ -125,5 +128,9 @@ class HermesConnector:
             if self.last_report and time.monotonic() - self.last_check < 2:
                 return self.status()
             self.last_report = await asyncio.to_thread(self._probe)
+            if self.audit is not None and self.last_report.get("state") not in {"not_configured", "invalid_config"}:
+                # O diagnóstico só envia o token em cabeçalho (GET /health e /v1/capabilities): sem envelope.
+                self.audit.best_effort("probe", "diagnostic", "sent" if self.last_report.get("connected") else "error",
+                                       detail="probe_" + str(self.last_report.get("state", "unknown")).lower()[:30])
             self.last_check = time.monotonic()
             return self.status()

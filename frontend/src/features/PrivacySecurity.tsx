@@ -22,6 +22,8 @@ import {
   categorizeTool,
 } from '../components/SecurityWidgets';
 import type { HermesToolsSummary, ToolCategory } from '../components/SecurityWidgets';
+import TransmissionsAudit from './TransmissionsAudit';
+import CheckpointsHistory from './CheckpointsHistory';
 
 type LoadFailure = {
   kind: 'auth' | 'missing' | 'server' | 'network' | 'timeout' | 'other';
@@ -290,7 +292,13 @@ export default function PrivacySecurity({ connection }: { connection: Connection
             }
           />
 
-          <AuditSection audit={status.audit ?? null} />
+          <AuditSection
+            audit={status.audit ?? null}
+            connection={connection}
+            refreshKey={revision}
+          />
+
+          <CheckpointsSection connection={connection} refreshKey={revision} />
 
           <CredentialsSection credentials={status.credentials ?? null} />
 
@@ -971,8 +979,12 @@ function ExternalServicesSection({
 // --- 6. Auditoria ---
 function AuditSection({
   audit,
+  connection,
+  refreshKey,
 }: {
   audit: SecurityStatusResponse['audit'];
+  connection: Connection;
+  refreshKey: number;
 }) {
   const isAvailable = audit?.available === true;
 
@@ -980,36 +992,62 @@ function AuditSection({
     <StatusCard
       eyebrow="REGISTRO E CONFORMIDADE"
       title="Auditoria de Transmissões"
-      subtitle="Registro estruturado de chamadas, requisições externas e eventos de segurança."
+      subtitle="Registro permanente do que sai deste computador. Apenas metadados são guardados, sem conteúdo."
       badge={<AvailabilityBadge available={isAvailable} reason={audit?.reason ?? undefined} />}
       ariaLabel="Auditoria de Transmissões"
     >
-      <p className="muted">
-        {audit?.reason ||
-          'Registro de transmissões e eventos de segurança com carimbo de data/hora.'}
-      </p>
+      {isAvailable ? (
+        <TransmissionsAudit connection={connection} refreshKey={refreshKey} />
+      ) : (
+        <>
+          <p className="muted">
+            {audit?.reason ||
+              'Registro de transmissões e eventos de segurança com carimbo de data/hora.'}
+          </p>
 
-      {/* Estrutura vazia de auditoria enquanto available: false */}
-      <div className="data-table-container">
-        <table className="data-table" aria-label="Tabela de auditoria">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Destino</th>
-              <th>Operação</th>
-              <th>Finalidade</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colSpan={5} className="muted" style={{ textAlign: 'center', padding: '16px' }}>
-                Nenhum evento registrado. O subsistema de auditoria não está ativo nesta versão.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+          {/* Estrutura vazia de auditoria enquanto available: false */}
+          <div className="data-table-container">
+            <table className="data-table" aria-label="Tabela de auditoria">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Destino</th>
+                  <th>Operação</th>
+                  <th>Finalidade</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colSpan={5} className="muted" style={{ textAlign: 'center', padding: '16px' }}>
+                    Nenhum evento registrado. O subsistema de auditoria não está ativo nesta versão.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </StatusCard>
+  );
+}
+
+// --- 6b. Checkpoints Humanos ---
+function CheckpointsSection({
+  connection,
+  refreshKey,
+}: {
+  connection: Connection;
+  refreshKey: number;
+}) {
+  return (
+    <StatusCard
+      eyebrow="APROVAÇÃO HUMANA"
+      title="Checkpoints Humanos Recentes"
+      subtitle="Registro append-only de aprovações de uso único para gasto em USD e envios externos."
+      ariaLabel="Checkpoints Humanos Recentes"
+    >
+      <CheckpointsHistory connection={connection} refreshKey={refreshKey} />
     </StatusCard>
   );
 }

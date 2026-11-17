@@ -319,7 +319,14 @@ export type ReviewResponse = {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  code?: string;
+  detail?: unknown;
+  constructor(message: string, status: number, code?: string, detail?: unknown) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.detail = detail;
+  }
 }
 
 export async function api<T>(connection: Connection, path: string, options: RequestInit = {}): Promise<T> {
@@ -335,7 +342,18 @@ export async function api<T>(connection: Connection, path: string, options: Requ
     });
     if (!response.ok) {
       const body = await response.json().catch(() => null);
-      throw new ApiError(typeof body?.detail === 'string' ? body.detail : `Não foi possível concluir a operação (${response.status}).`, response.status);
+      const rawDetail = body?.detail;
+      const detailCode =
+        rawDetail && typeof rawDetail === 'object' && typeof rawDetail.code === 'string'
+          ? rawDetail.code
+          : undefined;
+      const detailMessage =
+        typeof rawDetail === 'string'
+          ? rawDetail
+          : rawDetail && typeof rawDetail === 'object' && typeof rawDetail.message === 'string'
+            ? rawDetail.message
+            : `Não foi possível concluir a operação (${response.status}).`;
+      throw new ApiError(detailMessage, response.status, detailCode, rawDetail);
     }
     return await response.json() as T;
   } finally {
@@ -632,7 +650,37 @@ export type SecurityCredentials = {
 export type SecurityFeatureAvailability = {
   available: boolean | null;
   enabled?: boolean | null;
-  reason: string | null;
+  reason?: string | null;
+  endpoint?: string | null;
+  append_only?: boolean | null;
+  content_stored?: boolean | null;
+};
+
+export type SecurityTransmissionItem = {
+  seq: number;
+  id: string;
+  at: string | null;
+  kind: string | null;
+  stage: string | null;
+  workflow_id: string | null;
+  job_id: string | null;
+  attempt_id: string | null;
+  run_id: string | null;
+  destination: string | null;
+  provider: string | null;
+  model: string | null;
+  envelope_bytes: number | null;
+  envelope_sha256: string | null;
+  authorization_id: string | null;
+  result: string | null;
+  detail: string | null;
+  tokens_total: number | null;
+  cost_usd: string | null;
+};
+
+export type SecurityTransmissionsResponse = {
+  items: SecurityTransmissionItem[];
+  next_after: number | null;
 };
 
 export type SecurityStatusResponse = {
@@ -684,4 +732,22 @@ export function readDiskEncryption(raw: unknown): DiskEncryptionDiagnostics | nu
   };
 }
 
+
+
+
+export async function getSecurityTransmissions(
+  connection: Connection,
+  params?: { limit?: number; after?: number },
+  signal?: AbortSignal
+): Promise<SecurityTransmissionsResponse> {
+  const query = new URLSearchParams();
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.after !== undefined) query.set('after', String(params.after));
+  const qs = query.toString();
+  return api<SecurityTransmissionsResponse>(
+    connection,
+    `/v1/security/transmissions${qs ? `?${qs}` : ''}`,
+    { signal }
+  );
+}
 

@@ -69,18 +69,19 @@ class CredentialRequest(BaseModel):
     key: SecretStr = Field(min_length=1, max_length=4096)
 
 
-def provider_registry(settings):
+def provider_registry(settings, checkpoints=None):
     credentials = Credentials(settings.data_dir)
     return {p.id: p for p in (WindowsSapi(), Piper(settings.piper_executable, settings.piper_models),
                               Kokoro(getattr(settings, "kokoro_python", None), getattr(settings, "kokoro_model_dir", None)),
-                              ElevenLabs(settings, credentials))}
+                              ElevenLabs(settings, credentials, checkpoints=checkpoints))}
 
 
 class NarrationService:
     def __init__(self, settings, store):
         self.settings, self.store = settings, store
         self.credentials = Credentials(settings.data_dir)
-        self.providers = provider_registry(settings)
+        from ..human_checkpoints import CheckpointService
+        self.providers = provider_registry(settings, CheckpointService(store))
         self.preference = settings.data_dir / 'narration-preference.json'
         self.previews = {}
         self.lock = threading.Lock()

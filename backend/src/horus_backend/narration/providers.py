@@ -5,6 +5,7 @@ from ..worker_runtime import worker_command
 import subprocess
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 from ..processes import failure_detail, run_sync
@@ -116,8 +117,8 @@ class Piper(LocalProvider):
 class ElevenLabs(LocalProvider):
     id, name, kind = 'elevenlabs', 'ElevenLabs', 'paid_api'
     license = {'name': 'Proprietary', 'url': 'https://elevenlabs.io/terms-of-use', 'notes': 'Plano não consultado; licença comercial unknown.'}
-    def __init__(self, settings, credentials, transport=None):
-        self.settings, self.credentials, self.transport = settings, credentials, transport
+    def __init__(self, settings, credentials, transport=None, checkpoints=None):
+        self.settings, self.credentials, self.transport, self.checkpoints = settings, credentials, transport, checkpoints
     def voices(self): return []  # Nenhuma consulta remota na descoberta.
     def status(self):
         result = super().status()
@@ -145,6 +146,19 @@ class ElevenLabs(LocalProvider):
                     'estimated_cost': self.estimate(text)['cost'], 'confirmed': True}
         if not self.settings.narration_paid_enabled or authorization != expected:
             raise NarrationError('paid_provider_not_authorized', 403)
+        # HOR-107: além da autorização interna, gasto exige checkpoint humano registrado (limite, validade, uso único).
+        if self.checkpoints is None:
+            raise NarrationError('paid_provider_not_authorized', 403)
+        from ..human_checkpoints import CheckpointRefused
+        cost = expected['estimated_cost']
+        if cost.get('amount') is None or not cost.get('currency'):
+            raise NarrationError('paid_provider_not_authorized', 403)   # custo desconhecido não pode ser limitado
+        try:
+            self.checkpoints.consume(action='paid_narration', subject=expected['text_sha256'], ref=voice_id,
+                                     amount=None if cost.get('amount') is None else format(Decimal(str(cost['amount'])), 'f'),
+                                     currency=cost.get('currency'))
+        except CheckpointRefused:
+            raise NarrationError('paid_provider_not_authorized', 403) from None
         key = self.credentials.get()
         if not key: raise NarrationError('paid_provider_not_authorized', 403)
         if self.transport is None: raise NarrationError('paid_provider_not_authorized', 403)

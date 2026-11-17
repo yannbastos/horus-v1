@@ -90,13 +90,31 @@ def test_estimate(client):
     assert client.post('/v1/narration/estimate', json={'provider': 'piper', 'voice_id': 'x', 'script_id': 'a' * 32, 'script_version': 1}).status_code == 404
 
 
+def paid_checkpoints(tmp_path, text='hello'):
+    """HOR-107: gasto por API paga exige checkpoint humano; concede um para o texto e devolve o serviço."""
+    from decimal import Decimal
+    from horus_backend.human_checkpoints import CheckpointService
+    from horus_backend.migrations import migrate
+    from horus_backend.storage import Store
+    path = tmp_path / 'checkpoints.sqlite3'
+    migrate(path)
+    service = CheckpointService(Store(path))
+    service.grant(action='paid_narration', subject=hashlib.sha256(text.encode()).hexdigest(), description='Narração paga de teste',
+                  limit_amount='1', currency='USD')
+    return service
+
+
+PAID = dict(elevenlabs_price_per_1k_chars=__import__('decimal').Decimal('0.30'), elevenlabs_currency='usd')
+
+
 @pytest.mark.parametrize('enabled,credential,authorized', list(itertools.product([False, True], repeat=3)))
 def test_paid_three_conditions(tmp_path, enabled, credential, authorized):
     class Transport:
         calls = 0
         def synthesize(self, **kwargs): self.calls += 1; return {'credits': 5}
     transport = Transport()
-    provider = ElevenLabs(Settings(token='x', narration_paid_enabled=enabled), SimpleNamespace(get=lambda: 'synthetic' if credential else None), transport)
+    provider = ElevenLabs(Settings(token='x', narration_paid_enabled=enabled, **PAID), SimpleNamespace(get=lambda: 'synthetic' if credential else None), transport,
+                          checkpoints=paid_checkpoints(tmp_path))
     authorization = {'text_sha256': hashlib.sha256(b'hello').hexdigest(), 'voice_id': 'mock',
                      'estimated_cost': provider.estimate('hello')['cost'], 'confirmed': True} if authorized else None
     if enabled and credential and authorized:
@@ -126,7 +144,8 @@ def test_mock_errors_sanitized(tmp_path, failure, code):
         def synthesize(self, **kwargs):
             if failure == 'timeout': raise TimeoutError('synthetic-secret')
             error = RuntimeError('synthetic-secret'); error.status_code = failure; raise error
-    provider = ElevenLabs(Settings(token='x', narration_paid_enabled=True), SimpleNamespace(get=lambda: 'synthetic-secret'), Transport())
+    provider = ElevenLabs(Settings(token='x', narration_paid_enabled=True, **PAID), SimpleNamespace(get=lambda: 'synthetic-secret'), Transport(),
+                          checkpoints=paid_checkpoints(tmp_path))
     auth = {'text_sha256': hashlib.sha256(b'hello').hexdigest(), 'voice_id': 'mock', 'estimated_cost': provider.estimate('hello')['cost'], 'confirmed': True}
     with pytest.raises(NarrationError) as error: provider.synthesize('hello', 'mock', tmp_path / 'out.wav', auth)
     assert str(error.value) == code
