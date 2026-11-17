@@ -1,0 +1,33 @@
+name = "horus-updates"
+main = "src/index.ts"
+compatibility_date = "2026-07-30"
+workers_dev = true
+send_metrics = false
+
+# Sem ambiente não existem bindings: falha fechada. IDs só após criação pelo usuário.
+[observability]
+enabled = false
+
+[env.test]
+name = "horus-updates-test"
+workers_dev = true
+[env.test.vars]
+CHANNEL = "test"
+[[env.test.r2_buckets]]
+binding = "RELEASES"
+bucket_name = "horus-updates-test"
+[[env.test.kv_namespaces]]
+binding = "INSTALLATIONS"
+id = "00000000000000000000000000000001"
+
+[env.production]
+name = "horus-updates-production"
+workers_dev = true
+[env.production.vars]
+CHANNEL = "production"
+[[env.production.r2_buckets]]
+binding = "RELEASES"
+bucket_name = "horus-updates-prod"
+[[env.production.kv_namespaces]]
+binding = "INSTALLATIONS"
+id = "00000000000000000000000000000002"

@@ -1,5 +1,7 @@
-//! Protótipo local: nenhum canal/credencial em runtime. O overlay de build habilita loopback.
+//! Canal assinado definido no overlay de build; credencial somente no cofre nativo.
+use super::update_enrollment::{InstallationVault, Vault};
 use super::{BackendState, Connection};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -25,11 +27,18 @@ pub struct UpdateState {
     progress: Option<Value>,
     backup_path_label: Option<String>,
     error: Option<Value>,
+    installed_version: String,
+    available_version: Option<String>,
+    notes: Option<String>,
+    channel: Option<String>,
+    enrolled: bool,
+    last_error: Option<Value>,
 }
 impl UpdateState {
     fn initial(current_version: String, auto_check: bool, configured: bool) -> Self {
         Self {
             phase: if configured { "idle" } else { "disabled" }.into(),
+            installed_version: current_version.clone(),
             current_version,
             auto_check,
             configured,
@@ -39,11 +48,17 @@ impl UpdateState {
             progress: None,
             backup_path_label: None,
             error: None,
+            available_version: None,
+            notes: None,
+            channel: None,
+            enrolled: false,
+            last_error: None,
         }
     }
     fn transition(&mut self, phase: &str) {
         self.phase = phase.into();
         self.error = None;
+        self.last_error = None;
         self.blocked_reason = None;
         if phase != "downloading" {
             self.progress = None;
@@ -54,6 +69,7 @@ impl UpdateState {
         self.error = Some(
             json!({"code":code,"message":"Atualização não concluída; preserve seus dados e tente novamente."}),
         );
+        self.last_error = self.error.clone();
     }
 }
 struct Model {
@@ -66,6 +82,9 @@ pub struct UpdaterState {
     directory: PathBuf,
     installing: AtomicBool,
     verifying: AtomicBool,
+    channel: Option<String>,
+    local_test: bool,
+    vault: InstallationVault,
 }
 impl UpdaterState {
     pub fn installing(&self) -> bool {
@@ -111,6 +130,19 @@ fn change(app: &AppHandle, apply: impl FnOnce(&mut Model)) -> UpdateState {
     let state = {
         let mut model = managed.model.lock().unwrap();
         apply(&mut model);
+        model.state.available_version = model
+            .state
+            .available
+            .as_ref()
+            .and_then(|v| v["version"].as_str())
+            .map(str::to_owned);
+        model.state.notes = model
+            .state
+            .available
+            .as_ref()
+            .and_then(|v| v["notes"].as_str())
+            .map(str::to_owned);
+        model.state.last_error = model.state.error.clone();
         model.state.clone()
     };
     let _ = app.emit("update://state", &state);
@@ -150,22 +182,129 @@ fn local_url(raw: &str) -> bool {
             && u.password().is_none()
     })
 }
-fn configured(config: Option<&Value>) -> bool {
+fn configured(config: Option<&Value>, channel: Option<&str>, local_test: bool) -> bool {
     config.is_some_and(|c| {
         c["pubkey"].as_str().is_some_and(|k| !k.is_empty())
-            && c["dangerousInsecureTransportProtocol"] == true
             && c["requireSignedVersion"] == true
             && c["dangerousAcceptInvalidCerts"] != true
             && c["dangerousAcceptInvalidHostnames"] != true
             && c["endpoints"].as_array().is_some_and(|a| {
-                !a.is_empty() && a.iter().all(|v| v.as_str().is_some_and(local_url))
+                // Uma única origem impede fallback que enviaria a credencial a outro host.
+                a.len() == 1
+                    && a.iter().all(|v| {
+                        v.as_str().is_some_and(|raw| {
+                            if local_test
+                                && c["dangerousInsecureTransportProtocol"] == true
+                                && local_url(raw)
+                            {
+                                return channel.is_none_or(|c| c == "test");
+                            }
+                            c["dangerousInsecureTransportProtocol"] != true
+                                && channel.is_some_and(|channel| valid_endpoint(raw, channel))
+                        })
+                    })
             })
+    })
+}
+fn valid_endpoint(raw: &str, channel: &str) -> bool {
+    matches!(channel, "test" | "production")
+        && reqwest::Url::parse(raw).is_ok_and(|u| {
+            u.scheme() == "https"
+                && u.host_str().is_some()
+                && !u
+                    .host_str()
+                    .is_some_and(|h| matches!(h, "127.0.0.1" | "localhost" | "[::1]"))
+                && u.username().is_empty()
+                && u.password().is_none()
+                && u.query().is_none()
+                && u.fragment().is_none()
+                && u.path() == format!("/{channel}/latest.json")
+        })
+}
+fn channel_version(version: &str, channel: Option<&str>, local_test: bool) -> bool {
+    if local_test {
+        return semver::Version::parse(version).is_ok();
+    }
+    let Ok(version) = semver::Version::parse(version) else {
+        return false;
+    };
+    if !version.build.is_empty() {
+        return false;
+    }
+    match channel {
+        Some("production") => version.pre.is_empty(),
+        Some("test") => version.pre.as_str().strip_prefix("test.").is_some_and(|n| {
+            !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().is_ok()
+        }),
+        _ => false,
+    }
+}
+fn build_channel(app: &AppHandle) -> Option<String> {
+    app.config()
+        .plugins
+        .0
+        .get("horusUpdater")
+        .and_then(|v| v["channel"].as_str())
+        .map(str::to_owned)
+}
+fn local_test_build(app: &AppHandle) -> bool {
+    // A exceção não pode ser habilitada no identificador operacional.
+    app.config().identifier == "com.horus.installer-test"
+        && app.config().plugins.0.get("updater").is_some_and(|c| {
+            c["dangerousInsecureTransportProtocol"] == true
+                && c["endpoints"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 1 && a[0].as_str().is_some_and(local_url))
+        })
+}
+fn authorization(token: &str) -> Result<HeaderMap, &'static str> {
+    if !super::update_enrollment::valid_token(token) {
+        return Err("enrollment_invalid");
+    }
+    let mut value =
+        HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| "enrollment_invalid")?;
+    value.set_sensitive(true);
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, value);
+    Ok(headers)
+}
+fn allowed_download(
+    endpoint: &str,
+    download: &str,
+    version: &str,
+    channel: Option<&str>,
+    local_test: bool,
+) -> bool {
+    let (Ok(base), Ok(url)) = (reqwest::Url::parse(endpoint), reqwest::Url::parse(download)) else {
+        return false;
+    };
+    if url.origin() != base.origin()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    if local_test {
+        return local_url(download);
+    }
+    channel.is_some_and(|c| {
+        valid_endpoint(endpoint, c)
+            && channel_version(version, channel, false)
+            && url.path() == format!("/{c}/releases/{version}/HORUS_{version}_x64-setup.exe")
     })
 }
 // Somente overlays locais de E2E podem fixar o sandbox: o NSIS pode reiniciar
 // via shell sem preservar variáveis do processo que iniciou o ensaio.
 pub fn e2e_root(app: &AppHandle) -> Option<PathBuf> {
-    if !configured(app.config().plugins.0.get("updater")) {
+    if !local_test_build(app)
+        || !configured(
+            app.config().plugins.0.get("updater"),
+            build_channel(app).as_deref(),
+            true,
+        )
+    {
         return None;
     }
     let raw = app
@@ -198,7 +337,29 @@ fn e2e_path(raw: &str) -> Option<PathBuf> {
     }
 }
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let enabled = configured(app.config().plugins.0.get("updater"));
+    let channel = build_channel(app.handle());
+    let local_test = local_test_build(app.handle());
+    let enabled = configured(
+        app.config().plugins.0.get("updater"),
+        channel.as_deref(),
+        local_test,
+    );
+    let vault = InstallationVault(format!(
+        "{}.updater.{}",
+        app.config().identifier,
+        channel.as_deref().unwrap_or("local-test")
+    ));
+    // Não acessar credenciais operacionais quando o build não tem canal.
+    let enrollment = if enabled && !local_test {
+        vault.read()
+    } else {
+        Ok(None)
+    };
+    let enrolled = enrollment
+        .as_ref()
+        .ok()
+        .and_then(|v| v.as_ref())
+        .is_some_and(|t| super::update_enrollment::valid_token(t));
     let directory = e2e_root(app.handle())
         .map(|p| p.join("data"))
         .or_else(|| std::env::var_os("HORUS_DATA_DIR").map(PathBuf::from))
@@ -214,16 +375,31 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             .plugin(tauri_plugin_updater::Builder::new().build())?;
     }
     app.manage(UpdaterState {
+        channel: channel.clone(),
+        local_test,
+        vault,
         directory,
         installing: AtomicBool::new(false),
         verifying: AtomicBool::new(pending.is_some()),
         operation: Default::default(),
         model: Mutex::new(Model {
-            state: UpdateState::initial(
-                app.package_info().version.to_string(),
-                auto_check,
-                enabled,
-            ),
+            state: {
+                let mut state = UpdateState::initial(
+                    app.package_info().version.to_string(),
+                    auto_check,
+                    enabled,
+                );
+                state.channel = channel;
+                state.enrolled = enrolled;
+                if enrollment.is_err() {
+                    state.fail("credential_unavailable");
+                } else if enrollment.as_ref().ok().and_then(|v| v.as_ref()).is_some() && !enrolled {
+                    state.fail("enrollment_invalid");
+                } else if !enabled && app.config().plugins.0.contains_key("updater") {
+                    state.fail("configuration_invalid");
+                }
+                state
+            },
             update: None,
         }),
     });
@@ -233,7 +409,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         tauri::async_runtime::spawn(async move {
             verify_restart(handle, pending).await;
         });
-    } else if should_auto_check(enabled, auto_check) {
+    } else if should_auto_check(enabled && (enrolled || local_test), auto_check) {
         let handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
             update_check(handle).await;
@@ -244,6 +420,44 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[tauri::command(rename_all = "snake_case")]
 pub fn update_get_state(app: AppHandle) -> UpdateState {
     snapshot(&app)
+}
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_enroll(app: AppHandle, token: String) -> UpdateState {
+    let managed = app.state::<UpdaterState>();
+    let Ok(_guard) = managed.operation.try_lock() else {
+        return snapshot(&app);
+    };
+    if !snapshot(&app).configured || managed.local_test {
+        return failure(&app, "configuration_invalid");
+    }
+    if let Err(code) = super::update_enrollment::enroll(&managed.vault, &token) {
+        return failure(&app, code);
+    }
+    change(&app, |m| {
+        m.update = None;
+        m.state.available = None;
+        m.state.enrolled = true;
+        m.state.transition("idle");
+    })
+}
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_clear_enrollment(app: AppHandle) -> UpdateState {
+    let managed = app.state::<UpdaterState>();
+    let Ok(_guard) = managed.operation.try_lock() else {
+        return snapshot(&app);
+    };
+    if !snapshot(&app).configured || managed.local_test {
+        return failure(&app, "configuration_invalid");
+    }
+    if let Err(code) = managed.vault.clear() {
+        return failure(&app, code);
+    }
+    change(&app, |m| {
+        m.update = None;
+        m.state.available = None;
+        m.state.enrolled = false;
+        m.state.transition("idle");
+    })
 }
 #[tauri::command(rename_all = "snake_case")]
 pub async fn update_set_auto_check(app: AppHandle, enabled: bool) -> UpdateState {
@@ -265,6 +479,21 @@ pub async fn update_check(app: AppHandle) -> UpdateState {
     if !snapshot(&app).configured {
         return snapshot(&app);
     }
+    let headers = if managed.local_test {
+        HeaderMap::new()
+    } else {
+        match managed.vault.read() {
+            Ok(Some(token)) => match authorization(&token) {
+                Ok(headers) => headers,
+                Err(code) => return failure(&app, code),
+            },
+            Ok(None) => {
+                change(&app, |m| m.state.enrolled = false);
+                return failure(&app, "enrollment_required");
+            }
+            Err(code) => return failure(&app, code),
+        }
+    };
     phase(&app, "checking");
     change(&app, |m| {
         m.state.available = None;
@@ -274,6 +503,8 @@ pub async fn update_check(app: AppHandle) -> UpdateState {
     // O comparador permite inspecionar também manifesto antigo; a guarda abaixo nunca o disponibiliza.
     let builder = app
         .updater_builder()
+        // O plugin 2.14.1 aplica headers tanto no check quanto em Update::download.
+        .headers(headers)
         .timeout(Duration::from_secs(20))
         .no_proxy()
         .configure_client(|c| c.redirect(reqwest::redirect::Policy::none()))
@@ -287,7 +518,16 @@ pub async fn update_check(app: AppHandle) -> UpdateState {
             if !newer(&update.version, &snapshot(&app).current_version) {
                 return failure(&app, "downgrade_refused");
             }
-            if !local_url(update.download_url.as_str()) {
+            let endpoint = app.config().plugins.0["updater"]["endpoints"][0]
+                .as_str()
+                .unwrap_or("");
+            if !allowed_download(
+                endpoint,
+                update.download_url.as_str(),
+                &update.version,
+                managed.channel.as_deref(),
+                managed.local_test,
+            ) {
                 return failure(&app, "manifest_invalid");
             }
             change(&app, |m| {
@@ -439,9 +679,23 @@ pub async fn update_install(app: AppHandle, confirmed_version: String) -> Update
         return snapshot(&app);
     }
     let update = managed.model.lock().unwrap().update.clone();
-    let Some(update) = update else {
+    let Some(mut update) = update else {
         return failure(&app, "install_failed");
     };
+    // Releitura antes de qualquer reserva: limpar/trocar a credencial invalida o cache.
+    if !managed.local_test {
+        update.headers = match managed.vault.read() {
+            Ok(Some(token)) => match authorization(&token) {
+                Ok(headers) => headers,
+                Err(code) => return failure(&app, code),
+            },
+            Ok(None) => {
+                change(&app, |m| m.state.enrolled = false);
+                return failure(&app, "enrollment_required");
+            }
+            Err(code) => return failure(&app, code),
+        };
+    }
     if let Err(code) = confirm(
         &confirmed_version,
         &update.version,
@@ -524,7 +778,9 @@ impl PayloadBackend for LivePayload<'_> {
                 |chunk, total| {
                     downloaded += chunk as u64;
                     change(app, |m| {
-                        m.state.progress = Some(json!({"downloaded":downloaded,"total":total}))
+                        m.state.progress = Some(
+                            json!({"phase":"downloading","downloaded":downloaded,"total":total}),
+                        )
                     });
                 },
                 || {},
@@ -803,7 +1059,10 @@ mod tests {
         state.transition("checking");
         assert!(state.error.is_none());
         let wire = serde_json::to_value(&state).unwrap();
-        assert_eq!(wire.as_object().unwrap().len(), 10);
+        assert_eq!(wire.as_object().unwrap().len(), 16);
+        assert_eq!(wire["installed_version"], "1.0.0");
+        assert_eq!(wire["enrolled"], false);
+        assert!(wire["channel"].is_null());
         assert_eq!(wire["current_version"], "1.0.0");
         assert!(wire["last_check_at"].is_null());
     }
@@ -817,10 +1076,12 @@ mod tests {
     }
     #[test]
     fn channel_is_only_explicit_loopback() {
-        assert!(!configured(None));
-        assert!(!configured(Some(&json!({}))));
+        assert!(!configured(None, None, false));
+        assert!(!configured(Some(&json!({})), None, false));
         let mut c = json!({"pubkey":"test","endpoints":["http://127.0.0.1:19420/latest.json"],"dangerousInsecureTransportProtocol":true,"requireSignedVersion":true});
-        assert!(configured(Some(&c)));
+        assert!(configured(Some(&c), None, true));
+        assert!(!configured(Some(&c), None, false));
+        assert!(!configured(Some(&c), Some("production"), true));
         for url in [
             "http://evil.test",
             "http://127.0.0.1.evil.test",
@@ -828,8 +1089,163 @@ mod tests {
             "https://127.0.0.1",
         ] {
             c["endpoints"] = json!([url]);
-            assert!(!configured(Some(&c)));
+            assert!(!configured(Some(&c), None, true));
         }
+    }
+    #[test]
+    fn https_channels_and_downloads_are_confined_to_the_configured_origin_and_route() {
+        let endpoint = "https://updates.example.test/test/latest.json";
+        let mut c = json!({"pubkey":"fixture","endpoints":[endpoint],"requireSignedVersion":true});
+        assert!(configured(Some(&c), Some("test"), false));
+        for channel in [None, Some("stable"), Some("production")] {
+            assert!(!configured(Some(&c), channel, false));
+        }
+        for bad in [
+            "http://updates.example.test/test/latest.json",
+            "https://secret@updates.example.test/test/latest.json",
+            "https://updates.example.test/test/latest.json?secret=1",
+            "https://updates.example.test/production/latest.json",
+            "https://localhost/test/latest.json",
+        ] {
+            c["endpoints"] = json!([bad]);
+            assert!(!configured(Some(&c), Some("test"), false));
+        }
+        let good = "https://updates.example.test/test/releases/1.1.0-test.1/HORUS_1.1.0-test.1_x64-setup.exe";
+        assert!(allowed_download(
+            endpoint,
+            good,
+            "1.1.0-test.1",
+            Some("test"),
+            false
+        ));
+        for bad in [
+            good.replace("https:", "http:"),
+            good.replace("updates.example.test", "evil.example.test"),
+            good.replace("/test/", "/production/"),
+            format!("{good}?credential=1"),
+        ] {
+            assert!(!allowed_download(
+                endpoint,
+                &bad,
+                "1.1.0-test.1",
+                Some("test"),
+                false
+            ));
+        }
+    }
+    #[test]
+    fn bearer_header_is_sensitive_and_invalid_input_has_no_header() {
+        let token = "a".repeat(64);
+        let headers = authorization(&token).unwrap();
+        assert_eq!(headers[AUTHORIZATION], format!("Bearer {token}"));
+        assert!(headers[AUTHORIZATION].is_sensitive());
+        assert!(!format!("{headers:?}").contains(&token));
+        assert!(authorization("bad\r\nheader").is_err());
+    }
+    #[test]
+    fn production_only_accepts_stable_and_test_only_test_prereleases() {
+        assert!(channel_version("1.2.3", Some("production"), false));
+        assert!(channel_version("1.2.3-test.1", Some("test"), false));
+        for (version, channel) in [
+            ("1.2.3-test.1", "production"),
+            ("1.2.3", "test"),
+            ("1.2.3-rc.1", "test"),
+            ("1.2.3-test.1.extra", "test"),
+            ("1.2.3+build", "production"),
+            ("1.2.3-test.01", "test"),
+        ] {
+            assert!(!channel_version(version, Some(channel), false));
+        }
+        assert!(channel_version("1.2.3", None, true)); // Contrato legado HOR-100.
+    }
+    #[test]
+    fn plugin_sends_bearer_on_check_and_download_and_rejects_invalid_signature() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let synthetic = "a".repeat(64);
+        let expected = format!("authorization: Bearer {synthetic}").to_ascii_lowercase();
+        let server = std::thread::spawn(move || {
+            for path in ["/latest.json", "/setup.exe"] {
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "requisição local não recebida"
+                            );
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("GET {path} ")));
+                // Não imprimir o request nem a credencial se a asserção falhar.
+                assert!(
+                    request.to_ascii_lowercase().contains(&expected),
+                    "Bearer ausente"
+                );
+                let body = if path == "/latest.json" {
+                    json!({"version":"9.0.0","platforms":{"windows-x86_64":{"url":format!("http://{address}/setup.exe"),"signature":"invalid-fixture"}}}).to_string()
+                } else {
+                    "tampered-fixture".into()
+                };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            json!({
+                "pubkey":"invalid-fixture", "dangerousInsecureTransportProtocol":true,
+                "requireSignedVersion":true, "endpoints":[format!("http://{address}/latest.json")]
+            }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .unwrap();
+        tauri::async_runtime::block_on(async {
+            let update = app
+                .updater_builder()
+                .headers(authorization(&synthetic).unwrap())
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .configure_client(|c| c.redirect(reqwest::redirect::Policy::none()))
+                .build()
+                .unwrap()
+                .check()
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(update.headers[AUTHORIZATION].is_sensitive());
+            let error = update.download(|_, _| {}, || {}).await.unwrap_err();
+            assert_eq!(download_error(&error), "signature_invalid");
+        });
+        server.join().unwrap();
+    }
+    #[test]
+    fn webview_offline_mode_is_supported_by_the_nsis_template() {
+        let template = include_str!("../installer.nsi");
+        assert!(template.contains("\"${INSTALLWEBVIEW2MODE}\" == \"offlineInstaller\""));
+        assert!(template.contains("${WEBVIEW2INSTALLERPATH}"));
+        assert!(template.contains("ExecWait \"$6 ${WEBVIEW2INSTALLERARGS} /install\" $1"));
+        assert!(template.contains("ReadRegStr $4 HKCU"));
+        assert!(template.contains("Abort \"$(webview2AbortError)\""));
     }
     #[test]
     fn time_is_rfc3339() {

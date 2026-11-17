@@ -11,6 +11,7 @@ type MockUpdatePhase =
   | 'backing_up'
   | 'downloading'
   | 'installing'
+  | 'restarting'
   | 'error';
 
 type MockUpdateState = {
@@ -18,6 +19,8 @@ type MockUpdateState = {
   current_version: string;
   auto_check: boolean;
   configured: boolean;
+  channel?: string | null;
+  enrolled?: boolean;
   last_check_at: string | null;
   available: { version: string; notes: string; pub_date: string | null } | null;
   blocked_reason: 'job_running' | 'backend_unavailable' | null;
@@ -163,6 +166,14 @@ async function setupTauriUpdater(page: Page, initialState: MockUpdateState) {
               currentState = nextInstallState;
               nextInstallState = null;
             }
+            return currentState;
+          }
+          if (command === 'update_enroll') {
+            currentState = { ...currentState, enrolled: true, error: null, phase: 'idle' };
+            return currentState;
+          }
+          if (command === 'update_clear_enrollment') {
+            currentState = { ...currentState, enrolled: false, available: null, phase: 'idle' };
             return currentState;
           }
           if (command === 'plugin:event|listen') {
@@ -555,4 +566,104 @@ test('S6: tela não exibe atualizado em fases intermediárias até o limite do c
     'instalação da atualização falhou',
   );
   await expect(page.getByTestId('update-status-up-to-date')).toHaveCount(0);
+});
+
+test('S7: token nunca aparece no DOM, storage, console ou requisições HTTP após envio', async ({
+  page,
+}) => {
+  const secretToken = 'horus_secret_token_never_leak_abc123';
+  const consoleMessages: string[] = [];
+  const requestLog: string[] = [];
+
+  page.on('console', msg => consoleMessages.push(msg.text()));
+  page.on('request', req => requestLog.push(`${req.method()} ${req.url()} ${req.postData() ?? ''}`));
+
+  await setupTauriUpdater(
+    page,
+    makeState({
+      phase: 'idle',
+      channel: 'production',
+      enrolled: false,
+    }),
+  );
+  await openSettings(page);
+
+  const input = page.getByTestId('update-enroll-token-input');
+  await expect(input).toHaveAttribute('type', 'password');
+  await input.fill(secretToken);
+  await page.getByTestId('update-enroll-submit-button').click();
+
+  await expect(page.getByTestId('update-enrollment-status')).toHaveText('Inscrito');
+
+  const domSnapshot = await page.evaluate(() => ({
+    html: document.body.innerHTML,
+    local: JSON.stringify(localStorage),
+    session: JSON.stringify(sessionStorage),
+  }));
+
+  expect(domSnapshot.html).not.toContain(secretToken);
+  expect(domSnapshot.local).not.toContain(secretToken);
+  expect(domSnapshot.session).not.toContain(secretToken);
+  expect(consoleMessages.join('\n')).not.toContain(secretToken);
+  expect(requestLog.join('\n')).not.toContain(secretToken);
+});
+
+for (const errCase of [
+  { code: 'token_rejected', expectedText: 'token de acesso ao canal foi recusado' },
+  { code: 'token_revoked', expectedText: 'token de acesso ao canal foi revogado' },
+  { code: 'enrollment_invalid', expectedText: 'formato do token de instalação é inválido' },
+  { code: 'enrollment_required', expectedText: 'exige um token de instalação válido' },
+  { code: 'credential_unavailable', expectedText: 'cofre de credenciais do sistema' },
+  { code: 'configuration_invalid', expectedText: 'configuração do canal de atualização deste build é inválida' },
+  { code: 'incompatible_version', expectedText: 'incompatível com esta instalação' },
+  { code: 'blocked_by_production', expectedText: 'produção ou operação crítica em andamento' },
+]) {
+  test(`S8: código ${errCase.code} exibe orientação segura sem botão de tentar novamente nem instalação`, async ({
+    page,
+  }) => {
+    await setupTauriUpdater(
+      page,
+      makeState({
+        phase: 'error',
+        channel: 'test',
+        enrolled: true,
+        error: {
+          code: errCase.code,
+          message: 'Bearer RAW_SECRET_IN_ERROR_MESSAGE',
+        },
+      }),
+    );
+    await openSettings(page);
+
+    await expect(page.getByTestId('update-error-message')).toContainText(errCase.expectedText);
+    await expect(page.getByTestId('settings-updates-section')).not.toContainText(
+      'RAW_SECRET_IN_ERROR_MESSAGE',
+    );
+    await expect(page.getByTestId('update-retry-button')).toHaveCount(0);
+    await expect(page.getByTestId('update-install-button')).toHaveCount(0);
+  });
+}
+
+test('S9: notas de versão com HTML/script são renderizadas apenas como texto seguro', async ({
+  page,
+}) => {
+  await setupTauriUpdater(
+    page,
+    makeState({
+      phase: 'available',
+      available: {
+        version: '0.2.0',
+        notes: '<img src="x" data-xss="1" onerror="window.__xssFired=true"><script>window.__xssFired=true</script>Notas seguras',
+        pub_date: null,
+      },
+    }),
+  );
+  await openSettings(page);
+
+  const notes = page.getByTestId('update-available-notes');
+  await expect(notes).toContainText('Notas seguras');
+  await expect(notes).toContainText('<script>');
+  await expect(notes.locator('img, script')).toHaveCount(0);
+  const xssFired = await page.evaluate(() => Boolean((window as unknown as { __xssFired?: boolean }).__xssFired));
+  expect(xssFired).toBe(false);
 });

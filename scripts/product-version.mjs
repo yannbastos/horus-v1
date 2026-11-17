@@ -24,8 +24,9 @@ export function compare(a, b) {
 export function synchronize(root, version, allow = false) {
   const canonical = JSON.parse(fs.readFileSync(path.join(root, 'frontend/package.json'), 'utf8')).version;
   compare(canonical, canonical);
-  if (version && compare(version, canonical) <= 0 && !allow) throw Error('Versão menor ou igual; use --allow-non-increasing explicitamente.');
   const wanted = version || canonical;
+  compare(wanted, wanted); // Validar também quando a permissão de downgrade está explícita.
+  if (version && !allow && compare(version, canonical) <= 0) throw Error('Versão menor ou igual; use --allow-non-increasing explicitamente.');
   // Substituições pontuais preservam formatação e não tocam versões de dependências.
   const jsonFiles = ['frontend/package.json', 'frontend/src-tauri/tauri.conf.json',
     ...fs.readdirSync(path.join(root, 'scripts')).filter(n => /^tauri.*\.json$/.test(n)).map(n => `scripts/${n}`)];

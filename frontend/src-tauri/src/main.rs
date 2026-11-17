@@ -9,6 +9,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 mod updater;
+mod update_enrollment;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,7 +194,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(updater::setup)
         .invoke_handler(tauri::generate_handler![backend_connection, updater::update_get_state,
-            updater::update_set_auto_check, updater::update_check, updater::update_install])
+            updater::update_set_auto_check, updater::update_enroll, updater::update_clear_enrollment, updater::update_check, updater::update_install])
         .build(tauri::generate_context!())
         .expect("Não foi possível iniciar o Hórus desktop")
         .run(|handle, event| {

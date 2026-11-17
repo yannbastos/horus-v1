@@ -34,5 +34,7 @@ test('sincroniza cópia isolada, verifica divergência e recusa downgrade sem fl
     assert.equal(lock.packages['node_modules/fixture'].version,'5.0.0');
     synchronize(root, '1.0.0', true);
     assert.equal(synchronize(root), '1.0.0');
+    assert.throws(() => synchronize(root, '../invalid', true), /inválida/);
+    assert.equal(synchronize(root), '1.0.0');
   } finally { fs.rmSync(root, {recursive:true}); }
 });
