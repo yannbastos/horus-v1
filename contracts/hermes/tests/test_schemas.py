@@ -3,8 +3,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from conftest import ROOT, load
-from generate_schemas import ALL_SCHEMAS, render
+from ..conftest import ROOT, load
+from ..generate_schemas import ALL_SCHEMAS, render
 from horus_backend.hermes_contract.models import SCHEMAS, Dataset, EditorialResult, HermesRunRequest, RunEnvelope
 
 

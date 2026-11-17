@@ -7,7 +7,7 @@ import copy
 import pytest
 from pydantic import ValidationError
 
-from conftest import load
+from ..conftest import load
 from horus_backend.hermes_contract.models import RunEnvelope
 
 PRIVATE = ["ver C:/Users/yann/roteiro.txt", "veja /home/yann/projeto", "file:///etc/passwd",

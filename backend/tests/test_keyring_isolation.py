@@ -4,7 +4,7 @@ from pathlib import Path
 import keyring
 import pytest
 
-from conftest import MemoryKeyring, _real_backend_classes
+from keyring_support import MemoryKeyring, _real_backend_classes
 
 
 def test_active_backend_is_the_in_memory_one_and_credentials_stay_there(isolated_keyring):
