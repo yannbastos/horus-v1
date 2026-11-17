@@ -4,9 +4,13 @@ from dataclasses import replace
 
 import pytest
 
-from test_workflows import settings, client_for
-from test_scripts import decide
-from test_scripts_manual import manual, version
+from support_b import (
+    client_for,  # noqa: F401
+    decide_script as decide,
+    manual_script as manual,
+    settings,  # noqa: F401
+    version_script as version,
+)
 
 
 def create(client, payload=None, key="manual-workflow"):
@@ -14,7 +18,7 @@ def create(client, payload=None, key="manual-workflow"):
                        headers={'Idempotency-Key': key})
 
 
-def test_human_workflow_scripts_versions_and_restart(settings):
+def test_human_workflow_scripts_versions_and_restart(settings, client_for):
     # Até configuração Hermes não muda esta ação humana para inferência.
     settings = replace(settings, workflow_executor='hermes')
     with client_for(settings) as client:
@@ -39,8 +43,12 @@ def test_human_workflow_scripts_versions_and_restart(settings):
         assert create(client).status_code == 200 and create(client).json() == record
         assert create(client, {'title': 'Outro'}).status_code == 409
         assert client.get('/v1/workflows/' + record['workflow_id'] + '/scripts').json()['items'][0]['status'] == 'approved'
-        with client.app.state.store.connect() as db:
-            assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+        with client.app.state.store.uow(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT workflow_id FROM horus.scripts WHERE id = %s",
+                (second["id"],),
+            ).fetchone()
+            assert row == (record["workflow_id"],)
     with client_for(settings) as client:
         assert create(client).json() == record
         assert client.get('/v1/scripts/' + second['id']).json()['status'] == 'approved'
@@ -48,13 +56,13 @@ def test_human_workflow_scripts_versions_and_restart(settings):
 
 @pytest.mark.parametrize('payload', [{'title': ''}, {'title': '  '}, {'title': 'x' * 201},
     {'title': 'ok', 'objective': 'x' * 2001}, {'title': 'ok', 'executor': 'hermes'}, {'title': 12}])
-def test_invalid(settings, payload):
+def test_invalid(settings, client_for, payload):
     with client_for(settings) as client:
         assert create(client, payload).status_code == 422
         assert client.get('/v1/workflows').json() == []
 
 
-def test_auth_key_and_concurrency(settings):
+def test_auth_key_and_concurrency(settings, client_for):
     with client_for(settings) as client:
         assert client.post('/v1/workflows/manual', json={'title': 'ok'}).status_code == 422
         client.headers.pop('Authorization')

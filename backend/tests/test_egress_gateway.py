@@ -1,16 +1,15 @@
 """HOR-111: gateway único de saída HTTP — deny by default, allowlist explícita, anti-rebinding, redirects, redação e auditoria.
 Nenhuma rede real: resolvedor e transporte são substituídos; só bancos temporários."""
 import json
-import sqlite3
 
+import psycopg
 import pytest
 
 from horus_backend import egress
 from horus_backend.egress import DEFAULT_RULES, EgressBlocked, EgressGateway, Rule, parse_rules
-from horus_backend.migrations import migrate
-from horus_backend.storage import Store
 from horus_backend.transcriber import is_youtube_url
 from horus_backend.transmissions import TransmissionLog
+from support_b import pg_store, query_rows  # noqa: F401
 
 PUBLIC = "93.184.216.34"
 SECRET = "sk-" + "a1B2c3D4" * 5
@@ -36,10 +35,8 @@ class Net:
 
 
 @pytest.fixture
-def log(tmp_path):
-    path = tmp_path / "horus.sqlite3"
-    migrate(path)
-    return TransmissionLog(Store(path))
+def log(pg_store):
+    return TransmissionLog(pg_store)
 
 
 def gateway(net, log=None, rules=None, **kw):
@@ -49,8 +46,7 @@ def gateway(net, log=None, rules=None, **kw):
 
 
 def rows(log):
-    with log.store.connect() as db:
-        return [dict(r) for r in db.execute("SELECT * FROM transmissions ORDER BY seq")]
+    return query_rows(log.store, "SELECT * FROM horus.transmissions ORDER BY seq")
 
 
 # --- deny by default -----------------------------------------------------------------------------------------
@@ -300,7 +296,7 @@ def test_every_decision_is_audited_without_content(log):
     assert [r["detail"] for r in records] == ["http_200", "payload_private", "destination_not_allowed", "destination_not_allowed"]
     assert all(r["stage"] == "egress:api" and r["provider"] == "egress" for r in records)
     assert records[0]["destination"] == "https://api.example.org:443" and records[0]["envelope_bytes"] > 0 and len(records[0]["envelope_sha256"]) == 64
-    blob = json.dumps(records)
+    blob = json.dumps(records, default=str)
     for forbidden in ("conteudo-confidencial", "C:\\\\Users", SECRET, "yann"):
         assert forbidden not in blob
 
@@ -317,9 +313,9 @@ def test_audit_failure_never_changes_the_decision(log):
 
 def test_transmissions_remain_append_only(log):
     gateway(Net(), log).authorize("api", "GET", "https://api.example.org/x")
-    with log.store.connect() as db:
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("DELETE FROM transmissions")
+    with log.store.uow() as conn:
+        with pytest.raises((psycopg.errors.InsufficientPrivilege, psycopg.errors.RaiseException, psycopg.Error)):
+            conn.execute("DELETE FROM horus.transmissions")
 
 
 # --- integração: os pontos de saída reais passam pelo gateway --------------------------------------------------
@@ -343,12 +339,12 @@ def test_hermes_run_client_consults_the_gateway_before_any_socket(monkeypatch):
         egress.configure(None)
 
 
-def test_youtube_download_job_requires_an_allowlisted_destination(tmp_path):
+def test_youtube_download_job_requires_an_allowlisted_destination(tmp_path, pg_store):
     from horus_backend.config import Settings
     from horus_backend.jobs import DownloadRequest, JobManager
     settings = Settings(token="egress-tests-token-0123456789", data_dir=tmp_path / "data", factory_root=None, hermes_executable=None,
                         hermes_config=tmp_path / "h.json")
-    manager = JobManager(Store(settings.data_dir / "horus.sqlite3"), settings)
+    manager = JobManager(pg_store, settings)
     out = tmp_path / "saida"
     out.mkdir()
     request = DownloadRequest(operation="youtube.download", url="https://youtu.be/dQw4w9WgXcQ", directory=str(out))
@@ -371,7 +367,7 @@ def test_radar_transport_consults_the_gateway_without_leaking_the_key(log, monke
             transport.get("videos", {"id": "x"})
     finally:
         egress.configure(None)
-    blob = json.dumps(rows(log))
+    blob = json.dumps(rows(log), default=str)
     assert "AIza" not in blob and rows(log)[0]["destination"] == "https://www.googleapis.com:443"
 
 

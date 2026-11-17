@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from horus_backend import worker_runtime as runtime
-from test_workflows import settings
+from support_b import settings  # noqa: F401
 
 
 @pytest.mark.parametrize('name', runtime.WORKERS)

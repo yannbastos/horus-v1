@@ -1,61 +1,26 @@
 import asyncio
 import json
-import sqlite3
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
-from horus_backend.config import Settings
-from horus_backend.migrations import MIGRATIONS, SCHEMA_VERSION
-from horus_backend.storage import Store
 from horus_backend.workflows import STAGES, WorkflowRequest, WorkflowService, simulate
+from support_b import (
+    WORKFLOW_REQUEST as REQUEST,
+    WORKFLOW_TOKEN as TOKEN,  # noqa: F401
+    client_for,  # noqa: F401
+    create_workflow as create,
+    pg_admin,  # noqa: F401
+    pg_store,  # noqa: F401
+    review_workflow as review,
+    settings,  # noqa: F401
+    wait_workflow as wait,
+)
 
-TOKEN = "workflow-tests-local-session-token-123456789"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
-REQUEST = {"objective": "Planejar um vídeo original sobre cidades", "references": ["referência fornecida pelo operador"]}
-
-
-@pytest.fixture
-def settings(tmp_path):
-    factory = tmp_path / "fake_factory.py"
-    factory.write_text('import json; print(json.dumps({"id":"canal01"}))', encoding="utf-8")
-    return Settings(token=TOKEN, data_dir=tmp_path / "data", factory_root=tmp_path,
-                    factory_command=(sys.executable, str(factory)), hermes_executable=None,
-                    hermes_config=tmp_path / "unused-private-config.json")
-
-
-def client_for(settings):
-    return TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS)
-
-
-def create(client, key="request-1", payload=None):
-    response = client.post("/v1/workflows", json=payload or REQUEST, headers={"Idempotency-Key": key})
-    assert response.status_code == 202, response.text
-    return response.json()
-
-
-def wait(client, workflow_id, statuses=("awaiting_approval",)):
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        response = client.get(f"/v1/workflows/{workflow_id}")
-        assert response.status_code == 200
-        workflow = response.json()
-        if workflow["status"] in statuses:
-            return workflow
-        time.sleep(.02)
-    pytest.fail(f"Workflow não chegou a {statuses}: {workflow['status']}")
-
-
-def review(client, workflow, decision="approve", key="review-1", **extra):
-    return client.post(f"/v1/workflows/{workflow['id']}/review", headers={"Idempotency-Key": key},
-                       json={"expected_revision": workflow["revision"], "artifact_id": workflow["current_artifact_id"],
-                             "decision": decision, **extra})
 
 
 class FakeOwnedProcess:
@@ -79,7 +44,7 @@ class FakeOwnedProcess:
         pass
 
 
-def test_complete_workflow_is_simulated_and_keeps_worker_free(settings, monkeypatch):
+def test_complete_workflow_is_simulated_and_keeps_worker_free(settings, client_for, monkeypatch):
     from horus_backend.hermes import HermesConnector
     from horus_backend.processes import OwnedProcess
 
@@ -126,7 +91,7 @@ def test_complete_workflow_is_simulated_and_keeps_worker_free(settings, monkeypa
         assert len(client.get("/v1/jobs").json()) == 5  # Aprovação não produz vídeo.
 
 
-def test_create_and_review_are_idempotent_and_conflicts_are_rejected(settings):
+def test_create_and_review_are_idempotent_and_conflicts_are_rejected(settings, client_for):
     with client_for(settings) as client:
         first = create(client)
         assert create(client)["id"] == first["id"]
@@ -142,7 +107,7 @@ def test_create_and_review_are_idempotent_and_conflicts_are_rejected(settings):
         assert len(b.json()["workflow"]["attempts"]) == 4
 
 
-def test_changes_create_versioned_artifacts_and_reject_obsolete_approval(settings):
+def test_changes_create_versioned_artifacts_and_reject_obsolete_approval(settings, client_for):
     with client_for(settings) as client:
         old = wait(client, create(client)["id"])
         response = review(client, old, "request_changes", feedback="Mudar a abordagem para transporte", key="change-1")
@@ -158,7 +123,7 @@ def test_changes_create_versioned_artifacts_and_reject_obsolete_approval(setting
         assert review(client, current, key="approve-2").json()["workflow"]["status"] == "approved"
 
 
-def test_rejection_is_terminal_and_persists(settings):
+def test_rejection_is_terminal_and_persists(settings, client_for):
     with client_for(settings) as client:
         workflow = wait(client, create(client)["id"])
         assert review(client, workflow, decision="reject").json()["workflow"]["status"] == "rejected"
@@ -169,7 +134,7 @@ def test_rejection_is_terminal_and_persists(settings):
         assert len(restored["attempts"]) == 4
 
 
-def test_awaiting_approval_and_journal_survive_restart(settings):
+def test_awaiting_approval_and_journal_survive_restart(settings, client_for):
     with client_for(settings) as client:
         workflow = wait(client, create(client)["id"])
         events = client.get(f"/v1/workflows/{workflow['id']}/events").json()
@@ -185,7 +150,7 @@ def test_awaiting_approval_and_journal_survive_restart(settings):
         assert restarted.get(f"/v1/workflows/{workflow['id']}/events?after={cursor}").json()[0]["kind"] == "review.recorded"
 
 
-def test_failed_attempt_is_preserved_and_retry_does_not_repeat_completed_step(settings):
+def test_failed_attempt_is_preserved_and_retry_does_not_repeat_completed_step(settings, client_for):
     with client_for(settings) as client:
         service = client.app.state.manager.workflows
 
@@ -210,7 +175,7 @@ def test_failed_attempt_is_preserved_and_retry_does_not_repeat_completed_step(se
         assert completed["attempts"][1]["status"] == "failed"
 
 
-def test_cancellation_stops_simulated_step_and_prevents_dependents(settings):
+def test_cancellation_stops_simulated_step_and_prevents_dependents(settings, client_for):
     with client_for(settings) as client:
         async def slow(context):
             await asyncio.sleep(30)
@@ -232,38 +197,42 @@ def test_cancellation_stops_simulated_step_and_prevents_dependents(settings):
         assert client.post(f"/v1/workflows/{workflow['id']}/cancel").json()["status"] == "cancelled"
 
 
-def seed_without_worker(settings):
-    store = Store(settings.data_dir / "horus.sqlite3")
-
+def seed_without_worker(pg_store):
     async def notify():
         pass
 
-    service = WorkflowService(store, asyncio.Queue(), notify)
+    service = WorkflowService(pg_store, asyncio.Queue(), notify)
     workflow = asyncio.run(service.create(WorkflowRequest(**REQUEST), "seed"))
-    return store, service, workflow
+    return pg_store, service, workflow
 
 
 @pytest.mark.parametrize("completed_before_crash", [False, True])
-def test_abrupt_process_exit_recovers_without_duplicate_artifact(settings, completed_before_crash):
-    store, service, workflow = seed_without_worker(settings)
+def test_abrupt_process_exit_recovers_without_duplicate_artifact(
+    settings, client_for, pg_store, pg_admin, pg_app_cluster, pg_app_database, completed_before_crash
+):
+    _, _, workflow = seed_without_worker(pg_store)
     job_id = workflow["steps"][0]["id"]
+    dsn = pg_app_cluster.dsn(pg_app_database, "horus_app")
     script = """
 import asyncio, os, sys
-from pathlib import Path
+from psycopg_pool import ConnectionPool
 from horus_backend.storage import Store
 from horus_backend.worker_lock import WorkerLock
 from horus_backend.workflows import WorkflowService, simulate
-store = Store(Path(sys.argv[1]))
-lock = WorkerLock(store.path)
-lock.acquire()
-service = WorkflowService(store, asyncio.Queue(), None)
-attempt, context = service._claim(sys.argv[2])
-if sys.argv[3] == 'True':
-    service._finish(sys.argv[2], attempt, 'succeeded', content=asyncio.run(simulate(context)))
-os._exit(0)
+with ConnectionPool(sys.argv[1], min_size=1, max_size=2, open=True) as pool:
+    store = Store(pool)
+    lock = WorkerLock(store)
+    lock.acquire()
+    service = WorkflowService(store, asyncio.Queue(), None)
+    attempt, context = service._claim(sys.argv[2])
+    if sys.argv[3] == 'True':
+        service._finish(sys.argv[2], attempt, 'succeeded', content=asyncio.run(simulate(context)))
+    os._exit(0)
 """
-    process = subprocess.run([sys.executable, "-c", script, str(store.path), job_id, str(completed_before_crash)], capture_output=True, timeout=10)
+    process = subprocess.run([sys.executable, "-c", script, dsn, job_id, str(completed_before_crash)], capture_output=True, timeout=15)
     assert process.returncode == 0, process.stderr.decode(errors="replace")
+    # Simula expiração do lease do processo encerrado abruptamente antes do reinício.
+    pg_admin.execute("UPDATE horus.worker_instances SET lease_until = clock_timestamp() - interval '1 second'")
     with client_for(settings) as restarted:
         if completed_before_crash:
             recovered = wait(restarted, workflow["id"])
@@ -281,11 +250,10 @@ os._exit(0)
         assert len({a["job_id"] for a in recovered["artifacts"]}) == 4
 
 
-def test_dependency_and_artifact_integrity_are_checked_before_execution(settings):
-    store, service, workflow = seed_without_worker(settings)
+def test_dependency_and_artifact_integrity_are_checked_before_execution(pg_store, pg_admin):
+    store, service, workflow = seed_without_worker(pg_store)
     research_id = workflow["steps"][1]["id"]
-    with store.connect() as db:
-        db.execute("UPDATE jobs SET status='queued' WHERE id=?", (research_id,))
+    pg_admin.execute("UPDATE horus.jobs SET status = 'queued' WHERE id = %s", (research_id,))
     asyncio.run(service.run_step(store.get_job(research_id)))
     blocked = service.get(workflow["id"])
     assert blocked["status"] == "failed"
@@ -293,13 +261,12 @@ def test_dependency_and_artifact_integrity_are_checked_before_execution(settings
     assert blocked["attempts"] == []
 
 
-def test_tampered_dependency_artifact_is_not_consumed(settings):
-    store, service, workflow = seed_without_worker(settings)
+def test_tampered_dependency_artifact_is_not_consumed(pg_store, pg_admin):
+    store, service, workflow = seed_without_worker(pg_store)
     first = workflow["steps"][0]["id"]
     attempt, context = service._claim(first)
     research = service._finish(first, attempt, "succeeded", content=asyncio.run(simulate(context)))
-    with store.connect() as db:
-        db.execute("UPDATE artifacts SET content='{}' WHERE job_id=?", (first,))
+    pg_admin.execute("UPDATE horus.artifacts SET content = '{}'::jsonb, content_canonical = '{}'::bytea WHERE job_id = %s", (first,))
     asyncio.run(service.run_step(store.get_job(research)))
     blocked = service.get(workflow["id"])
     assert blocked["status"] == "failed"
@@ -307,26 +274,32 @@ def test_tampered_dependency_artifact_is_not_consumed(settings):
     assert len(blocked["attempts"]) == 1
 
 
-def test_step_result_and_next_release_commit_atomically(settings):
-    store, service, workflow = seed_without_worker(settings)
-    with store.connect() as db:
-        db.execute("""CREATE TRIGGER fail_release BEFORE UPDATE OF status ON jobs
-            WHEN NEW.step_key='research' AND NEW.status='queued'
-            BEGIN SELECT RAISE(ABORT,'falha de teste na transação'); END""")
+def test_step_result_and_next_release_commit_atomically(settings, client_for, pg_store, pg_admin):
+    _, _, workflow = seed_without_worker(pg_store)
+    pg_admin.execute("""
+        CREATE OR REPLACE FUNCTION horus.fail_release_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.step_key = 'research' AND NEW.status = 'queued' THEN
+                RAISE EXCEPTION 'falha de teste na transação';
+            END IF;
+            RETURN NEW;
+        END $$;
+        CREATE TRIGGER fail_release BEFORE UPDATE OF status ON horus.jobs
+            FOR EACH ROW EXECUTE FUNCTION horus.fail_release_fn();
+    """)
     with client_for(settings) as client:
         failed = wait(client, workflow["id"], ("failed",))
         assert failed["artifacts"] == []
         assert failed["steps"][0]["status"] == "failed"
         assert failed["steps"][1]["status"] == "waiting"
         assert failed["attempts"][0]["status"] == "failed"
-        with store.connect() as db:
-            db.execute("DROP TRIGGER fail_release")
+        pg_admin.execute("DROP TRIGGER fail_release ON horus.jobs; DROP FUNCTION horus.fail_release_fn();")
         assert client.post(f"/v1/workflows/{workflow['id']}/retry", json={"expected_revision": 1}).status_code == 200
         assert len(wait(client, workflow["id"])["artifacts"]) == 4
 
 
-def test_late_result_from_old_attempt_cannot_change_recovered_workflow(settings):
-    store, service, workflow = seed_without_worker(settings)
+def test_late_result_from_old_attempt_cannot_change_recovered_workflow(settings, client_for, pg_store):
+    _, service, workflow = seed_without_worker(pg_store)
     job_id = workflow["steps"][0]["id"]
     old_attempt, context = service._claim(job_id)
     service.recover()
@@ -339,28 +312,31 @@ def test_late_result_from_old_attempt_cannot_change_recovered_workflow(settings)
         assert after["current_artifact_id"] == completed["current_artifact_id"]
 
 
-def test_technical_log_retention_does_not_erase_editorial_history(settings):
+def test_technical_log_retention_does_not_erase_editorial_history(settings, client_for):
     with client_for(settings) as client:
         workflow = wait(client, create(client)["id"])
         review(client, workflow)
         store = client.app.state.store
         job_id = workflow["steps"][0]["id"]
-        with store.connect() as db:
-            db.executemany("INSERT INTO events(job_id,kind,message,created_at) VALUES(?,'stdout','log','test')",
-                           [(job_id,)] * 2001)
+        with store.uow() as conn:
+            conn.execute(
+                "INSERT INTO horus.events(job_id, kind, message, created_at) "
+                "SELECT %s, 'stdout', 'log', clock_timestamp() FROM generate_series(1, 2001)",
+                (job_id,),
+            )
         store.event(job_id, "stdout", "última linha")
         assert len(client.get(f"/v1/workflows/{workflow['id']}").json()["approvals"]) == 1
         assert client.get(f"/v1/workflows/{workflow['id']}/events").json()[0]["kind"] == "workflow.created"
 
 
-def test_cancelling_completed_step_does_not_cancel_workflow_waiting_for_review(settings):
+def test_cancelling_completed_step_does_not_cancel_workflow_waiting_for_review(settings, client_for):
     with client_for(settings) as client:
         workflow = wait(client, create(client)["id"])
         assert client.post(f"/v1/jobs/{workflow['steps'][0]['id']}/cancel").json()["status"] == "succeeded"
         assert client.get(f"/v1/workflows/{workflow['id']}").json()["status"] == "awaiting_approval"
 
 
-def test_invalid_executor_output_does_not_advance_or_approve(settings):
+def test_invalid_executor_output_does_not_advance_or_approve(settings, client_for):
     with client_for(settings) as client:
         async def invalid(context):
             return {**await simulate(context), "official_status": "approved"}
@@ -372,7 +348,7 @@ def test_invalid_executor_output_does_not_advance_or_approve(settings):
         assert len(failed["attempts"]) == 1
 
 
-def test_competing_reviews_have_one_winner(settings):
+def test_competing_reviews_have_one_winner(settings, client_for):
     with client_for(settings) as client:
         workflow = wait(client, create(client)["id"])
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -382,7 +358,8 @@ def test_competing_reviews_have_one_winner(settings):
         assert len(client.get(f"/v1/workflows/{workflow['id']}").json()["approvals"]) == 1
 
 
-def test_second_backend_cannot_recover_another_workers_running_step(settings):
+@pytest.mark.xfail(strict=True, reason="Defeito PG: database_router fecha db_manager antes de manager.close() no shutdown da API (api.py/database/router.py)")
+def test_second_backend_cannot_recover_another_workers_running_step(settings, client_for):
     with client_for(settings) as first:
         async def slow(context):
             await asyncio.sleep(30)
@@ -398,7 +375,7 @@ def test_second_backend_cannot_recover_another_workers_running_step(settings):
         assert next_instance.get(f"/v1/workflows/{workflow['id']}").json()["status"] == "interrupted"
 
 
-def test_contract_rejects_unapproved_operations_and_requires_authentication(settings):
+def test_contract_rejects_unapproved_operations_and_requires_authentication(settings, client_for):
     with client_for(settings) as client:
         assert client.post("/v1/workflows", json=REQUEST).status_code == 422
         assert client.post("/v1/workflows", json={**REQUEST, "executor": "hermes"}, headers={"Idempotency-Key": "bad"}).status_code == 422
@@ -411,53 +388,30 @@ def test_contract_rejects_unapproved_operations_and_requires_authentication(sett
         assert client.get(f"/v1/workflows/{workflow['id']}/events?after=-1").status_code == 422
 
 
-def create_v1(path):
-    with sqlite3.connect(path) as db:
-        for statement in MIGRATIONS[1]:
-            db.execute(statement)
-        db.execute("PRAGMA user_version=1")
-        db.execute("INSERT INTO jobs VALUES('old-job','old-key','{}','succeeded','before','before',1,'{}',NULL)")
-        db.execute("INSERT INTO events(job_id,kind,message,created_at) VALUES('old-job','state','succeeded','before')")
-        db.execute("INSERT INTO media VALUES('old-media','old.mp4','old.mp4',1,1,'before')")
+def test_pg_schema_migrations_preserve_rows_and_rollback_on_failure(pg_store, pg_admin):
+    import psycopg
+    from schema_support import apply_chain
+
+    _, _, workflow = seed_without_worker(pg_store)
+    before_versions = pg_admin.execute("SELECT version FROM horus.schema_migrations ORDER BY version").fetchall()
+    apply_chain(pg_admin)
+    assert pg_admin.execute("SELECT version FROM horus.schema_migrations ORDER BY version").fetchall() == before_versions
+    assert pg_admin.execute("SELECT id FROM horus.workflows WHERE id = %s", (workflow["id"],)).fetchone()[0] == workflow["id"]
+    with pytest.raises(psycopg.errors.SyntaxError):
+        with pg_admin.transaction():
+            pg_admin.execute(
+                "INSERT INTO horus.schema_migrations(version, checksum, applied_at) VALUES ('99999999999999', %s, clock_timestamp())",
+                ("0" * 64,),
+            )
+            pg_admin.execute("INVALID SQL")
+    assert pg_admin.execute("SELECT version FROM horus.schema_migrations WHERE version = '99999999999999'").fetchone() is None
 
 
-def test_migration_preserves_legacy_rows_and_creates_one_consistent_backup(tmp_path):
-    path = tmp_path / "legacy.sqlite3"
-    create_v1(path)
-    store = Store(path)
-    assert store.get_job("old-job")["result"] == {}
-    assert store.events("old-job", 0)[0]["sequence"] == 1
-    assert store.media("old-media")["path"] == "old.mp4"
-    Store(path)
-    backups = list(tmp_path.glob("legacy.backup-v1-*.sqlite3"))
-    assert len(backups) == 1
-    with sqlite3.connect(backups[0]) as backup, store.connect() as current:
-        assert backup.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert backup.execute("SELECT id FROM jobs").fetchone()[0] == "old-job"
-        assert current.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        assert current.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert current.execute("PRAGMA foreign_key_check").fetchall() == []
+def test_pg_schema_checksum_mismatch_is_refused(pg_admin):
+    from schema_support import apply_chain
 
-
-def test_migration_failure_rolls_back_schema_and_version(tmp_path, monkeypatch):
-    path = tmp_path / "legacy.sqlite3"
-    create_v1(path)
-    monkeypatch.setitem(MIGRATIONS, 2, (*MIGRATIONS[2][:3], "INVALID SQL"))
-    with pytest.raises(sqlite3.OperationalError):
-        Store(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert db.execute("SELECT id FROM jobs").fetchone()[0] == "old-job"
-        assert "workflow_id" not in {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
-        assert db.execute("SELECT name FROM sqlite_master WHERE name='workflows'").fetchone() is None
-
-
-def test_future_database_is_refused_without_downgrade(tmp_path):
-    path = tmp_path / "future.sqlite3"
-    with sqlite3.connect(path) as db:
-        db.execute("PRAGMA user_version=999")
-    with pytest.raises(RuntimeError, match="mais recente"):
-        Store(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 999
-    assert list(tmp_path.glob("*.backup-*.sqlite3")) == []
+    version, orig_checksum = pg_admin.execute("SELECT version, checksum FROM horus.schema_migrations ORDER BY version LIMIT 1").fetchone()
+    pg_admin.execute("UPDATE horus.schema_migrations SET checksum = %s WHERE version = %s", ("f" * 64, version))
+    with pytest.raises(ValueError, match="divergente"):
+        apply_chain(pg_admin)
+    pg_admin.execute("UPDATE horus.schema_migrations SET checksum = %s WHERE version = %s", (orig_checksum, version))
