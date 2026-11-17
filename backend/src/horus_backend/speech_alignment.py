@@ -526,6 +526,7 @@ def run_alignment(wav: Path, script_text: str, *, sections: Sequence[Mapping], e
 
 def _recognize_words(wav: Path, model_path: Path, language: str) -> dict:
     """ASR offline; não publica palavras antes de completar o gerador."""
+    os.environ.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1')
     import gc
     import ctranslate2
     from faster_whisper import WhisperModel

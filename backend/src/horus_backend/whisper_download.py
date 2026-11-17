@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import TimeoutError as FutureTimeout
 import hashlib
+import http.client
 from pathlib import Path
 import shutil
+import socket
+import ssl
 import tempfile
 import threading
 import time
@@ -16,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from typing import Literal
 
 from .whisper_models import WhisperModels, ImportModelRequest
+from . import egress
 
 from .whisper_download_catalog import CATALOG
 # Hosts exatos usados pelo Hub e armazenamento público Xet; sem curingas.
@@ -65,12 +69,49 @@ def checked_url(url: str) -> str:
 
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        authorize_download(newurl)
         return super().redirect_request(req, fp, code, msg, headers, checked_url(newurl))
 
 
+def authorize_download(url):
+    gate = egress.gateway()
+    gate.authorize('whisper_model_download', 'GET', url)
+    # A configuração genérica de egress não amplia o catálogo público deste transporte.
+    try:
+        checked_url(url)
+    except ValueError:
+        gate._record('whisper_model_download', 'policy_violation', gate._destination(url), None,
+                     'destination_not_allowed')
+        raise
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        gate = egress.gateway()
+        url = req.full_url
+        try:
+            _, host, port, ips = gate._check('whisper_model_download', 'GET', url, {}, None, resolve=True)
+        except egress.EgressBlocked as error:
+            gate._record('whisper_model_download', 'policy_violation', gate._destination(url), None, error.code)
+            raise
+
+        class PinnedConnection(http.client.HTTPSConnection):
+            def connect(self):
+                # A resolução ocorre uma única vez no gateway; TLS mantém Host/SNI originais.
+                sock = socket.create_connection((ips[0], port), timeout=self.timeout)
+                try:
+                    self.sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+                except BaseException:
+                    sock.close()
+                    raise
+
+        return self.do_open(PinnedConnection, req)
+
+
 def open_download(url: str):
+    authorize_download(url)
     # Não herda proxies/credenciais do ambiente nem cookies do operador.
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirect()).open(
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirect(), PinnedHTTPSHandler()).open(
         urllib.request.Request(checked_url(url), headers={'User-Agent': 'Horus-model-download/1'}), timeout=10)
 
 
