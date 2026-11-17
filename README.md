@@ -28,7 +28,7 @@ Operações limitadas da fábrica e mídia local estão descritas no guia de mig
 
 ![Prévia do layout audiovisual do Hórus em tema escuro](docs/previews/desktop-dark.png)
 
-Captura histórica do layout audiovisual (referência visual). [Capturas e limites do layout](docs/layout-desktop.md).
+Captura histórica do layout audiovisual (desktop Avalonia removido em HOR-010; registro histórico em [capturas e limites do layout](docs/layout-desktop.md)). Os critérios visuais vigentes estão em [ARCHITECTURE](docs/ARCHITECTURE.md#identidade-visual-e-equivalência), [tokens.css](frontend/src/styles/tokens.css) e no Storybook.
 
 ## Para onde o Hórus está evoluindo
 

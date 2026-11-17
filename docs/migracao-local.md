@@ -234,7 +234,7 @@ Em Ajustes, com o backend conectado, o diagnóstico local consulta `GET /v1/diag
 
 ## Design e validação
 
-O React reutiliza os tokens do Storybook, Archivo Expanded, Inter, Geist Mono, cores, navegação lateral de 216 px, janela de referência 1320×840 e mínimo 1040×680. Mantém temas claro/escuro/sistema, cantos retos e o símbolo orbital. Não houve redesign autorizado. Capturas geradas pelos testes ficam em `frontend/test-results/` e devem ser comparadas com as referências Avalonia em `docs/previews/`.
+O React reutiliza os tokens de [tokens.css](../frontend/src/styles/tokens.css) e do Storybook, seguindo os critérios visuais vigentes em [ARCHITECTURE](ARCHITECTURE.md#identidade-visual-e-equivalência) (Archivo Expanded, Inter, Geist Mono, cores, navegação lateral de 216 px, janela de referência 1320×840 e mínimo 1040×680). Mantém temas claro/escuro/sistema, cantos retos e o símbolo orbital. Não houve redesign autorizado. Capturas geradas pelos testes ficam em `frontend/test-results/` e podem ser comparadas com o Storybook e com as referências históricas do Avalonia em `docs/previews/`.
 
 ```powershell
 npm --prefix frontend run build
