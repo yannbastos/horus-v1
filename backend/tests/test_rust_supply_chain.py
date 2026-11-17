@@ -34,7 +34,9 @@ def validate_lock(manifest, lock):
     assert set(manifest.get("target", {})) == {"cfg(windows)"}
     direct.update(manifest["target"]["cfg(windows)"]["dependencies"])
     assert direct == DEPENDENCIES, "Dependências/features Rust mudaram: revisar allowlist"
-    assert not manifest.get("dev-dependencies")
+    # HOR-163: unica dev-dependency permitida; a feature `test` do tauri (runtime simulado dos testes)
+    # nao altera o Cargo.lock (nenhuma crate nova) e nunca entra no binario de release.
+    assert manifest.get("dev-dependencies") == {"tauri": {"version": "2", "features": ["test"]}}
     assert set(manifest["target"]["cfg(windows)"]) == {"dependencies"}
     assert not manifest.get("patch") and not manifest.get("replace") and not manifest.get("workspace")
     assert not manifest.get("features"), "Features locais precisam de revisão"
