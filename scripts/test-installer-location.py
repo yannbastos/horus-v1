@@ -120,5 +120,25 @@ FunctionEnd'''
         target = str(self.root / 'explicit app')
         self.assertEqual(self.run_policy(str(self.root / 'old'), explicit=target), target)
 
+class StaticContract(unittest.TestCase):
+    def test_user_scope_and_custom_template(self):
+        import json
+        nsis = json.loads((REPO / 'frontend/src-tauri/tauri.conf.json').read_text())['bundle']['windows']['nsis']
+        self.assertEqual(nsis['installMode'], 'currentUser')
+        self.assertEqual(nsis['template'], 'installer.nsi')
+
+    def test_uninstall_has_no_data_deletion_control_or_operation(self):
+        source = TEMPLATE.read_text()
+        self.assertNotIn('DeleteAppDataCheckbox', source)
+        self.assertNotIn('$(deleteAppData)', source)
+        self.assertNotIn('RmDir /r', source)
+        self.assertNotIn('RMDir /r', source)
+
+    def test_no_hooks_can_reintroduce_deletion(self):
+        import json
+        nsis = json.loads((REPO / 'frontend/src-tauri/tauri.conf.json').read_text())['bundle']['windows']['nsis']
+        self.assertNotIn('installerHooks', nsis)
+
+
 if __name__ == '__main__':
     unittest.main()

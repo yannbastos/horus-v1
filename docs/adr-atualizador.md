@@ -70,13 +70,14 @@ Esses padrões de estado não ficam na pasta de instalação. Caminhos explicita
 pelo usuário podem ser externos: não há promessa de proteger mídia que ele colocar dentro
 da instalação. Keyring não é arquivo no workspace e não foi acessado no ensaio.
 
-**Desinstalação não é garantia universal de preservação:** o `installer.nsi` efetivamente
-gerado contém exclusão recursiva de `$APPDATA\${BUNDLEID}` e
-`$LOCALAPPDATA\${BUNDLEID}` quando `DeleteAppDataCheckboxState = 1` **e** `UpdateMode <> 1`.
-`/UPDATE` define `UpdateMode = 1`; a exclusão fica impedida nesse fluxo. Desinstalar com `/S`
-não exibe nem marca a caixa; a variável inicia em zero. Não foi ensaiada exclusão interativa
-nem se tocou nos dados reais. Decisão pendente do usuário: manter ou remover a caixa;
-recomendação: removê-la em futuro incremento, deixando exclusão no fluxo explícito de dados.
+**Histórico da opção de exclusão no desinstalador:** o `installer.nsi` efetivamente
+da validação histórica continha exclusão recursiva de dados, condicionada à caixa
+interativa e fora de `/UPDATE`; o modo `/S` não marcava essa caixa.
+**Decisão aplicada na HOR-147 (16/11/2026):** a caixa e todo o bloco de exclusão
+foram removidos do template NSIS versionado. Desinstalação interativa, silenciosa
+e atualização sempre preservam banco, projetos, arquivos e configurações do usuário.
+A exclusão de dados fica fora do instalador. Regressão estática cobre configuração,
+ausência do controle e ausência de remoção recursiva; ensaio final em VM descartável.
 
 ### Primitivas para a etapa 2
 
@@ -205,7 +206,7 @@ Modo escolhido: **passive**, após confirmação humana; mostra progresso e evit
 perguntas redundantes do instalador. A implementação Windows do plugin fixado
 `tauri-plugin-updater-2.14.1/src/updater.rs` acrescenta `/UPDATE`, `/P` e `/R` para
 NSIS, aguardando o fim do desktop antes de sobrescrever. `/UPDATE` impede o bloco
-de exclusão de dados no template NSIS atual. Referência:
+de exclusão de dados no template NSIS então vigente; na HOR-147 esse bloco foi removido. Referência:
 [updater oficial](https://v2.tauri.app/plugin/updater/).
 Isso foi conferido no código do plugin; a instalação real é a etapa 3.
 
@@ -342,7 +343,8 @@ Verificado: jornada instalada pelo plugin, confirmação real, todos os negativo
 WAL/restauração/saúde/rollback compatível e limpeza. Não verificado: máquina limpa,
 queda de energia, atualizações com migração real, canal remoto ou assinatura
 Authenticode. Distribuição, custódia da chave real, retenção/cobertura do backup e
-caixa de exclusão do desinstalador continuam decisões do usuário.
+política de exclusão de dados fora do instalador continuam decisões do usuário;
+a caixa do desinstalador foi removida na HOR-147.
 Contagens, hashes, comandos, screenshots e logs ficam no relatório local
 `%LOCALAPPDATA%\Horus\dev-reports\HOR-100-C.md`.
 
