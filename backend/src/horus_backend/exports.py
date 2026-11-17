@@ -22,7 +22,7 @@ from .workflows import WorkflowConflict
 
 HORUS_VERSION = '0.1.0'  # mesma versão do backend em /health e pyproject.toml
 SCHEMA_VERSION = 12
-_INPUTS = PILOT_INPUT_PATH  # mesma regra de license_reviews.py (cena/áudio fora de inputs/ também contam)
+_INPUTS = re.compile(r'^inputs/[A-Za-z0-9_.-]+$')
 # Raízes POSIX comuns: uma barra seguida de uma delas já é caminho absoluto. Fora delas, exige-se ao menos dois
 # segmentos ('/a/b'): '100 km /h', '/ou/' e 'dia /noite' são texto comum em pt-BR e não são caminhos.
 _ROOTS = r'(?:home|users|etc|var|tmp|usr|opt|root|mnt|srv|dev|proc|sys|bin|sbin|lib|volumes|private|library|applications|system|media|run|boot)'
