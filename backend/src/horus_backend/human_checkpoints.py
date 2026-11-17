@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from .security import SecurityGate
+from .security import SecurityGate, cost_reservation
 
 ACTIONS = ("hermes_run", "hermes_script", "paid_narration", "publish")
 MAX_TTL_SECONDS = 3600
@@ -57,8 +57,9 @@ def _money(value) -> Decimal | None:
 
 
 class CheckpointService:
-    def __init__(self, store, audit=None, clock=None):
+    def __init__(self, store, audit=None, clock=None, *, settings=None):
         self.store, self.audit = store, audit
+        self.settings = settings
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     # --- concessão -----------------------------------------------------------------------------------------------
@@ -79,6 +80,14 @@ class CheckpointService:
             raise ValueError("Limite e moeda devem vir juntos (moeda ISO de 3 letras).")
         if amount is not None and amount <= 0:
             raise ValueError("O limite deve ser maior que zero.")
+        if amount is not None and action in ("hermes_run", "hermes_script"):
+            if self.settings is None:
+                raise SecurityGate("security_gate: Configuração de teto do checkpoint indisponível.")
+            ceiling = cost_reservation(self.settings)
+            if currency != "USD" or amount > ceiling:
+                self._refuse(action, "checkpoint_limit_exceeds_backend_ceiling",
+                             "O limite solicitado excede o teto em USD definido pelo backend.", deferred=db is not None)
+        # Narração/publicação ainda não têm teto monetário configurável; consume mantém a barreira final.
         moment = self.clock()
         record = dict(id=uuid.uuid4().hex, action=action, subject=subject, description=description, approved_by="human",
                       operator_id=operator_id, approved_at=_iso(moment), expires_at=_iso(moment + timedelta(seconds=ttl_seconds)),

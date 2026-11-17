@@ -4,13 +4,15 @@ import json
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from test_workflow_hermes import (settings, hermes, client_for, create, pending, authorize, wait, Scenario, echo, TOKEN)
-from horus_backend.human_checkpoints import (ACTIONS, CheckpointRefused, CheckpointService, require_publication_checkpoint)
+from horus_backend.human_checkpoints import (ACTIONS, DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS,
+    CheckpointRefused, CheckpointService, require_publication_checkpoint)
 from horus_backend.migrations import migrate
 from horus_backend.security import SecurityGate
 from horus_backend.storage import Store
@@ -84,6 +86,51 @@ def test_grant_is_idempotent_and_key_cannot_be_reused_for_another_request(env):
     with pytest.raises(ValueError):
         grant(env.service, key="k", limit_amount="9.99")
     assert len(rows(env.store)) == 1
+
+
+@pytest.mark.parametrize("action", ["hermes_run", "hermes_script"])
+@pytest.mark.parametrize("transactional", [False, True])
+def test_backend_ceiling_refuses_larger_grants_before_insert(env, settings, action, transactional):
+    service = CheckpointService(env.store, env.log, env.clock, settings=settings)
+    kwargs = dict(action=action, limit_amount="0.20000001")  # reserva configurada = 0.2 USD
+    with pytest.raises(CheckpointRefused) as error:
+        if transactional:
+            with env.store.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                grant(service, **kwargs, db=db)
+        else:
+            grant(service, **kwargs)
+    assert error.value.code == "checkpoint_limit_exceeds_backend_ceiling"
+    assert rows(env.store) == []
+
+
+@pytest.mark.parametrize("amount", ["0.01", "0.2", "0.20000000"])
+def test_backend_ceiling_accepts_lower_or_equal_grants(env, settings, amount):
+    service = CheckpointService(env.store, settings=settings)
+    assert grant(service, action="hermes_run", limit_amount=amount)["limit_amount"] == amount
+
+
+def test_backend_ceiling_cannot_be_bypassed_with_another_currency(env, settings):
+    with pytest.raises(CheckpointRefused, match="teto"):
+        grant(CheckpointService(env.store, settings=settings), action="hermes_run", currency="EUR", limit_amount="0.01")
+    assert rows(env.store) == []
+
+
+def test_monetary_hermes_grant_requires_backend_configuration(env, settings):
+    for configured in (None, replace(settings, price_output_usd_per_mtok=None)):
+        with pytest.raises(SecurityGate):
+            grant(CheckpointService(env.store, settings=configured), action="hermes_run", limit_amount="0.01")
+    assert rows(env.store) == []
+
+
+@pytest.mark.parametrize("action", ["paid_narration", "publish"])
+def test_actions_without_backend_ceiling_preserve_existing_grants_and_consumption(env, settings, action):
+    service = CheckpointService(env.store, settings=settings)
+    record = grant(service, action=action, limit_amount="9.99")  # não usa o orçamento exclusivo do Hermes
+    assert record["limit_amount"] == "9.99"
+    with pytest.raises(CheckpointRefused) as error:
+        service.consume(action=action, subject=SUBJECT, amount=Decimal("10"), currency="USD", ref="blocked")
+    assert error.value.code == "checkpoint_limit_exceeded"
 
 
 # --- a barreira: sem aprovação, expirada, acima do limite, replay --------------------------------------------
@@ -236,6 +283,15 @@ def test_api_creates_lists_and_is_idempotent(settings):
         assert post(client, BODY | {"limit_amount": "9"}).status_code == 422          # mesma chave, outro pedido
         listing = client.get("/v1/checkpoints").json()
         assert [i["id"] for i in listing["items"]] == [first.json()["id"]] and listing["next_after"] is None
+
+
+def test_api_cannot_expand_ttl_or_grant_cognitive_spending(settings):
+    with client_for(settings) as client:
+        assert post(client, BODY | {"ttl_seconds": MAX_TTL_SECONDS + 1}).status_code == 422
+        assert post(client, BODY | {"action": "hermes_run", "limit_amount": "999"}).status_code == 422
+        assert client.get("/v1/checkpoints").json()["items"] == []
+        record = post(client, {k: v for k, v in BODY.items() if k != "ttl_seconds"}).json()
+        assert (datetime.fromisoformat(record["expires_at"]) - datetime.fromisoformat(record["approved_at"])).total_seconds() == DEFAULT_TTL_SECONDS
 
 
 @pytest.mark.parametrize("change", [

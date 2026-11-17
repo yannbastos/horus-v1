@@ -442,6 +442,7 @@ def daily_runs(store, db=None, *, day=None):
 
 
 def security_status(settings, store=None):
+    from .human_checkpoints import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS
     from .hermes import read_connection
     profile = audit_profile(settings.hermes_profile)
     blockers = []
@@ -506,6 +507,7 @@ def security_status(settings, store=None):
     from .config import positive_decimal
     budget_total, budget_daily = positive_decimal(settings.budget_total_usd), positive_decimal(settings.budget_daily_usd)
     profile.update(connection=connection, profile_label='%LOCALAPPDATA%/hermes/profiles/horus' if settings.hermes_profile == profile_default() else 'perfil selecionado pelo operador',
+                   checkpoint_limits={'default_ttl_seconds': DEFAULT_TTL_SECONDS, 'max_ttl_seconds': MAX_TTL_SECONDS},
                    network_isolation={'enforced': False, 'mechanism': None, 'reason': 'Sem bloqueio de rede no nível do SO; gateway externo não é iniciado pelo Hórus.'},
                    cost_limits={'configured': configured, 'max_tokens_per_run': settings.max_tokens_per_run,
                                 'max_tokens_per_day': settings.max_tokens_per_day,
@@ -513,6 +515,7 @@ def security_status(settings, store=None):
                                 'budget_total_usd': format(budget_total, 'f') if budget_total is not None else None,
                                 'budget_daily_usd': format(budget_daily, 'f') if budget_daily is not None else None,
                                 'budget_configured': budget_valid, 'pricing_configured': pricing_valid,
+                                'reservation_per_run_usd': format(cost_reservation(settings), 'f') if configured and budget_valid and pricing_valid else None,
                                 **{name: format(amount, 'f') if amount is not None else None for name, amount in amounts.items()},
                                 'runs_today': runs_today})
     return {'schema_version': 'security.status.v1', 'checked_at': datetime.now(timezone.utc).isoformat(),

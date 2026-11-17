@@ -124,6 +124,26 @@ def report(settings, store):
     return security.security_status(settings, store)['hermes']['cost_limits']
 
 
+@pytest.mark.parametrize('missing', [None, 'price_input_usd_per_mtok', 'price_output_usd_per_mtok',
+    'budget_total_usd', 'budget_daily_usd', 'max_tokens_per_run', 'max_tokens_per_day'])
+def test_status_exposes_backend_checkpoint_limits_and_exact_reservation(settings, missing):
+    from horus_backend.human_checkpoints import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS
+    actual = replace(settings, **{missing: None}) if missing else settings
+    with TestClient(create_app(actual), base_url='http://127.0.0.1', headers=HEADERS) as client:
+        response = client.get('/v1/security/status')
+        assert response.status_code == 200
+        hermes = response.json()['hermes']
+        assert hermes['checkpoint_limits'] == {'default_ttl_seconds': DEFAULT_TTL_SECONDS,
+                                               'max_ttl_seconds': MAX_TTL_SECONDS}
+        reservation = hermes['cost_limits']['reservation_per_run_usd']
+        if missing:
+            assert reservation is None
+            assert not response.json()['real_execution_allowed']
+        else:
+            assert isinstance(reservation, str)
+            assert reservation == format(security.cost_reservation(actual), 'f') == '0.32768'
+
+
 def test_approved_defaults_apply_without_environment(settings, monkeypatch):
     actual = Settings(token=TOKEN, data_dir=settings.data_dir, hermes_executable=None, factory_root=None)
     for name, (field, default) in VARIABLES.items():
@@ -368,7 +388,8 @@ def test_concurrent_human_authorizations_and_status_endpoint(settings, clock):
         assert limits == {'configured': True, 'max_tokens_per_run': 16384, 'max_tokens_per_day': 32768,
             'max_runs_per_day': 2, 'runs_configured': True, 'budget_total_usd': '5', 'budget_daily_usd': '0.5',
             'budget_configured': True, 'pricing_configured': True, 'estimated_spent_total_usd': '0',
-            'estimated_spent_today_usd': '0', 'reserved_usd': '0.32768', 'runs_today': 1}
+            'estimated_spent_today_usd': '0', 'reserved_usd': '0.32768', 'runs_today': 1,
+            'reservation_per_run_usd': '0.32768'}
         assert 'daily_budget_limit' in {b['code'] for b in status['blockers']}
 
 
