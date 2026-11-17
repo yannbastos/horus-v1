@@ -497,8 +497,6 @@ main::-webkit-scrollbar-track,
 .data-deletion-notice { padding: var(--Space4) var(--Space5); border: 1px solid var(--Warn); border-left-width: 3px; background: var(--Sunken); display: flex; flex-direction: column; gap: var(--Space2); }
 .data-deletion-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--Space2); }
 .data-deletion-list-item { padding: var(--Space3) var(--Space4); border: 1px solid var(--Line); background: var(--Sunken); display: flex; flex-direction: column; gap: 2px; }
-.button.danger { border-color: var(--Bad); color: var(--Bad); }
-.button.danger:hover:not(:disabled) { background: var(--Bad); color: var(--Background); }
 
 /* --- Atualizações em Ajustes (HOR-100) --- */
 .production-notice.update { border-left: 3px solid var(--AccentInk); }
