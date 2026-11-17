@@ -284,6 +284,130 @@
         "title": "CredentialRequest",
         "type": "object"
       },
+      "DatabaseErrorBody": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DatabaseStatus"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "status"
+        ],
+        "title": "DatabaseErrorBody",
+        "type": "object"
+      },
+      "DatabaseErrorResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/DatabaseErrorBody"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "DatabaseErrorResponse",
+        "type": "object"
+      },
+      "DatabaseStatus": {
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "expected_schema_version": {
+            "minLength": 1,
+            "title": "Expected Schema Version",
+            "type": "string"
+          },
+          "host_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Label"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "schema_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Version"
+          },
+          "state": {
+            "enum": [
+              "auth_failed",
+              "connected",
+              "connecting",
+              "migrating",
+              "not_configured",
+              "schema_mismatch",
+              "unreachable",
+              "vault_unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checked_at",
+          "expected_schema_version",
+          "host_label",
+          "last_error_code",
+          "latency_ms",
+          "schema_version",
+          "state"
+        ],
+        "title": "DatabaseStatus",
+        "type": "object"
+      },
       "Dataset": {
         "additionalProperties": false,
         "properties": {
@@ -1935,6 +2059,302 @@
           }
         },
         "summary": "Restore Data Deletion"
+      }
+    },
+    "/v1/database/connection": {
+      "delete": {
+        "operationId": "database_disconnect_v1_database_connection_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Database Disconnect",
+        "tags": [
+          "database"
+        ]
+      },
+      "post": {
+        "operationId": "database_connection_v1_database_connection_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "database": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                    "title": "Database",
+                    "type": "string"
+                  },
+                  "host": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "title": "Host",
+                    "type": "string"
+                  },
+                  "password": {
+                    "format": "password",
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "title": "Password",
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "port": {
+                    "const": 5432,
+                    "title": "Port",
+                    "type": "integer"
+                  },
+                  "user": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^horus_app\\.[a-z0-9]{20}$",
+                    "title": "User",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "database",
+                  "host",
+                  "password",
+                  "port",
+                  "user"
+                ],
+                "title": "ConnectionRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Database Connection",
+        "tags": [
+          "database"
+        ]
+      }
+    },
+    "/v1/database/status": {
+      "get": {
+        "operationId": "database_status_v1_database_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Database Status",
+        "tags": [
+          "database"
+        ]
+      }
+    },
+    "/v1/database/test": {
+      "post": {
+        "operationId": "database_test_v1_database_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Database Test",
+        "tags": [
+          "database"
+        ]
       }
     },
     "/v1/diagnostics": {
