@@ -12,7 +12,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from test_workflows import settings  # noqa: F401  (fixture)
+from support_c import settings  # noqa: F401  (fixture)
 from test_exports import production, approve, export  # noqa: F401
 from horus_backend import exports as exports_module
 from horus_backend.exports import ExportService
@@ -168,8 +168,8 @@ def test_real_junction_in_export_folder_is_refused(production, tmp_path):
 def test_real_junction_in_production_artifacts_is_refused(production, tmp_path):
     client, record, root, settings = production
     approve(client, record)
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute("SELECT artifacts FROM productions WHERE id=?", (record["id"],)).fetchone()[0])
+    with client.app.state.store.uow(readonly=True) as db:
+        artifacts = db.execute("SELECT artifacts FROM horus.productions WHERE id=%s", (record["id"],)).fetchone()[0]
     scene = next(a for a in artifacts if a["kind"] == "scene")
     folder = (root / scene["relative_path"]).parent
     if folder == root:
@@ -257,11 +257,11 @@ def test_large_video_is_streamed_not_loaded_in_memory(production):
         block = bytes(range(256)) * 4096
         for _ in range(size // len(block)):
             stream.write(block)
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute("SELECT artifacts FROM productions WHERE id=?", (record["id"],)).fetchone()[0])
+    with client.app.state.store.uow() as db:
+        artifacts = db.execute("SELECT artifacts FROM horus.productions WHERE id=%s", (record["id"],)).fetchone()[0]
         artifacts = [inspect_artifact(root, a["relative_path"], a["kind"]) if a["kind"] == "video" else a for a in artifacts]
         video = next(a for a in artifacts if a["kind"] == "video")
-        db.execute("UPDATE productions SET artifacts=? WHERE id=?", (json.dumps(artifacts), record["id"]))
+        db.execute("UPDATE horus.productions SET artifacts=%s WHERE id=%s", (json.dumps(artifacts), record["id"]))
     reviewed = client.post(f"/v1/productions/{record['id']}/review", headers={"Idempotency-Key": "grande"},
                            json={"decision": "approve", "artifact_sha256": video["sha256"], "acknowledge_quality_errors": True})
     assert reviewed.status_code == 200, reviewed.text

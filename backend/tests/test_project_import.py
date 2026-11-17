@@ -8,9 +8,11 @@ import threading
 import zipfile
 from pathlib import Path
 
+import psycopg
 import pytest
 
-from test_exports import production, approve, export, settings, client_for   # noqa: F401  (fixtures)
+from support_c import client_for, pg_connect, schema_state, settings  # noqa: F401  (fixtures)
+from test_exports import approve, export, production  # noqa: F401  (fixtures)
 from horus_backend import project_import as module
 from horus_backend.project_import import ImportService, verify_package, ImportRefused
 
@@ -59,17 +61,23 @@ def rebuild(path, target, mutate=None, rehash=True, manifest_edit=None, order=No
     return target
 
 
-def tables(client):
-    with client.app.state.store.connect() as db:
-        names = sorted(r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'"))
-        return {n: db.execute(f'SELECT COUNT(*) FROM "{n}"').fetchone()[0] for n in names}, db.execute("PRAGMA user_version").fetchone()[0]
+def tables(settings):
+    with pg_connect(settings) as db:
+        names = [
+            r[0]
+            for r in db.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'horus' AND tablename <> 'imports' ORDER BY tablename"
+            ).fetchall()
+        ]
+        counts = {n: db.execute(f'SELECT COUNT(*) FROM horus."{n}"').fetchone()[0] for n in names}
+        return counts, schema_state(db)
 
 
 # --- caminho feliz -------------------------------------------------------------------------------------------------
 
 def test_import_creates_a_verified_historical_copy_without_touching_the_database(package):
     client, record, settings, path = package
-    before = tables(client)
+    before = tables(settings)
     response = post(client, path)
     assert response.status_code == 201, response.text
     item = response.json()
@@ -77,12 +85,15 @@ def test_import_creates_a_verified_historical_copy_without_touching_the_database
     assert item["id"] != record["id"] and item["source_production_id"] == record["id"] and len(item["id"]) == 32
     assert {"script", "quality_report", "licenses", "original_review"} <= set(item) and item["title"]
     assert item["original_review"]["production_review"]["decision"] == "approve"      # só histórico
-    assert tables(client) == before                                                    # nenhuma tabela/linha/versão mudou
+    assert tables(settings) == before                                                  # nenhuma outra tabela/versão mudou
     folder = settings.data_dir / "imports" / item["id"]
     assert {p.name for p in folder.iterdir()} >= {"video.mp4", "subtitles.srt", "script.json", "quality-report.json",
-                                                   "licenses.json", "review.json", "import.json"}
+                                                   "licenses.json", "review.json"}
     assert not [p for p in (settings.data_dir / "imports").iterdir() if p.name.startswith(".staging")]
-    assert str(path) not in (folder / "import.json").read_text(encoding="utf-8") and "pacote" not in (folder / "import.json").read_text(encoding="utf-8")
+    with pg_connect(settings) as db:
+        row = db.execute("SELECT approved, publishable, manifest::text FROM horus.imports WHERE id = %s", (item["id"],)).fetchone()
+        assert row is not None and row[0] is False and row[1] is False
+        assert str(path) not in row[2] and "pacote" not in row[2]
     assert client.get("/v1/imports").json()["items"][0]["id"] == item["id"]
     assert client.get(f"/v1/imports/{item['id']}").json()["script"] == item["script"]
     assert client.get(f"/v1/imports/{item['id']}/video").content == read_zip(path)["video.mp4"]
@@ -207,12 +218,12 @@ def test_hostile_packages_are_refused_before_any_write(package, tmp_path, case):
         rebuild(path, target, **spec)
     except (ValueError, OSError):
         pytest.skip("o próprio zipfile recusa montar este pacote hostil")
-    before = tables(client)
+    before = tables(settings)
     response = post(client, target)
     assert response.status_code in {409, 422}, (case, response.text)
     assert "detail" in response.json() and str(tmp_path) not in response.text and "Traceback" not in response.text
     assert not (settings.data_dir / "imports").exists(), "algo foi escrito antes da verificação completa"
-    assert tables(client) == before and members
+    assert tables(settings) == before and members
 
 
 def test_not_a_zip_truncated_and_empty_files(package, tmp_path):
@@ -343,18 +354,20 @@ def test_tampering_after_import_is_detected_on_read(package):
     assert client.get(f"/v1/imports/{item['id']}/video").status_code == 409
     (folder / "script.json").write_text('{"trocado": true}', encoding="utf-8")
     assert client.get(f"/v1/imports/{item['id']}").status_code == 409
-    (folder / "import.json").unlink()
-    assert client.get(f"/v1/imports/{item['id']}").status_code == 404
-    assert client.get("/v1/imports").json()["items"] == []
+    with pg_connect(settings) as db:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.execute("UPDATE horus.imports SET approved = true WHERE id = %s", (item["id"],))
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.execute("DELETE FROM horus.imports WHERE id = %s", (item["id"],))
 
 
 def test_corrupt_import_record_never_breaks_the_listing(package):
     client, record, settings, path = package
     item = post(client, path).json()
-    (settings.data_dir / "imports" / item["id"] / "import.json").write_text("{lixo", encoding="utf-8")
     (settings.data_dir / "imports" / ("a" * 32)).mkdir()
     (settings.data_dir / "imports" / "pasta-estranha").mkdir()
-    assert client.get("/v1/imports").json() == {"items": []}
+    listed = client.get("/v1/imports").json()
+    assert [i["id"] for i in listed["items"]] == [item["id"]]
 
 
 # --- ids e autenticação -----------------------------------------------------------------------------------------------

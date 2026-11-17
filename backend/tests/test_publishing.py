@@ -198,11 +198,11 @@ def test_real_ffmpeg_extracts_png_and_jpg_1080x1920(production):
         'color=c=blue:s=32x32:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(root / 'video.mp4')],
         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
     from horus_backend.production import inspect_artifact
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
+    with client.app.state.store.uow() as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
         video = inspect_artifact(root, 'video.mp4', 'video')
         artifacts = [video if a['kind'] == 'video' else a for a in artifacts]
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), record['id']))
+        db.execute('UPDATE horus.productions SET artifacts=%s WHERE id=%s', (json.dumps(artifacts), record['id']))
     response = client.post(f"/v1/productions/{record['id']}/review", headers={'Idempotency-Key': 'real-approval'},
         json={'decision': 'approve', 'artifact_sha256': video['sha256'], 'acknowledge_quality_errors': True})
     assert response.status_code == 200, response.text
