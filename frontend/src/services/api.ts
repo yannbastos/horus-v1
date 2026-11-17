@@ -1,3 +1,5 @@
+import { notifyDatabaseApiError } from './database';
+
 export type Connection = { baseUrl: string; token: string };
 export type HermesStatus = {
   state: string; connected: boolean; cli_available: boolean; configured: boolean;
@@ -346,13 +348,22 @@ export async function api<T>(connection: Connection, path: string, options: Requ
       const detailCode =
         rawDetail && typeof rawDetail === 'object' && typeof rawDetail.code === 'string'
           ? rawDetail.code
-          : undefined;
+          : typeof body?.code === 'string'
+            ? body.code
+            : body?.error && typeof body.error === 'object' && typeof body.error.code === 'string'
+              ? body.error.code
+              : undefined;
       const detailMessage =
         typeof rawDetail === 'string'
           ? rawDetail
           : rawDetail && typeof rawDetail === 'object' && typeof rawDetail.message === 'string'
             ? rawDetail.message
-            : `Não foi possível concluir a operação (${response.status}).`;
+            : typeof body?.message === 'string'
+              ? body.message
+              : body?.error && typeof body.error === 'object' && typeof body.error.message === 'string'
+                ? body.error.message
+                : `Não foi possível concluir a operação (${response.status}).`;
+      notifyDatabaseApiError(detailCode, detailMessage);
       throw new ApiError(detailMessage, response.status, detailCode, rawDetail);
     }
     return await response.json() as T;
