@@ -4,7 +4,7 @@ import { StatusMessage } from './StatusMessage';
 
 const FALLBACK_GUIDANCE_LINES = [
   'O que é: a criptografia de disco (BitLocker no Windows Pro/Enterprise/Education; "criptografia de dispositivo" no Windows Home e em alguns computadores) embaralha todo o volume para que ninguém leia os arquivos sem a chave.',
-  'Por que importa: o Hórus guarda roteiros, mídia, comentários, o banco de dados e a conexão do Hermes na pasta de dados, sem criptografia própria. A criptografia do volume protege esses dados se o computador for perdido ou roubado.',
+  'Por que importa: o Hórus guarda roteiros, mídia, comentários e a conexão do Hermes na pasta de dados, sem criptografia própria; o banco de dados fica no Supabase (PostgreSQL), fora deste volume. A criptografia do volume protege esses dados se o computador for perdido ou roubado.',
   'Como ativar: no Windows Pro/Enterprise/Education, abra Configurações > Privacidade e segurança > Criptografia de dispositivo, ou Painel de Controle > Sistema e Segurança > BitLocker. No Windows Home, use Configurações > Privacidade e segurança > Criptografia de dispositivo (em computadores compatíveis, com conta Microsoft). Guarde a chave de recuperação fora do computador.',
 ];
 
