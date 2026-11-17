@@ -1,40 +1,43 @@
-"""Exclusão segura de dados LOCAIS (HOR-117): prévia exata, frase digitada, backup verificado, quarentena e auditoria.
+"""Exclusão segura de dados LOCAIS com auditoria PostgreSQL encadeada (HOR-117 / HOR-164 I8).
 
-Escopos desta fatia: `production` (pasta da produção, exports e comentários) e `import` (pasta da importação). O banco
-operacional **não é alterado** (preserva trilha, licenças append-only e chaves estrangeiras); só arquivos mudam de lugar.
-Fluxo: `preview` (somente leitura, gera plano e token de uso único) → `execute` (frase exata, nenhum job ativo, plano
-inalterado, pacote local gerado e verificado ANTES, auditoria `started`, mover para `<data_dir>/.quarentena/<audit_id>/`,
-auditoria `completed`) → `restore` (devolve da quarentena conferindo o resumo dos arquivos). A purga definitiva da
-quarentena não faz parte desta fatia. Os pacotes de pré-exclusão ficam em `<data_dir>-backups/` e nunca são apagados
-automaticamente. O pacote local (banco + manifestos JSON) NÃO contém vídeos/mídia/exports: quem preserva esses arquivos é a
-quarentena.
+Escopos desta fatia: `production` (pasta da produção, exports e comentários) e `import`
+(pasta da importação). O banco PostgreSQL operacional **não é alterado** (preserva trilha,
+licenças append-only e chaves estrangeiras); apenas os arquivos locais são movidos para
+quarentena recuperável.
 
-Auditoria: `<data_dir>/deletion-audit.json`, JSON atômico, eventos append-only encadeados por hash (`prev_hash`/`hash`),
-sem conteúdo de arquivos: só ids, caminhos relativos, contagens, tamanhos e resumos. Sem migração.
+Fluxo:
+- `preview`: somente leitura em disco + PostgreSQL, gera plano e token de uso único;
+- `execute`: valida frase/token/plano, gera e verifica pacote v2 pré-exclusão, grava
+  intenção (`started`) em `horus.deletion_events` ANTES de mover arquivos, move para
+  `<data_dir>/.quarentena/<audit_id>/` e grava desfecho (`completed`/`failed`) DEPOIS;
+- `reconcile`: se a rede/PG falhar após o movimento em disco, reconcilia o estado
+  `incomplete` comparando os resumos SHA-256 gravados em `started`;
+- `restore`: devolve da quarentena conferindo os resumos e audita `restored`.
+
+Nota sobre retenção PostgreSQL: devido a MVCC, WAL e backups externos do provedor,
+este módulo NÃO realiza nem promete `secure_delete` ou zeragem física imediata em disco.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
-import json
 import os
+from pathlib import Path
 import re
 import secrets
-import sqlite3
-import tempfile
 import threading
 import time
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
+import uuid
 
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
 
 from .local_data_export import export_local_data, verify_export
+from .storage import DatabaseUnavailable, Store, canonical_json_bytes
 from .workflows import WorkflowConflict
 
-SCHEMA = 1
-AUDIT_FILE = "deletion-audit.json"
 QUARANTINE = ".quarentena"
 PLAN_TTL_SECONDS = 300
 MAX_PHRASE_ATTEMPTS = 5
@@ -43,6 +46,7 @@ ID = re.compile(r"^[a-f0-9]{32}$")
 ACTIVE_JOBS = ("queued", "running", "cancel_requested")
 GENESIS = "0" * 64
 LABEL = {"production": "producao", "import": "importacao"}
+DELETION_ADVISORY_KEY = 3  # pg_advisory_xact_lock(164, 3) reservado em 20261117160200_horus_security.sql
 
 
 class DeletionPreviewRequest(BaseModel):
@@ -58,95 +62,134 @@ class DeletionExecuteRequest(BaseModel):
     phrase: str = Field(min_length=1, max_length=120)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _canonical(value) -> bytes:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
-
-
 def _is_link(path: Path) -> bool:
     return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
 
 
-# --- auditoria ------------------------------------------------------------------------------------------------------
+# --- auditoria PostgreSQL -------------------------------------------------------------------------------------------
+
 
 class DeletionAudit:
-    """Registro append-only encadeado por hash. Leitura tolerante (nunca levanta); escrita recusa registro adulterado."""
+    """Registro append-only encadeado por hash em `horus.deletion_events`."""
 
-    def __init__(self, data_dir: Path):
-        self.path = Path(data_dir) / AUDIT_FILE
+    def __init__(
+        self,
+        target: Store | Path | None = None,
+        *,
+        store: Store | None = None,
+        data_dir: Path | None = None,
+        device_id: str = "local",
+    ):
+        if hasattr(target, "uow"):
+            self.store: Store | None = target
+            self.data_dir: Path | None = Path(data_dir) if data_dir is not None else None
+        else:
+            self.store = store
+            self.data_dir = Path(target) if target is not None else (Path(data_dir) if data_dir is not None else None)
+        self.device_id = device_id
         self.lock = threading.RLock()
-        self._cache: tuple[tuple[int, int], list[dict], bool] | None = None
 
-    def _read(self) -> tuple[list[dict], bool]:
-        try:
-            stat = self.path.stat()
-        except FileNotFoundError:
-            return [], True
-        key = (stat.st_mtime_ns, stat.st_size)
-        if self._cache and self._cache[0] == key:
-            return self._cache[1], self._cache[2]
-        try:
-            document = json.loads(self.path.read_text(encoding="utf-8"))
-            events = document["events"]
-            if document.get("schema_version") != SCHEMA or not isinstance(events, list):
-                raise ValueError("estrutura inválida")
-            ok = self._chain_ok(events)
-        except (OSError, ValueError, KeyError, TypeError, UnicodeError):
-            events, ok = [], False
-        self._cache = (key, events, ok)
-        return events, ok
+    def _require_store(self) -> Store:
+        if self.store is None:
+            raise DatabaseUnavailable("database_unavailable")
+        return self.store
 
     @staticmethod
     def event_hash(event: dict) -> str:
-        return hashlib.sha256(_canonical({k: v for k, v in event.items() if k != "hash"})).hexdigest()
+        payload = {k: v for k, v in event.items() if k not in {"hash", "seq"}}
+        return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
     @classmethod
-    def _chain_ok(cls, events: list) -> bool:
+    def _chain_ok(cls, rows: list[dict]) -> bool:
         previous = GENESIS
-        for number, event in enumerate(events, 1):
-            if (not isinstance(event, dict) or event.get("seq") != number or event.get("prev_hash") != previous
-                    or event.get("hash") != cls.event_hash(event)):
+        for row in rows:
+            raw_canonical = bytes(row["payload_canonical"])
+            expected_hash = hashlib.sha256(raw_canonical).hexdigest()
+            if row["prev_hash"] != previous or row["hash"] != expected_hash:
                 return False
-            previous = event["hash"]
+            previous = row["hash"]
         return True
 
     def events(self) -> tuple[list[dict], bool]:
-        with self.lock:
-            return self._read()
+        store = self._require_store()
+        with store.uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT seq, id, audit_id, action, target, device_id, created_at,
+                           payload, payload_canonical, prev_hash, hash
+                    FROM horus.deletion_events
+                    ORDER BY seq ASC
+                    """
+                )
+                rows = cur.fetchall()
+        chain_ok = self._chain_ok(rows)
+        result: list[dict] = []
+        for row in rows:
+            payload = dict(row["payload"] or {})
+            payload["seq"] = int(row["seq"])
+            payload["id"] = row["id"]
+            payload["audit_id"] = row["audit_id"]
+            payload["action"] = row["action"]
+            payload["prev_hash"] = row["prev_hash"]
+            payload["hash"] = row["hash"]
+            if "at" not in payload and row["created_at"] is not None:
+                dt = row["created_at"]
+                payload["at"] = dt.astimezone(timezone.utc).isoformat() if isinstance(dt, datetime) else str(dt)
+            result.append(payload)
+        return result, chain_ok
 
-    def append(self, **fields) -> dict:
+    def append(self, *, action: str, audit_id: str, scope: str, target_id: str, **fields) -> dict:
+        store = self._require_store()
         with self.lock:
-            events, ok = self._read()
-            if not ok:
-                raise WorkflowConflict("O registro de auditoria das exclusões está ilegível ou adulterado; nada foi alterado.")
-            event = {"seq": len(events) + 1, "id": uuid.uuid4().hex, "at": _now(), **fields,
-                     "prev_hash": events[-1]["hash"] if events else GENESIS}
-            event["hash"] = self.event_hash(event)
-            document = {"schema_version": SCHEMA, "events": [*events, event]}
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".deletion-audit-", suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(document, handle, ensure_ascii=False)
-                for attempt in range(6):
-                    try:
-                        os.replace(temporary, self.path)
-                        break
-                    except PermissionError:
-                        if attempt == 5:
-                            raise
-                        time.sleep(.02 * (attempt + 1))
-            finally:
-                Path(temporary).unlink(missing_ok=True)
-            self._cache = None
-            return event
+            with store.uow() as conn:
+                conn.execute("SELECT pg_advisory_xact_lock(164, %s)", (DELETION_ADVISORY_KEY,))
+                prev_row = conn.execute(
+                    "SELECT hash FROM horus.deletion_events ORDER BY seq DESC LIMIT 1"
+                ).fetchone()
+                prev_hash = prev_row[0] if prev_row else GENESIS
+                event_id = uuid.uuid4().hex
+                created_at = datetime.now(timezone.utc)
+                at_iso = created_at.isoformat()
+                payload = {
+                    "id": event_id,
+                    "audit_id": audit_id,
+                    "action": action,
+                    "scope": scope,
+                    "target_id": target_id,
+                    "device_id": self.device_id,
+                    "at": at_iso,
+                    "prev_hash": prev_hash,
+                    **fields,
+                }
+                payload_canonical = canonical_json_bytes(payload)
+                event_hash = hashlib.sha256(payload_canonical).hexdigest()
+                seq = conn.execute(
+                    """
+                    INSERT INTO horus.deletion_events (
+                        id, audit_id, action, target, device_id, created_at,
+                        payload, payload_canonical, prev_hash, hash
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING seq
+                    """,
+                    (
+                        event_id,
+                        audit_id,
+                        action,
+                        f"{scope}:{target_id}",
+                        self.device_id,
+                        created_at,
+                        Jsonb(payload),
+                        payload_canonical,
+                        prev_hash,
+                        event_hash,
+                    ),
+                ).fetchone()[0]
+            return {**payload, "seq": int(seq), "hash": event_hash}
 
     def state(self, scope: str, target_id: str) -> dict | None:
         """Estado derivado da auditoria: último ciclo do alvo (`deleted`, `incomplete` ou None)."""
-        events, ok = self.events()
+        events, _ok = self.events()
         last: dict | None = None
         for event in events:
             if event.get("scope") != scope or event.get("target_id") != target_id:
@@ -169,8 +212,9 @@ class DeletionAudit:
 
 # --- medição --------------------------------------------------------------------------------------------------------
 
+
 def measure(path: Path) -> dict | None:
-    """None se não existe; senão {files, bytes, digest, links}. Nunca segue links; o resumo cobre caminho relativo e tamanho."""
+    """None se não existe; senão {files, bytes, digest, links}. Nunca segue links."""
     if not os.path.lexists(path):
         return None
     if _is_link(path):
@@ -200,44 +244,78 @@ def measure(path: Path) -> dict | None:
 
 # --- serviço --------------------------------------------------------------------------------------------------------
 
+
 class DataDeletionService:
     def __init__(self, manager):
-        self.manager, self.settings, self.productions = manager, manager.settings, manager.productions
+        self.manager = manager
+        self.settings = manager.settings
+        self.productions = manager.productions
+        self.store: Store | None = getattr(manager, "store", None)
         self.audit: DeletionAudit = manager.deletion_audit
+        if self.audit.store is None and self.store is not None:
+            self.audit.store = self.store
         self.data_dir = Path(self.settings.data_dir)
         self.plans: dict[str, dict] = {}
         self.lock = threading.RLock()
 
-    # alvos ----------------------------------------------------------------------------------------------------------
+    def _require_store(self) -> Store:
+        if self.store is None:
+            raise DatabaseUnavailable("database_unavailable")
+        return self.store
 
     def _targets(self, scope: str, target_id: str) -> list[tuple[str, str]]:
         if scope == "production":
-            return [("production_folder", f"productions/{target_id}"), ("exports", f"exports/{target_id}"),
-                    ("comments", f"production-comments/{target_id}.json")]
+            return [
+                ("production_folder", f"productions/{target_id}"),
+                ("exports", f"exports/{target_id}"),
+                ("comments", f"production-comments/{target_id}.json"),
+            ]
         return [("import_folder", f"imports/{target_id}")]
 
     def _active_jobs(self) -> int:
-        with self.manager.store.connect() as db:
-            count = db.execute(f"SELECT COUNT(*) FROM jobs WHERE status IN ({','.join('?' * len(ACTIVE_JOBS))})", ACTIVE_JOBS).fetchone()[0]
-        return count + (1 if self.manager.active_id else 0)
+        store = self._require_store()
+        with store.uow(readonly=True) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM horus.jobs WHERE status = ANY(%s)",
+                (list(ACTIVE_JOBS),),
+            ).fetchone()[0]
+        return int(count) + (1 if self.manager.active_id else 0)
 
     def _db_kept(self, production_id: str) -> tuple[list[dict], list[dict]]:
-        with self.manager.store.connect() as db:
-            row = db.execute("SELECT script_id, script_version, job_id FROM productions WHERE id=?", (production_id,)).fetchone()
-            if row is None:
-                raise KeyError(production_id)
-            count = lambda sql, *a: db.execute(sql, a).fetchone()[0]
-            kept = [{"table": "productions", "rows": 1, "reason": "preserva a trilha; o banco não é alterado nesta exclusão"},
+        store = self._require_store()
+        with store.uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT script_id, script_version, job_id FROM horus.productions WHERE id = %s",
+                    (production_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise KeyError(production_id)
+
+                def count(query: str, param: str) -> int:
+                    cur.execute(query, (param,))
+                    return int(cur.fetchone()["cnt"])
+
+                kept = [
+                    {"table": "productions", "rows": 1, "reason": "preserva a trilha; o banco PostgreSQL não é alterado nesta exclusão"},
                     {"table": "jobs", "rows": 1, "reason": "referenciado pela produção"},
-                    {"table": "events", "rows": count("SELECT COUNT(*) FROM events WHERE job_id=?", row["job_id"]), "reason": "histórico do job"},
-                    {"table": "job_attempts", "rows": count("SELECT COUNT(*) FROM job_attempts WHERE job_id=?", row["job_id"]), "reason": "histórico do job"},
-                    {"table": "production_receipts", "rows": count("SELECT COUNT(*) FROM production_receipts WHERE production_id=?", production_id),
-                     "reason": "idempotência"},
-                    {"table": "license_reviews", "rows": count("SELECT COUNT(*) FROM license_reviews WHERE production_id=?", production_id),
-                     "reason": "append-only: não pode ser apagado nem alterado"}]
-            script = db.execute("SELECT workflow_id FROM scripts WHERE id=?", (row["script_id"],)).fetchone()
-        dependencies = [{"kind": "script", "id": row["script_id"], "version": row["script_version"],
-                         "note": "roteiro aprovado usado pela produção; não é apagado e pode servir a outras produções"}]
+                    {"table": "events", "rows": count("SELECT COUNT(*) AS cnt FROM horus.events WHERE job_id = %s", row["job_id"]), "reason": "histórico do job"},
+                    {"table": "job_attempts", "rows": count("SELECT COUNT(*) AS cnt FROM horus.job_attempts WHERE job_id = %s", row["job_id"]), "reason": "histórico do job"},
+                    {"table": "production_receipts", "rows": count("SELECT COUNT(*) AS cnt FROM horus.production_receipts WHERE production_id = %s", production_id), "reason": "idempotência"},
+                    {"table": "license_reviews", "rows": count("SELECT COUNT(*) AS cnt FROM horus.license_reviews WHERE production_id = %s", production_id), "reason": "append-only: não pode ser apagado nem alterado"},
+                ]
+                cur.execute("SELECT workflow_id FROM horus.scripts WHERE id = %s", (row["script_id"],))
+                script = cur.fetchone()
+
+        dependencies = [
+            {
+                "kind": "script",
+                "id": row["script_id"],
+                "version": row["script_version"],
+                "note": "roteiro aprovado usado pela produção; não é apagado e pode servir a outras produções",
+            }
+        ]
         if script:
             dependencies.append({"kind": "workflow", "id": script["workflow_id"], "note": "origem do roteiro; não é apagado"})
         return [k for k in kept if k["rows"]], dependencies
@@ -254,16 +332,27 @@ class DataDeletionService:
         items, blockers, digests = [], [], {}
         for kind, relative in self._targets(scope, target_id):
             info = measure(self.data_dir / relative)
-            items.append({"kind": kind, "path": relative, "exists": info is not None,
-                          "files": info["files"] if info else 0, "bytes": info["bytes"] if info else 0})
+            items.append(
+                {
+                    "kind": kind,
+                    "path": relative,
+                    "exists": info is not None,
+                    "files": info["files"] if info else 0,
+                    "bytes": info["bytes"] if info else 0,
+                }
+            )
             if info:
                 digests[relative] = info["digest"]
                 if info["links"]:
                     blockers.append({"code": "links", "message": f"{relative} contém link simbólico ou junção; recusado."})
         state = self.audit.state(scope, target_id)
         if state:
-            blockers.append({"code": "already_deleted" if state["state"] == "deleted" else "incomplete_deletion",
-                             "message": "Os dados locais deste alvo já foram excluídos ou há uma exclusão incompleta; veja a auditoria."})
+            blockers.append(
+                {
+                    "code": "already_deleted" if state["state"] == "deleted" else "incomplete_deletion",
+                    "message": "Os dados locais deste alvo já foram excluídos ou há uma exclusão incompleta; veja a auditoria.",
+                }
+            )
         if not digests:
             blockers.append({"code": "nothing_to_delete", "message": "Não há arquivos locais para excluir."})
         active = self._active_jobs()
@@ -278,29 +367,58 @@ class DataDeletionService:
             self.plans = {k: v for k, v in self.plans.items() if v["expires"] > now}
             while len(self.plans) >= MAX_PLANS:
                 self.plans.pop(next(iter(self.plans)))
-            self.plans[plan_id] = {"scope": scope, "id": target_id, "digests": digests, "phrase": phrase, "attempts": 0,
-                                   "token_hash": hashlib.sha256(token.encode()).hexdigest(), "expires": now + PLAN_TTL_SECONDS}
-        return {"plan_id": plan_id, "intent_token": token, "expires_in_seconds": PLAN_TTL_SECONDS, "scope": scope, "id": target_id,
-                "confirmation_phrase": phrase, "items": items,
-                "totals": {"files": sum(i["files"] for i in items), "bytes": sum(i["bytes"] for i in items)},
-                "db_kept": kept, "dependencies": dependencies, "blockers": blockers, "can_execute": not blockers,
-                "notice": "Os arquivos vão para a quarentena (recuperáveis); o pacote local de pré-exclusão cobre banco e manifestos, não vídeos."}
+            self.plans[plan_id] = {
+                "scope": scope,
+                "id": target_id,
+                "digests": digests,
+                "phrase": phrase,
+                "attempts": 0,
+                "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+                "expires": now + PLAN_TTL_SECONDS,
+            }
+        return {
+            "plan_id": plan_id,
+            "intent_token": token,
+            "expires_in_seconds": PLAN_TTL_SECONDS,
+            "scope": scope,
+            "id": target_id,
+            "confirmation_phrase": phrase,
+            "items": items,
+            "totals": {"files": sum(i["files"] for i in items), "bytes": sum(i["bytes"] for i in items)},
+            "db_kept": kept,
+            "dependencies": dependencies,
+            "blockers": blockers,
+            "can_execute": not blockers,
+            "notice": (
+                "Os arquivos locais vão para a quarentena (recuperáveis); o pacote de pré-exclusão cobre "
+                "dump lógico PostgreSQL e manifestos, não vídeos. O banco PostgreSQL preserva a trilha "
+                "operacional; devido a MVCC, WAL e backups do provedor, não há zeragem física imediata."
+            ),
+        }
 
     # execução -------------------------------------------------------------------------------------------------------
 
     def _backup(self, audit_id: str) -> dict:
+        store = self._require_store()
         folder = self.data_dir.parent / f"{self.data_dir.name}-backups"
         package = folder / f"pre-exclusao-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{audit_id[:8]}.zip"
         try:
             folder.mkdir(parents=True, exist_ok=True)
-            report = export_local_data(self.data_dir, package)
-        except (OSError, ValueError, sqlite3.Error):
+            report = export_local_data(self.data_dir, package, store=store)
+        except DatabaseUnavailable:
+            raise
+        except (OSError, ValueError):
             raise WorkflowConflict("Não foi possível gerar o pacote local de pré-exclusão; nada foi excluído.") from None
         check = verify_export(package)
         if not check["ok"]:
             raise WorkflowConflict(f"O pacote de pré-exclusão não passou na verificação ({package.name}); nada foi excluído.")
-        return {"name": package.name, "sha256": report["sha256"], "bytes": package.stat().st_size, "verified": True,
-                "location": f"{self.data_dir.name}-backups"}
+        return {
+            "name": package.name,
+            "sha256": report["sha256"],
+            "bytes": package.stat().st_size,
+            "verified": True,
+            "location": f"{self.data_dir.name}-backups",
+        }
 
     def execute(self, request: DeletionExecuteRequest) -> dict:
         with self.lock:
@@ -314,7 +432,7 @@ class DataDeletionService:
                 if plan["attempts"] >= MAX_PHRASE_ATTEMPTS:
                     self.plans.pop(request.plan_id, None)
                 raise WorkflowConflict("Token ou frase de confirmação incorretos; nada foi excluído.")
-            self.plans.pop(request.plan_id)            # uso único
+            self.plans.pop(request.plan_id)
             return self._execute(plan)
 
     def _execute(self, plan: dict) -> dict:
@@ -334,9 +452,10 @@ class DataDeletionService:
             raise WorkflowConflict("Os arquivos mudaram desde a prévia; gere uma nova prévia.")
         audit_id = uuid.uuid4().hex
         backup = self._backup(audit_id)
-        if self._active_jobs():                        # nova checagem depois do backup (pode ter demorado)
+        if self._active_jobs():
             raise WorkflowConflict("Uma tarefa foi iniciada durante o backup; nada foi excluído. O pacote ficou guardado.")
         items = [{"path": rel, "files": v["files"], "bytes": v["bytes"], "digest": v["digest"]} for rel, v in current.items()]
+        # Intenção auditada em PG ANTES de mover qualquer arquivo em disco.
         self.audit.append(action="started", audit_id=audit_id, scope=scope, target_id=target_id, items=items, backup=backup)
         quarantine = self.data_dir / QUARANTINE / audit_id
         moved: list[tuple[Path, Path]] = []
@@ -347,20 +466,91 @@ class DataDeletionService:
                 os.rename(source, destination)
                 moved.append((source, destination))
         except BaseException as error:
-            for source, destination in reversed(moved):         # desfaz: nada parcial
+            for source, destination in reversed(moved):
                 try:
                     os.rename(destination, source)
                 except OSError:
                     pass
-            self.audit.append(action="failed", audit_id=audit_id, scope=scope, target_id=target_id, error=type(error).__name__,
-                              restored_all=all(not d.exists() for _, d in moved))
+            self.audit.append(
+                action="failed",
+                audit_id=audit_id,
+                scope=scope,
+                target_id=target_id,
+                error=type(error).__name__,
+                restored_all=all(not d.exists() for _, d in moved),
+            )
             raise WorkflowConflict("Não foi possível mover os arquivos para a quarentena; nada foi excluído.") from error
+        # Resultado auditado em PG DEPOIS de mover. Se a rede cair aqui, o estado fica `incomplete` e reconciliável.
         self.audit.append(action="completed", audit_id=audit_id, scope=scope, target_id=target_id)
-        return {"audit_id": audit_id, "scope": scope, "id": target_id, "items": items, "backup": backup,
-                "quarantine": f"{QUARANTINE}/{audit_id}", "recoverable": True,
-                "totals": {"files": sum(i["files"] for i in items), "bytes": sum(i["bytes"] for i in items)}}
+        return {
+            "audit_id": audit_id,
+            "scope": scope,
+            "id": target_id,
+            "items": items,
+            "backup": backup,
+            "quarantine": f"{QUARANTINE}/{audit_id}",
+            "recoverable": True,
+            "totals": {"files": sum(i["files"] for i in items), "bytes": sum(i["bytes"] for i in items)},
+        }
 
-    # restauração e leitura -----------------------------------------------------------------------------------------
+    # reconciliação, restauração e leitura ---------------------------------------------------------------------------
+
+    def reconcile(self, audit_id: str) -> dict:
+        """Reconcilia exclusão `incomplete` comparando resumos SHA-256 em disco/quarentena com `started`."""
+        if not ID.fullmatch(audit_id):
+            raise KeyError(audit_id)
+        with self.lock:
+            events, ok = self.audit.events()
+            started = next((e for e in events if e["action"] == "started" and e["audit_id"] == audit_id), None)
+            if started is None or not ok:
+                raise KeyError(audit_id)
+            actions = {e["action"] for e in events if e.get("audit_id") == audit_id}
+            if actions & {"completed", "failed", "restored"}:
+                raise WorkflowConflict("Esta exclusão já foi finalizada; reconciliação não é necessária.")
+
+            quarantine = self.data_dir / QUARANTINE / audit_id
+            all_in_quarantine = True
+            all_at_origin = True
+            for item in started["items"]:
+                orig = measure(self.data_dir / item["path"])
+                quar = measure(quarantine / item["path"])
+                if not (quar and not quar["links"] and quar["digest"] == item["digest"] and orig is None):
+                    all_in_quarantine = False
+                if not (orig and not orig["links"] and orig["digest"] == item["digest"] and quar is None):
+                    all_at_origin = False
+
+            if all_in_quarantine:
+                self.audit.append(
+                    action="completed",
+                    audit_id=audit_id,
+                    scope=started["scope"],
+                    target_id=started["target_id"],
+                    reconciled=True,
+                )
+                return {
+                    "audit_id": audit_id,
+                    "scope": started["scope"],
+                    "id": started["target_id"],
+                    "outcome": "completed",
+                    "state": "deleted",
+                }
+            if all_at_origin:
+                self.audit.append(
+                    action="failed",
+                    audit_id=audit_id,
+                    scope=started["scope"],
+                    target_id=started["target_id"],
+                    reconciled=True,
+                    restored_all=True,
+                )
+                return {
+                    "audit_id": audit_id,
+                    "scope": started["scope"],
+                    "id": started["target_id"],
+                    "outcome": "failed",
+                    "state": "present",
+                }
+            raise WorkflowConflict("Estado em disco diverge dos hashes registrados; reconciliação automática recusada.")
 
     def restore(self, audit_id: str) -> dict:
         if not ID.fullmatch(audit_id):
@@ -399,9 +589,14 @@ class DataDeletionService:
                         pass
                 raise WorkflowConflict("Não foi possível restaurar; nada foi alterado.") from error
             self.audit.append(action="restored", audit_id=audit_id, scope=started["scope"], target_id=started["target_id"])
-            return {"audit_id": audit_id, "scope": started["scope"], "id": started["target_id"], "restored": [i["path"] for i in started["items"]]}
+            return {
+                "audit_id": audit_id,
+                "scope": started["scope"],
+                "id": started["target_id"],
+                "restored": [i["path"] for i in started["items"]],
+            }
 
     def page(self, limit: int = 50, before: int | None = None) -> dict:
         events, ok = self.audit.events()
-        shown = [e for e in reversed(events) if before is None or e["seq"] < before][:max(1, min(limit, 200))]
+        shown = [e for e in reversed(events) if before is None or e["seq"] < before][: max(1, min(limit, 200))]
         return {"chain_ok": ok, "items": shown, "next_before": shown[-1]["seq"] if len(shown) == limit and shown[-1]["seq"] > 1 else None}

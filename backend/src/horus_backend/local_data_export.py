@@ -1,56 +1,54 @@
-"""Exportação dos dados locais do usuário como pacote verificável (HOR-117). Somente leitura da origem; offline.
+"""Exportação dos dados do usuário como pacote verificável PostgreSQL v2 (HOR-164 / I8).
 
-Conteúdo: cópia consistente (API de *backup* do SQLite, banco aberto em modo leitura) do banco operacional e do estado do
-Radar, as preferências não secretas (`narration-preference.json`) e os manifestos JSON das produções
-(`productions/<id>/*.json`), os comentários de revisão (`production-comments/<id>.json`, HOR-088) e o estado de leitura das
-notificações (`notifications-state.json`). Nunca entram: `integrations/` (conexão e token do Hermes), `models/`, mídia, `exports/`,
-arquivos com formato de credencial, links simbólicos/junções. Cada arquivo tem SHA-256 em `manifest.json`;
-`verify_export` confere hashes, nomes seguros e a integridade dos bancos. O pacote contém dados privados do usuário:
-guarde-o como o próprio banco (BitLocker; fora de pastas sincronizadas).
+Substitui o legado SQLite: não importa `sqlite3` nem cria `.sqlite3`.
+Conteúdo do pacote (`schema_version=2`, `format="horus-pg-export-v2"`):
+1. Dump lógico PostgreSQL (`pg_dump/<tabela>.jsonl`) lido em transação `REPEATABLE READ`
+   somente leitura com o papel `horus_app` (respeitando RLS, sem `postgres`/`service_role`),
+   com contagem de linhas e SHA-256 determinístico por tabela em `manifest.json`.
+2. Arquivos locais permitidos separados em `local_files/productions/<id>/*.json`.
+   Nunca entram: `integrations/`, `models/`, `exports/`, `.quarentena/`, `update-backups/`,
+   credenciais (`SECRET_SHAPE`), links simbólicos ou junções.
 
-Restauração (HOR-093): `restore_local_data` devolve o pacote a uma pasta de dados **nova ou vazia** escolhida pelo usuário,
-nunca sobrescrevendo nada. Verifica o pacote por completo antes de escrever, recusa schema de banco mais novo que o do
-aplicativo, grava numa pasta temporária irmã (hash conferido durante a gravação) e só então troca para o destino. Segredos
-não fazem parte do pacote: o usuário reconfigura Hermes e demais credenciais. A mídia e os arquivos finais das produções
-(`exports/`) também não entram no pacote e, portanto, não são restaurados. Não migra o banco.
-
-CLI: `python -m horus_backend.local_data_export export <pasta-de-dados> --to <pacote.zip>`, `... verify <pacote.zip>` e
-`... restore <pacote.zip> --to <pasta-nova-ou-vazia>`.
+Restauração:
+- `restore_local_data` devolve `local_files/` a uma pasta de dados **nova ou vazia**
+  (staging irmão + `os.rename`), nunca sobrescrevendo nada.
+- Se `target_conn` for fornecida, restaura o dump lógico exclusivamente em um banco
+  PostgreSQL **isolado e vazio** (via `restore_to_isolated_pg`), nunca sobrepondo o
+  banco operacional remoto pela UI.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shutil
-import sqlite3
 import sys
 import tempfile
 import zipfile
-from contextlib import closing
-from datetime import datetime, timezone
-from pathlib import Path
 
-from .backups import _inspect
-from .migrations import SCHEMA_VERSION
-from .notifications import ID_PATTERN as NOTIFICATION_ID
+from psycopg import sql
+from psycopg.rows import dict_row
 
-SCHEMA = 1
+from .backups import FORMAT_TAG, FORMAT_VERSION, restore_to_isolated_pg, serialize_row
+from .database.expected_schema import EXPECTED_SCHEMA_VERSION
+from .storage import DatabaseUnavailable, Store
+
+SCHEMA = FORMAT_VERSION
 MAX_MANIFEST_FILE = 5 * 1024 * 1024
 SECRET_SHAPE = re.compile(
     r"\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36,}|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}|-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"
-    r"|\bBearer\s+[A-Za-z0-9._~+/-]{24,}|(?i:\b(?:api[_-]?key|secret|token|password|senha)\b[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+_=-]{20,}[\"'])")
+    r"|\bBearer\s+[A-Za-z0-9._~+/-]{24,}|(?i:\b(?:api[_-]?key|secret|token|password|senha)\b[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+_=-]{20,}[\"'])"
+)
 SAFE_NAME = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,100}/)*[A-Za-z0-9][A-Za-z0-9._-]{0,100}$")
 MAX_ENTRIES = 20000
-ALLOWED_NAME = re.compile(r"^(?:database/(?:horus|radar-youtube)\.sqlite3|settings/narration-preference\.json"
-                          r"|settings/notifications-state\.json|comments/[A-Za-z0-9_-]{1,64}\.json"
-                          r"|productions/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.json)$")
-RESTORE_TARGET = {"database/horus.sqlite3": "horus.sqlite3", "database/radar-youtube.sqlite3": "radar/radar-youtube.sqlite3",
-                  "settings/narration-preference.json": "narration-preference.json",
-                  "settings/notifications-state.json": "notifications-state.json"}
-COMMENT_NAME = re.compile(r"^comments/([A-Za-z0-9_-]{1,64})\.json$")
-EXCLUDED_AREAS = ("integrations/", "models/", "exports/")
+ALLOWED_NAME = re.compile(
+    r"^(?:pg_dump/[a-z][a-z0-9_]{0,62}\.jsonl"
+    r"|local_files/productions/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.json)$"
+)
+EXCLUDED_AREAS = ("integrations/", "models/", "exports/", ".quarentena/", "update-backups/")
 
 
 def _sha(path: Path) -> str:
@@ -62,90 +60,109 @@ def _is_link(path: Path) -> bool:
     return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
 
 
-def _restore_relative(name: str) -> str:
-    comment = COMMENT_NAME.fullmatch(name)
-    return f"production-comments/{comment.group(1)}.json" if comment else RESTORE_TARGET.get(name, name)
-
-
-def _invalid_content(name: str, raw: bytes) -> str | None:
-    """Estrutura mínima dos JSON de comentários e de notificações (None = válido). Aplicada na exportação e na verificação."""
-    comment = COMMENT_NAME.fullmatch(name)
-    if not comment and name != "settings/notifications-state.json":
-        return None
-    try:
-        doc = json.loads(raw)
-    except ValueError:
-        return "JSON inválido"
-    if not isinstance(doc, dict):
-        return "estrutura inválida"
-    if name == "settings/notifications-state.json":
-        read, unread, before = doc.get("read", {}), doc.get("unread", []), doc.get("read_all_before")
-        ok = (isinstance(read, dict) and len(read) <= 5000 and all(isinstance(k, str) and NOTIFICATION_ID.fullmatch(k) and isinstance(v, str) for k, v in read.items())
-              and isinstance(unread, list) and len(unread) <= 5000 and all(isinstance(k, str) and NOTIFICATION_ID.fullmatch(k) for k in unread)
-              and (before is None or isinstance(before, str)))
-        return None if ok else "estado de notificações inválido"
-    pid, comments = comment.group(1), doc.get("comments")
-    if doc.get("schema_version") != 1 or not isinstance(comments, list) or len(comments) > 500 or not isinstance(doc.get("receipts"), dict)             or len(doc["receipts"]) > 1000:
-        return "estrutura de comentários inválida"
-    seen = set()
-    for item in comments:
-        if not isinstance(item, dict):
-            return "comentário inválido"
-        at, trail = item.get("at_seconds"), item.get("trail")
-        if (not isinstance(item.get("id"), str) or not re.fullmatch(r"[a-f0-9]{32}", item["id"]) or item["id"] in seen
-                or item.get("production_id") != pid or not isinstance(item.get("artifact_sha256"), str)
-                or not re.fullmatch(r"[a-f0-9]{64}", item["artifact_sha256"]) or isinstance(at, bool)
-                or not isinstance(at, (int, float)) or not 0 <= at <= 86400 or not isinstance(item.get("text"), str)
-                or not isinstance(item.get("author"), str) or item.get("author_kind") != "human"
-                or item.get("status") not in ("open", "resolved") or not isinstance(item.get("created_at"), str)
-                or not isinstance(trail, list) or not 1 <= len(trail) <= 50
-                or not all(isinstance(e, dict) and e.get("action") in ("created", "resolved", "reopened") and isinstance(e.get("author"), str)
-                           for e in trail)):
-            return "comentário inválido (o autor deve ser humano)"
-        seen.add(item["id"])
+def _restore_relative(name: str) -> str | None:
+    if name.startswith("local_files/"):
+        return name[len("local_files/"):]
     return None
 
 
-def _snapshot(source: Path, target: Path) -> dict:
-    """Cópia consistente do banco vivo (WAL incluído) e verificação de integridade da cópia."""
-    with closing(sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True, timeout=10)) as db, \
-            closing(sqlite3.connect(target)) as out:
-        db.backup(out)
-        report = _inspect(out)
-    if not report["ok"]:
-        raise ValueError(f"Banco {source.name} sem integridade; exportação recusada (nada foi criado).")
-    return report
-
-
 def _candidates(data_dir: Path):
-    """(nome no pacote, caminho de origem) das cópias de arquivo; os bancos são tratados à parte."""
-    preference = data_dir / "narration-preference.json"
-    if preference.is_file() and not _is_link(preference):
-        yield "settings/narration-preference.json", preference
-    notifications = data_dir / "notifications-state.json"
-    if notifications.is_file() and not _is_link(notifications):
-        yield "settings/notifications-state.json", notifications
-    comments = data_dir / "production-comments"
-    if comments.is_dir() and not _is_link(comments):
-        for item in sorted(comments.glob("*.json")):
-            if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item.stem) and item.is_file() and not _is_link(item):
-                yield f"comments/{item.name}", item
+    """(nome no pacote, caminho de origem) dos arquivos locais permitidos, separados do dump PG."""
     productions = data_dir / "productions"
     if productions.is_dir() and not _is_link(productions):
         for folder in sorted(p for p in productions.iterdir() if p.is_dir() and not _is_link(p)):
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", folder.name):
                 continue
             for item in sorted(folder.glob("*.json")):
-                if _is_link(item) or not item.is_file():   # link para fora da produção nunca é exportado
+                if _is_link(item) or not item.is_file():
                     continue
-                yield f"productions/{folder.name}/{item.name}", item
+                yield f"local_files/productions/{folder.name}/{item.name}", item
 
 
-def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None = None) -> dict:
+def _primary_key_columns(conn, table: str) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT a.attname
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+        WHERE n.nspname = 'horus' AND c.relname = %s AND i.indisprimary
+        ORDER BY k.ord
+        """,
+        (table,),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _dump_pg_tables(store: Store, scratch: Path) -> tuple[dict, list[tuple[str, Path, str]]]:
+    """Exporta todas as tabelas de `horus` em snapshot consistente `REPEATABLE READ` via `horus_app`."""
+    tables_meta: dict[str, dict] = {}
+    staged_pg: list[tuple[str, Path, str]] = []
+
+    with store.uow(readonly=True) as conn:
+        conn.execute("SET LOCAL TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        identity_row = conn.execute(
+            "SELECT instance_id::text FROM horus.database_identity WHERE singleton = true"
+        ).fetchone()
+        instance_id = identity_row[0] if identity_row else None
+        migration_rows = conn.execute(
+            "SELECT version FROM horus.schema_migrations ORDER BY version ASC"
+        ).fetchall()
+        schema_versions = [row[0] for row in migration_rows]
+        schema_version = schema_versions[-1] if schema_versions else None
+
+        table_rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'horus' ORDER BY tablename"
+        ).fetchall()
+
+        for (table,) in table_rows:
+            pk_cols = _primary_key_columns(conn, table)
+            if pk_cols:
+                order_clause = sql.SQL(" ORDER BY ") + sql.SQL(", ").join(sql.Identifier(c) for c in pk_cols)
+            else:
+                order_clause = sql.SQL("")
+            query = sql.SQL("SELECT * FROM {}{}").format(sql.Identifier("horus", table), order_clause)
+
+            out_path = scratch / f"pg-{table}.jsonl"
+            digest = hashlib.sha256()
+            row_count = 0
+            with conn.cursor(row_factory=dict_row) as cur, out_path.open("wb") as stream:
+                cur.execute(query)
+                for row in cur:
+                    line = serialize_row(row)
+                    digest.update(line)
+                    stream.write(line)
+                    row_count += 1
+
+            table_sha = digest.hexdigest()
+            tables_meta[table] = {"rows": row_count, "sha256": table_sha}
+            staged_pg.append((f"pg_dump/{table}.jsonl", out_path, "pg_table"))
+
+    db_info = {
+        "instance_id": instance_id,
+        "schema_version": schema_version,
+        "schema_versions": schema_versions,
+        "tables": tables_meta,
+    }
+    return db_info, staged_pg
+
+
+def export_local_data(
+    data_dir: Path,
+    destination: Path,
+    *,
+    store: Store | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """Exporta dump lógico PostgreSQL + arquivos locais permitidos para pacote ZIP verificável."""
+    if store is None:
+        raise DatabaseUnavailable("database_unavailable")
+
     data_dir, destination = Path(data_dir), Path(destination)
-    database = data_dir / "horus.sqlite3"
-    if not database.is_file() or _is_link(database):
-        raise ValueError("Banco operacional não encontrado na pasta de dados.")
+    if not data_dir.is_dir() or _is_link(data_dir):
+        raise ValueError("Pasta de dados não encontrada ou inválida.")
     if destination.exists() or destination.is_symlink():
         raise ValueError("O destino já existe; escolha um arquivo novo (nada é sobrescrito).")
     try:
@@ -154,24 +171,21 @@ def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None
         pass
     else:
         raise ValueError("O pacote não pode ser gravado dentro da pasta de dados do Hórus.")
-    files, excluded = [], []
-    with tempfile.TemporaryDirectory(prefix="horus-export-") as scratch:
-        scratch = Path(scratch)
-        staged: list[tuple[str, Path]] = []
-        info = {}
-        info["horus.sqlite3"] = _snapshot(database, scratch / "horus.sqlite3")
-        staged.append(("database/horus.sqlite3", scratch / "horus.sqlite3"))
-        radar = data_dir / "radar" / "radar-youtube.sqlite3"
-        if radar.is_file() and not _is_link(radar):
-            info["radar-youtube.sqlite3"] = _snapshot(radar, scratch / "radar.sqlite3")
-            staged.append(("database/radar-youtube.sqlite3", scratch / "radar.sqlite3"))
+
+    files: list[dict] = []
+    excluded: list[dict] = []
+
+    with tempfile.TemporaryDirectory(prefix="horus-export-") as scratch_dir:
+        scratch = Path(scratch_dir)
+        db_info, staged = _dump_pg_tables(store, scratch)
+
         for name, source in _candidates(data_dir):
             if source.stat().st_size > MAX_MANIFEST_FILE:
                 excluded.append({"path": name, "reason": "grande demais para manifesto"})
                 continue
             raw = source.read_bytes()
             copy = scratch / f"manifest-{len(staged)}.json"
-            copy.write_bytes(raw)   # hash e pacote usam esta cópia: o arquivo vivo pode mudar depois
+            copy.write_bytes(raw)
             try:
                 json.loads(raw)
             except ValueError:
@@ -180,36 +194,61 @@ def export_local_data(data_dir: Path, destination: Path, *, now: datetime | None
             if SECRET_SHAPE.search(raw.decode("utf-8", "replace")):
                 excluded.append({"path": name, "reason": "formato de credencial"})
                 continue
-            reason = _invalid_content(name, raw)
-            if reason:
-                excluded.append({"path": name, "reason": reason})
-                continue
-            staged.append((name, copy))
+            staged.append((name, copy, "local_file"))
+
         created = (now or datetime.now(timezone.utc)).isoformat()
         for area in EXCLUDED_AREAS:
             if (data_dir / area.rstrip("/")).exists():
-                excluded.append({"path": area, "reason": "área nunca exportada (segredos, modelos ou pacotes próprios)"})
-        for name, source in staged:
-            files.append({"name": name, "size": source.stat().st_size, "sha256": _sha(source)})
-        manifest = {"schema_version": SCHEMA, "created_at": created, "files": files, "excluded": excluded,
-                    "databases": {k: {"user_version": v["user_version"], "tables": v["tables"]} for k, v in info.items()},
-                    "contains_private_data": True}
+                excluded.append({"path": area, "reason": "área nunca exportada (segredos, modelos, mídia ou pacotes próprios)"})
+
+        for name, source, category in staged:
+            files.append({"name": name, "size": source.stat().st_size, "sha256": _sha(source), "category": category})
+
+        manifest = {
+            "schema_version": SCHEMA,
+            "format": FORMAT_TAG,
+            "created_at": created,
+            "database": db_info,
+            "files": files,
+            "excluded": excluded,
+            "contains_private_data": True,
+        }
         try:
             with destination.open("xb") as handle, zipfile.ZipFile(handle, "w", zipfile.ZIP_DEFLATED) as package:
-                for name, source in staged:
+                for name, source, _category in staged:
                     package.write(source, name)
                 package.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
         except BaseException:
-            destination.unlink(missing_ok=True)   # nunca deixa um pacote incompleto que pareça válido
+            destination.unlink(missing_ok=True)
             raise
-    return {"ok": True, "files": len(files), "excluded": excluded, "sha256": _sha(destination)}
+
+    return {
+        "ok": True,
+        "schema_version": SCHEMA,
+        "format": FORMAT_TAG,
+        "files": len(files),
+        "excluded": excluded,
+        "sha256": _sha(destination),
+        "database": {
+            "instance_id": db_info["instance_id"],
+            "schema_version": db_info["schema_version"],
+            "tables_count": len(db_info["tables"]),
+        },
+    }
 
 
 def verify_export(package: Path) -> dict:
+    """Verifica integridade estrutural, hashes por tabela/arquivo e ausência de segredos no pacote."""
     errors: list[str] = []
     try:
         with zipfile.ZipFile(package) as archive:
-            names = [i.filename for i in archive.infolist()]
+            infolist = archive.infolist()
+            if len(infolist) > MAX_ENTRIES:
+                return {"ok": False, "errors": ["pacote com entradas demais"]}
+            for info in infolist:
+                if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                    return {"ok": False, "errors": [f"link simbólico recusado: {info.filename}"]}
+            names = [i.filename for i in infolist]
             if len(names) != len(set(names)):
                 errors.append("nomes duplicados no pacote")
             bad = [n for n in names if not SAFE_NAME.fullmatch(n) or ".." in n.split("/")]
@@ -217,57 +256,84 @@ def verify_export(package: Path) -> dict:
                 return {"ok": False, "errors": [f"nome inseguro: {n}" for n in bad[:5]]}
             if "manifest.json" not in names:
                 return {"ok": False, "errors": ["manifest.json ausente"]}
+
             manifest = json.loads(archive.read("manifest.json"))
+            if manifest.get("schema_version") != SCHEMA or manifest.get("format") != FORMAT_TAG:
+                errors.append("versão ou formato de manifesto desconhecido")
+
             declared = {f["name"]: f for f in manifest.get("files", [])}
-            if manifest.get("schema_version") != SCHEMA:
-                errors.append("versão de manifesto desconhecida")
             if set(declared) != set(names) - {"manifest.json"}:
                 errors.append("arquivos do pacote diferem do manifesto")
-            if "database/horus.sqlite3" not in declared:
-                errors.append("banco operacional ausente")
-            with tempfile.TemporaryDirectory(prefix="horus-verify-") as scratch:
-                for name, item in declared.items():
-                    if name not in names:
-                        continue
-                    declared_size = item["size"]
-                    if type(declared_size) is not int or declared_size < 0 or archive.getinfo(name).file_size != declared_size:
-                        errors.append(f"tamanho divergente: {name}")
-                        continue
-                    digest, total, content = hashlib.sha256(), 0, bytearray()
-                    checked = COMMENT_NAME.fullmatch(name) or name == "settings/notifications-state.json"
-                    copy = Path(scratch) / name.replace("/", "_") if name.startswith("database/") else None
-                    sink = copy.open("wb") if copy else None
-                    try:
-                        with archive.open(name) as stream:
-                            while chunk := stream.read(1024 * 1024):
-                                total += len(chunk)
-                                if total > declared_size:      # o conteúdo real excede o declarado: para de ler
-                                    break
-                                digest.update(chunk)
-                                if checked:
-                                    content += chunk
-                                if sink:
-                                    sink.write(chunk)
-                    finally:
-                        if sink:
-                            sink.close()
-                    if total != declared_size or digest.hexdigest() != item["sha256"]:
-                        errors.append(f"hash divergente: {name}")
-                        continue
-                    if checked and (reason := _invalid_content(name, bytes(content))):
-                        errors.append(f"conteúdo inválido ({reason}): {name}")
-                        continue
-                    if copy:
-                        with closing(sqlite3.connect(copy)) as db:
-                            if not _inspect(db)["ok"]:
-                                errors.append(f"banco sem integridade: {name}")
-    except (OSError, zipfile.BadZipFile, ValueError, KeyError, sqlite3.Error) as error:
+
+            db_meta = manifest.get("database") or {}
+            declared_tables = db_meta.get("tables") or {}
+            if not declared_tables:
+                errors.append("dump lógico PostgreSQL ausente")
+            for table in declared_tables:
+                if f"pg_dump/{table}.jsonl" not in declared:
+                    errors.append(f"tabela declarada ausente do pacote: {table}")
+
+            for name, item in declared.items():
+                if name not in names:
+                    continue
+                if not ALLOWED_NAME.fullmatch(name):
+                    errors.append(f"entrada fora da allowlist: {name}")
+                    continue
+                declared_size = item.get("size")
+                if type(declared_size) is not int or declared_size < 0 or archive.getinfo(name).file_size != declared_size:
+                    errors.append(f"tamanho divergente: {name}")
+                    continue
+
+                digest, total = hashlib.sha256(), 0
+                is_pg = name.startswith("pg_dump/")
+                is_local = name.startswith("local_files/")
+                line_count = 0
+                raw_buf = bytearray() if is_local else None
+                with archive.open(name) as stream:
+                    if is_pg:
+                        for line in stream:
+                            total += len(line)
+                            if total > declared_size:
+                                break
+                            digest.update(line)
+                            if line.strip():
+                                json.loads(line.decode("utf-8"))
+                                line_count += 1
+                    else:
+                        while chunk := stream.read(1024 * 1024):
+                            total += len(chunk)
+                            if total > declared_size:
+                                break
+                            digest.update(chunk)
+                            if raw_buf is not None:
+                                raw_buf += chunk
+
+                if total != declared_size or digest.hexdigest() != item.get("sha256"):
+                    errors.append(f"hash divergente: {name}")
+                    continue
+                if is_pg:
+                    table = name[len("pg_dump/") : -len(".jsonl")]
+                    table_meta = declared_tables.get(table)
+                    if not isinstance(table_meta, dict) or table_meta.get("rows") != line_count or table_meta.get("sha256") != item.get("sha256"):
+                        errors.append(f"metadados de tabela divergentes: {table}")
+                if is_local and raw_buf is not None:
+                    text = raw_buf.decode("utf-8", errors="replace")
+                    json.loads(text)
+                    if SECRET_SHAPE.search(text):
+                        errors.append(f"formato de credencial recusado: {name}")
+    except (OSError, zipfile.BadZipFile, ValueError, KeyError, UnicodeError) as error:
         errors.append(f"pacote ilegível ({type(error).__name__})")
     return {"ok": not errors, "errors": errors}
 
 
-def restore_local_data(package: Path, destination: Path) -> dict:
-    """Restaura o pacote verificado numa pasta de dados nova/vazia, de forma atômica. Nunca sobrescreve nem migra."""
+def restore_local_data(
+    package: Path,
+    destination: Path,
+    *,
+    target_conn=None,
+    expected_schema_version: str | None = EXPECTED_SCHEMA_VERSION,
+) -> dict:
+    """Restaura `local_files/` em pasta nova/vazia e, se `target_conn` for informada, o dump PG em banco isolado e vazio."""
     package, destination = Path(package), Path(destination)
     if _is_link(destination):
         raise ValueError("O destino não pode ser um link; escolha uma pasta nova ou vazia.")
@@ -275,31 +341,35 @@ def restore_local_data(package: Path, destination: Path) -> dict:
         raise ValueError("O destino precisa ser uma pasta nova ou vazia; nada existente é sobrescrito.")
     if not destination.parent.is_dir():
         raise ValueError("A pasta que conterá o destino não existe.")
+
     report = verify_export(package)
     if not report["ok"]:
         raise ValueError("Pacote não verificado; nada foi escrito: " + "; ".join(report["errors"][:3]))
+
     with zipfile.ZipFile(package) as archive:
-        if len(archive.infolist()) > MAX_ENTRIES:
-            raise ValueError("Pacote com entradas demais; nada foi escrito.")
         manifest = json.loads(archive.read("manifest.json"))
         declared = {f["name"]: f for f in manifest["files"]}
-        refused = [n for n in declared if not ALLOWED_NAME.fullmatch(n)]
-        if refused:
-            raise ValueError(f"Pacote contém arquivo fora do formato do Hórus ({refused[0]}); nada foi escrito.")
-        for info in archive.infolist():
-            if (info.external_attr >> 16) & 0o170000 == 0o120000:   # entrada de link simbólico
-                raise ValueError("Pacote contém link simbólico; nada foi escrito.")
-        operational = (manifest.get("databases") or {}).get("horus.sqlite3", {}).get("user_version")
-        if type(operational) is not int or operational < 0:
-            raise ValueError("Versão do banco ausente no manifesto; nada foi escrito.")
-        if operational > SCHEMA_VERSION:
-            raise ValueError(f"O pacote vem de uma versão mais nova do Hórus (banco v{operational}; este aplicativo entende até "
-                             f"v{SCHEMA_VERSION}). Atualize o Hórus antes de restaurar; nada foi escrito.")
+        db_meta = manifest.get("database") or {}
+        backup_schema = db_meta.get("schema_version")
+        if expected_schema_version and backup_schema and str(backup_schema) > str(expected_schema_version):
+            raise ValueError(
+                f"O pacote vem de uma versão mais nova do Hórus (schema {backup_schema}; aplicativo {expected_schema_version}). "
+                "Atualize o Hórus antes de restaurar; nada foi escrito."
+            )
+
+        pg_result = None
+        if target_conn is not None:
+            pg_result = restore_to_isolated_pg(
+                package, target_conn, expected_schema_version=expected_schema_version
+            )
+
         stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=destination.parent))
         try:
             restored = []
             for name, item in declared.items():
-                relative = _restore_relative(name)   # produções mantêm o caminho relativo da pasta de dados
+                relative = _restore_relative(name)
+                if relative is None:
+                    continue
                 target = stage / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 digest, total = hashlib.sha256(), 0
@@ -314,35 +384,41 @@ def restore_local_data(package: Path, destination: Path) -> dict:
                     raise ValueError(f"Arquivo alterado durante a restauração: {name}")
                 if relative.endswith(".json") and SECRET_SHAPE.search(target.read_text(encoding="utf-8", errors="replace")):
                     raise ValueError(f"Arquivo com formato de credencial recusado: {name}")
-                if relative.endswith(".sqlite3"):
-                    with closing(sqlite3.connect(f"{target.resolve().as_uri()}?mode=ro", uri=True)) as db:
-                        if not _inspect(db)["ok"]:
-                            raise ValueError(f"Banco restaurado sem integridade: {name}")
                 restored.append(relative)
             if destination.exists():
-                destination.rmdir()   # só existe vazia (conferido acima); falha se alguém escreveu nela nesse intervalo
-            os.rename(stage, destination)   # atômico no mesmo volume; nunca substitui uma pasta existente
+                destination.rmdir()
+            os.rename(stage, destination)
         except BaseException:
-            shutil.rmtree(stage, ignore_errors=True)   # nada parcial no destino
+            shutil.rmtree(stage, ignore_errors=True)
             raise
-    return {"ok": True, "destination": str(destination), "files": len(restored), "database_version": operational,
-            "instruction": "Restaurado sem migração: aponte HORUS_DATA_DIR para a nova pasta; o Hórus migra o banco ao abrir. "
-                           "Credenciais (Hermes, tokens) não fazem parte do pacote: reconfigure-as. Mídia e exports finais não são restaurados."}
+
+    return {
+        "ok": True,
+        "destination": str(destination),
+        "files": len(restored),
+        "schema_version": backup_schema,
+        "pg_restored": pg_result is not None,
+        "pg_tables": pg_result["restored_tables"] if pg_result else {},
+        "instruction": (
+            "Arquivos locais restaurados em pasta isolada. A restauração de dados PostgreSQL exige banco isolado e vazio "
+            "(nunca sobrepor o banco remoto pela interface). Credenciais não fazem parte do pacote: reconfigure-as."
+        ),
+    }
 
 
 def main(argv: list[str]) -> int:
     import argparse
-    parser = argparse.ArgumentParser(description="Exporta/verifica os dados locais do Hórus (somente leitura da origem).")
-    parser.add_argument("command", choices=("export", "verify", "restore"))
-    parser.add_argument("path", type=Path, help="pasta de dados (export) ou pacote .zip (verify, restore)")
+
+    parser = argparse.ArgumentParser(description="Verifica ou restaura arquivos locais de um pacote v2 do Hórus.")
+    parser.add_argument("command", choices=("verify", "restore"))
+    parser.add_argument("path", type=Path, help="pacote .zip")
     parser.add_argument("--to", type=Path)
     args = parser.parse_args(argv)
     if (args.command != "verify") != (args.to is not None):
-        parser.error("export e restore exigem --to; verify não aceita --to")
+        parser.error("restore exige --to; verify não aceita --to")
     try:
-        report = {"export": lambda: export_local_data(args.path, args.to), "verify": lambda: verify_export(args.path),
-                  "restore": lambda: restore_local_data(args.path, args.to)}[args.command]()
-    except (OSError, ValueError, sqlite3.Error) as error:
+        report = verify_export(args.path) if args.command == "verify" else restore_local_data(args.path, args.to)
+    except (OSError, ValueError) as error:
         report = {"ok": False, "error": str(error) if isinstance(error, ValueError) else "Operação recusada; nada foi sobrescrito."}
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["ok"] else 1
