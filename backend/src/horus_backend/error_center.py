@@ -1,4 +1,4 @@
-"""Centro de erros (HOR-095, backend): falhas agregadas derivadas das tabelas existentes, somente leitura.
+"""Centro de erros (HOR-095 / HOR-164 I7): falhas agregadas derivadas das tabelas existentes em PostgreSQL, somente leitura.
 
 Sem tabela nova nem migração. Cada item expõe apenas: código estável (`result.failure.code`, validado e restrito ao catálogo),
 etapa, tipo, horário, referência ao item de origem e textos em português vindos de um catálogo fixo. Nunca devolve
@@ -10,6 +10,10 @@ import base64
 import json
 import re
 from datetime import datetime, timezone
+
+from psycopg.rows import dict_row
+
+from .storage import DatabaseUnavailable
 
 MAX_PAGE = 200
 SCAN_LIMIT = 5000
@@ -62,18 +66,35 @@ CATALOG = {
 }
 STATUS_PT = {"failed": "falhou", "blocked": "foi bloqueado", "interrupted": "foi interrompido"}
 KIND_PT = {"production": "A produção", "workflow_step": "A etapa da análise", "job": "A tarefa", "workflow": "A análise"}
-OPERATION_STAGE = {"factory.profile": "prepare", "factory.render.preview": "render", "transcription.run": "transcription",
-                   "youtube.download": "download"}
+OPERATION_STAGE = {
+    "factory.profile": "prepare",
+    "factory.render.preview": "render",
+    "transcription.run": "transcription",
+    "youtube.download": "download",
+}
 
 
 def _parse(value):
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
 
 
+def _iso(value: datetime | str) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value)
+
+
 def _failure(result):
+    if isinstance(result, dict):
+        failure = result.get("failure")
+        return failure if isinstance(failure, dict) else {}
     try:
         failure = (json.loads(result) or {}).get("failure") if result else None
     except (TypeError, ValueError, AttributeError):
@@ -92,50 +113,119 @@ def _item(*, kind, row_id, status, at, failure, derived, stage_fallback, ref):
     if not (isinstance(stage, str) and STAGE.fullmatch(stage)):
         stage = stage_fallback if isinstance(stage_fallback, str) and STAGE.fullmatch(stage_fallback) else "unknown"
     title, action = CATALOG[code]
-    return {"id": f"{kind}:{row_id}", "kind": kind, "status": status, "code": code, "stage": stage, "at": at, "title": title,
-            "message_pt": f"{KIND_PT[kind]} {row_id[:8]} {STATUS_PT[status]} na etapa «{stage}». {title}.",
-            "suggested_action_pt": action, "ref": ref,
-            "duration_seconds": _number(failure.get("duration_seconds")), "exit_code": _number(failure.get("exit_code"))}
+    return {
+        "id": f"{kind}:{row_id}",
+        "kind": kind,
+        "status": status,
+        "code": code,
+        "stage": stage,
+        "at": at,
+        "title": title,
+        "message_pt": f"{KIND_PT[kind]} {row_id[:8]} {STATUS_PT[status]} na etapa «{stage}». {title}.",
+        "suggested_action_pt": action,
+        "ref": ref,
+        "duration_seconds": _number(failure.get("duration_seconds")),
+        "exit_code": _number(failure.get("exit_code")),
+    }
 
 
 class ErrorCenter:
     def __init__(self, store):
         self.store = store
 
-    def _all(self, since, until) -> list[dict]:
-        items, since, until = [], since or "", until or "9999"
-        with self.store.connect() as db:
-            rows = db.execute("""SELECT j.id, j.status, j.updated_at, j.result, j.step_key, j.workflow_id,
-                    json_extract(j.payload,'$.operation') AS operation, p.id AS production_id
-                FROM jobs j LEFT JOIN productions p ON p.job_id=j.id
-                WHERE j.status IN ('failed','blocked','interrupted') AND j.updated_at>=? AND j.updated_at<=?
-                ORDER BY j.updated_at DESC, j.id DESC LIMIT ?""", (since, until, SCAN_LIMIT)).fetchall()
-            failed_workflows = {row["workflow_id"] for row in rows if row["workflow_id"]}
-            for row in rows:
-                failure = _failure(row["result"])
-                common = {"status": row["status"], "at": row["updated_at"], "failure": failure}
-                if row["production_id"]:
-                    items.append(_item(kind="production", row_id=row["production_id"], derived="production_failed", stage_fallback="prepare",
-                                       ref={"kind": "production", "id": row["production_id"], "workflow_id": None}, **common))
-                elif row["workflow_id"]:
-                    items.append(_item(kind="workflow_step", row_id=row["id"], derived=f"workflow_step_{row['status']}",
-                                       stage_fallback=row["step_key"],
-                                       ref={"kind": "workflow", "id": row["workflow_id"], "workflow_id": row["workflow_id"]}, **common))
-                else:
-                    items.append(_item(kind="job", row_id=row["id"], derived=f"job_{row['status']}",
-                                       stage_fallback=OPERATION_STAGE.get(row["operation"]),
-                                       ref={"kind": "job", "id": row["id"], "workflow_id": None}, **common))
-            for row in db.execute("""SELECT id, status, updated_at FROM workflows WHERE status IN ('failed','interrupted')
-                    AND updated_at>=? AND updated_at<=? ORDER BY updated_at DESC LIMIT ?""", (since, until, SCAN_LIMIT)):
-                if row["id"] not in failed_workflows:   # evita contar duas vezes a análise e a etapa que a derrubou
-                    items.append(_item(kind="workflow", row_id=row["id"], status=row["status"], at=row["updated_at"], failure={},
-                                       derived=f"workflow_{row['status']}", stage_fallback="workflow",
-                                       ref={"kind": "workflow", "id": row["id"], "workflow_id": row["id"]}))
+    def _uow(self, *, readonly: bool = True):
+        if self.store is None or not hasattr(self.store, "uow"):
+            raise DatabaseUnavailable("database_unavailable")
+        return self.store.uow(readonly=readonly)
+
+    def _all(self, since: datetime | None, until: datetime | None) -> list[dict]:
+        items: list[dict] = []
+        with self._uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT j.id, j.status, j.updated_at, j.result, j.step_key, j.workflow_id,
+                           j.payload->>'operation' AS operation, p.id AS production_id
+                    FROM horus.jobs j
+                    LEFT JOIN horus.productions p ON p.job_id = j.id
+                    WHERE j.status IN ('failed', 'blocked', 'interrupted')
+                      AND (%s::timestamptz IS NULL OR j.updated_at >= %s::timestamptz)
+                      AND (%s::timestamptz IS NULL OR j.updated_at <= %s::timestamptz)
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT %s
+                    """,
+                    (since, since, until, until, SCAN_LIMIT),
+                )
+                rows = cur.fetchall()
+                failed_workflows = {row["workflow_id"] for row in rows if row["workflow_id"]}
+                for row in rows:
+                    failure = _failure(row["result"])
+                    common = {"status": row["status"], "at": _iso(row["updated_at"]), "failure": failure}
+                    if row["production_id"]:
+                        items.append(
+                            _item(
+                                kind="production",
+                                row_id=row["production_id"],
+                                derived="production_failed",
+                                stage_fallback="prepare",
+                                ref={"kind": "production", "id": row["production_id"], "workflow_id": None},
+                                **common,
+                            )
+                        )
+                    elif row["workflow_id"]:
+                        items.append(
+                            _item(
+                                kind="workflow_step",
+                                row_id=row["id"],
+                                derived=f"workflow_step_{row['status']}",
+                                stage_fallback=row["step_key"],
+                                ref={"kind": "workflow", "id": row["workflow_id"], "workflow_id": row["workflow_id"]},
+                                **common,
+                            )
+                        )
+                    else:
+                        items.append(
+                            _item(
+                                kind="job",
+                                row_id=row["id"],
+                                derived=f"job_{row['status']}",
+                                stage_fallback=OPERATION_STAGE.get(row["operation"]),
+                                ref={"kind": "job", "id": row["id"], "workflow_id": None},
+                                **common,
+                            )
+                        )
+
+                cur.execute(
+                    """
+                    SELECT id, status, updated_at
+                    FROM horus.workflows
+                    WHERE status IN ('failed', 'interrupted')
+                      AND (%s::timestamptz IS NULL OR updated_at >= %s::timestamptz)
+                      AND (%s::timestamptz IS NULL OR updated_at <= %s::timestamptz)
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (since, since, until, until, SCAN_LIMIT),
+                )
+                for row in cur.fetchall():
+                    if row["id"] not in failed_workflows:  # evita contar duas vezes a análise e a etapa que a derrubou
+                        items.append(
+                            _item(
+                                kind="workflow",
+                                row_id=row["id"],
+                                status=row["status"],
+                                at=_iso(row["updated_at"]),
+                                failure={},
+                                derived=f"workflow_{row['status']}",
+                                stage_fallback="workflow",
+                                ref={"kind": "workflow", "id": row["id"], "workflow_id": row["id"]},
+                            )
+                        )
         items.sort(key=lambda e: (e["at"], e["id"]), reverse=True)
         return items
 
     @staticmethod
-    def _bound(value, name):
+    def _bound(value, name) -> datetime | None:
         if value is None:
             return None
         moment = _parse(value)
@@ -143,7 +233,7 @@ class ErrorCenter:
             raise ValueError(f"Parâmetro `{name}` inválido; use data e hora ISO-8601.")
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
-        return moment.astimezone(timezone.utc).isoformat()
+        return moment.astimezone(timezone.utc)
 
     @staticmethod
     def _cursor(item) -> str:
@@ -166,15 +256,21 @@ class ErrorCenter:
             raise ValueError("Parâmetro `stage` inválido.")
         if code is not None and not CODE.fullmatch(code):
             raise ValueError("Parâmetro `code` inválido.")
-        since, until = self._bound(since, "since"), self._bound(until, "until")
-        return [i for i in self._all(since, until) if (not stage or i["stage"] == stage) and (not code or i["code"] == code)
-                and (not kind or i["kind"] == kind)]
+        since_dt, until_dt = self._bound(since, "since"), self._bound(until, "until")
+        return [
+            i
+            for i in self._all(since_dt, until_dt)
+            if (not stage or i["stage"] == stage) and (not code or i["code"] == code) and (not kind or i["kind"] == kind)
+        ]
 
     def page(self, limit=50, after=None, *, stage=None, code=None, kind=None, since=None, until=None) -> dict:
         limit = max(1, min(int(limit), MAX_PAGE))
         boundary = self._decode(after) if after else None
-        items = [i for i in self._filtered(stage=stage, code=code, kind=kind, since=since, until=until)
-                 if not boundary or (i["at"], i["id"]) < boundary]
+        items = [
+            i
+            for i in self._filtered(stage=stage, code=code, kind=kind, since=since, until=until)
+            if not boundary or (i["at"], i["id"]) < boundary
+        ]
         window = items[:limit]
         return {"items": window, "next_after": self._cursor(window[-1]) if len(items) > limit and window else None}
 
@@ -186,7 +282,10 @@ class ErrorCenter:
             for item in items:
                 totals[item[key]] = totals.get(item[key], 0) + 1
             return sorted(totals.items(), key=lambda pair: (-pair[1], pair[0]))
-        return {"total": len(items),
-                "by_code": [{"code": c, "count": n, "title": CATALOG[c][0], "suggested_action_pt": CATALOG[c][1]} for c, n in count("code")],
-                "by_stage": [{"stage": s, "count": n} for s, n in count("stage")],
-                "by_kind": [{"kind": k, "count": n} for k, n in count("kind")]}
+
+        return {
+            "total": len(items),
+            "by_code": [{"code": c, "count": n, "title": CATALOG[c][0], "suggested_action_pt": CATALOG[c][1]} for c, n in count("code")],
+            "by_stage": [{"stage": s, "count": n} for s, n in count("stage")],
+            "by_kind": [{"kind": k, "count": n} for k, n in count("kind")],
+        }

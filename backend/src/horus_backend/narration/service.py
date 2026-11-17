@@ -1,17 +1,20 @@
 from __future__ import annotations
 import json
-import os
 import tempfile
 import threading
 import time
 import uuid
 import wave
+from datetime import datetime, timezone
 from pathlib import Path
 import keyring
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from starlette.background import BackgroundTask
+from ..storage import DatabaseUnavailable
 from .providers import WindowsSapi, Piper, ElevenLabs, NarrationError
 
 from .kokoro import Kokoro
@@ -76,45 +79,100 @@ def provider_registry(settings, checkpoints=None):
                               ElevenLabs(settings, credentials, checkpoints=checkpoints))}
 
 
+PREF_KEY_NARRATION = "narration.preference"
+
+
 class NarrationService:
-    def __init__(self, settings, store):
+    def __init__(self, settings, store, *, device_id: str = "default"):
         self.settings, self.store = settings, store
+        self.device_id = device_id
         self.credentials = Credentials(settings.data_dir)
         from ..human_checkpoints import CheckpointService
         self.providers = provider_registry(settings, CheckpointService(store, settings=settings))
-        self.preference = settings.data_dir / 'narration-preference.json'
         self.previews = {}
         self.lock = threading.Lock()
         self.active_previews = 0
+
+    def _uow(self, *, readonly: bool = False):
+        if self.store is None or not hasattr(self.store, "uow"):
+            raise DatabaseUnavailable("database_unavailable")
+        return self.store.uow(readonly=readonly)
 
     def provider(self, ident):
         if ident not in self.providers: raise NarrationError('provider_not_found', 404)
         return self.providers[ident]
 
+    @staticmethod
+    def _approved_document(conn, script_id: str, version: int) -> dict:
+        from ..workflows import WorkflowConflict, digest
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM horus.scripts WHERE id = %s", (script_id,))
+            script = cur.fetchone()
+            if script is None:
+                raise KeyError(script_id)
+            cur.execute("SELECT MAX(version) AS latest FROM horus.scripts WHERE workflow_id = %s", (script["workflow_id"],))
+            latest = cur.fetchone()["latest"]
+            review = script["review"] if isinstance(script["review"], dict) else (json.loads(script["review"]) if script["review"] else {})
+            if script["status"] != "approved" or script["version"] != version or version != latest or review.get("decision") != "approve":
+                raise WorkflowConflict("Roteiro mais recente e aprovação humana persistida são necessários.")
+            document = script["document"] if isinstance(script["document"], dict) else json.loads(script["document"])
+            doc_hash = digest(document)
+            cur.execute("SELECT response FROM horus.script_receipts WHERE scope = %s", (f"review:{script_id}",))
+            for row in cur.fetchall():
+                approved = row["response"] if isinstance(row["response"], dict) else json.loads(row["response"])
+                if (
+                    approved.get("status") == "approved"
+                    and approved.get("version") == version
+                    and approved.get("review") == review
+                    and digest(approved.get("document")) == doc_hash
+                ):
+                    return document
+        raise WorkflowConflict("Aprovação do roteiro indisponível para o documento atual.")
+
     def estimate(self, request):
         provider = self.provider(request.provider)
         text = request.text
         if text is None:
-            from ..production import ProductionService
             from ..workflows import WorkflowConflict
             try:
-                with self.store.connect() as db:
-                    _, document = ProductionService.approved(db, request.script_id, request.script_version)
+                with self._uow(readonly=True) as conn:
+                    document = self._approved_document(conn, request.script_id, request.script_version)
                 text = '\n'.join(section['narration'] for section in document['sections'])
             except KeyError: raise NarrationError('script_not_found', 404) from None
             except (WorkflowConflict, ValueError): raise NarrationError('approved_script_required', 409) from None
         return provider.estimate(text)
 
+    def get_preference(self) -> dict:
+        with self._uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT value FROM horus.preferences WHERE device_id = %s AND key = %s",
+                    (self.device_id, PREF_KEY_NARRATION),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return {'provider': None, 'voice_id': None}
+        try:
+            return Preference.model_validate(row["value"]).model_dump()
+        except ValueError:
+            return {'provider': None, 'voice_id': None}
+
     def save_preference(self, request):
         provider = self.provider(request.provider)
         if request.voice_id not in {v['id'] for v in provider.voices()}: raise NarrationError('voice_not_found', 422)
-        self.preference.parent.mkdir(parents=True, exist_ok=True)
-        fd, path = tempfile.mkstemp(dir=self.preference.parent, prefix='.narration-', suffix='.json')
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as file: json.dump(request.model_dump(), file)
-            os.replace(path, self.preference)
-        finally: Path(path).unlink(missing_ok=True)
-        return request.model_dump()
+        data = request.model_dump()
+        moment = datetime.now(timezone.utc)
+        with self._uow() as conn:
+            conn.execute(
+                """
+                INSERT INTO horus.preferences (device_id, key, value, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (device_id, key)
+                DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+                """,
+                (self.device_id, PREF_KEY_NARRATION, Jsonb(data), moment),
+            )
+        return data
 
     def remove_preview(self, ident):
         with self.lock: item = self.previews.pop(ident, None)
@@ -155,6 +213,8 @@ def narration_router(service):
     router = APIRouter(prefix='/v1/narration')
     def call(action):
         try: return action()
+        except DatabaseUnavailable as error:
+            return JSONResponse({'detail': {'code': error.code, 'message': 'Banco de dados indisponível.'}}, status_code=error.http_status)
         except NarrationError as error:
             if error.code == 'paid_provider_not_authorized':
                 return JSONResponse({'code': error.code}, status_code=error.status)
@@ -177,8 +237,7 @@ def narration_router(service):
         return call(delete)
     @router.get('/preference')
     def preference():
-        try: return Preference.model_validate_json(service.preference.read_text(encoding='utf-8')).model_dump()
-        except (OSError, ValueError): return {'provider': None, 'voice_id': None}
+        return call(service.get_preference)
     @router.put('/preference')
     def save_preference(request: Preference): return call(lambda: service.save_preference(request))
     @router.get('/previews/{ident}')
