@@ -251,6 +251,10 @@ class PublishingService:
             ident = hashlib.sha256(key.encode()).hexdigest()
             relative = f'publishing/thumbnails/{ident}'
             receipt_path = relative + '/receipt.json'
+            # Comportamento legado: o vídeo aprovado é conferido por hash (também no replay) FORA da transação.
+            with self._uow() as pre:
+                _row, approved_video = self._approved(pre, production_id, verify=False)
+            self._verify_video(production_id, approved_video)
             with self._uow() as conn:
                 row, video = self._approved(conn, production_id, verify=False)
                 req_hash = hashlib.sha256(canonical_json_bytes({
