@@ -22,7 +22,8 @@ DEPENDENCIES = {
     "time": {"version": "=0.3.55", "features": ["formatting"]},
     "uuid": {"version": "1", "features": ["v4"]},
     "windows-sys": {"version": "0.61", "features": [
-        "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"]},
+        "Win32_Foundation", "Win32_Security", "Win32_Security_Credentials",
+        "Win32_System_JobObjects", "Win32_System_Threading"]},
 }
 
 
