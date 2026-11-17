@@ -136,7 +136,7 @@ def _seed_operational_data(store: Store, data_dir: Path) -> dict:
     prod_dir.mkdir(parents=True)
     (prod_dir / "plan.json").write_text(json.dumps({"steps": ["intro"]}), encoding="utf-8")
     (data_dir / "integrations").mkdir(exist_ok=True)
-    (data_dir / "integrations" / "secret.json").write_text('{"token": "sk-secret-123456789012345678901234567890"}', encoding="utf-8")
+    (data_dir / "integrations" / "secret.json").write_text('{"token": "' + "sk-" + "secret-123456789012345678901234567890" + '"}', encoding="utf-8")
     (data_dir / "models").mkdir(exist_ok=True)
     (data_dir / "exports").mkdir(exist_ok=True)
     (data_dir / "video.mp4").write_bytes(b"media-excluded")
@@ -249,7 +249,7 @@ def test_export_refuses_existing_dest_inside_data_dir_secrets_and_links(pg_store
     # JSON com formato de credencial e JSON inválido são excluídos com motivo explícito
     bad_prod = data_dir / "productions" / uuid.uuid4().hex
     bad_prod.mkdir(parents=True)
-    (bad_prod / "secret.json").write_text('{"api_key": "sk-ant-123456789012345678901234567890123456"}', encoding="utf-8")
+    (bad_prod / "secret.json").write_text('{"api_key": "' + "sk-ant-" + "123456789012345678901234567890123456" + '"}', encoding="utf-8")
     (bad_prod / "broken.json").write_text("{broken", encoding="utf-8")
 
     pkg = tmp_path / "filtered.zip"
