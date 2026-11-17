@@ -361,3 +361,51 @@ test('exibe erro claro quando downgrade é recusado sem botão de tentar novamen
   );
   await expect(page.getByTestId('update-retry-button')).toHaveCount(0);
 });
+
+for (const scenario of [
+  { code: 'network', text: 'erro de rede', retry: true, recovery: false },
+  { code: 'manifest_invalid', text: 'manifesto da atualização é inválido', retry: false, recovery: false },
+  { code: 'signature_invalid', text: 'assinatura digital do pacote de atualização é inválida', retry: false, recovery: false },
+  { code: 'install_failed', text: 'instalação da atualização falhou', retry: true, recovery: true },
+  { code: 'startup_failed', text: 'inicialização após a atualização não foi validada', retry: false, recovery: true },
+  { code: 'downgrade_refused', text: 'igual ou inferior à instalada', retry: false, recovery: false },
+  { code: 'future_error', text: 'Não foi possível concluir a atualização', retry: false, recovery: false },
+]) {
+  test(`A1: ${scenario.code} orienta sem expor detalhe técnico e só permite ação segura`, async ({ page }) => {
+    await setupTauriUpdater(page, makeState({
+      phase: 'error',
+      error: { code: scenario.code, message: 'C:/Users/private/token=SECRET stack trace' },
+    }));
+    await openSettings(page);
+    await expect(page.getByTestId('update-error-message')).toContainText(scenario.text);
+    await expect(page.getByTestId('settings-updates-section')).not.toContainText('SECRET');
+    await expect(page.getByTestId('update-error-detail')).toHaveCount(0);
+    await expect(page.getByTestId('update-status-up-to-date')).toHaveCount(0);
+    await expect(page.getByTestId('update-install-button')).toHaveCount(0);
+    await expect(page.getByTestId('update-retry-button')).toHaveCount(scenario.retry ? 1 : 0);
+    const recovery = page.getByTestId('update-recovery-guidance');
+    await expect(recovery).toHaveCount(scenario.recovery ? 1 : 0);
+    if (scenario.recovery) {
+      await expect(recovery).toContainText('update-backups/pre-update-*.zip');
+      await expect(recovery).toContainText('setup.exe.sig');
+      await expect(recovery).toContainText('primeira instalação não guarda');
+      await expect(recovery).toContainText('pasta nova');
+      await expect(recovery).toContainText('Não há downgrade automático');
+      await expect(recovery).toContainText('docs/adr-atualizador.md');
+    }
+    if (scenario.retry) {
+      await page.evaluate(() => {
+        (window as unknown as UpdaterMockWindow).__updaterMock.setNextCheckState({
+          phase: 'up_to_date', current_version: '0.1.0', auto_check: true, configured: true,
+          last_check_at: null, available: null, blocked_reason: null, progress: null,
+          backup_path_label: null, error: null,
+        });
+      });
+      await page.getByTestId('update-retry-button').click();
+      await expect(page.getByTestId('update-status-up-to-date')).toBeVisible();
+    }
+    const calls = await page.evaluate(() => (window as unknown as UpdaterMockWindow).__updaterMock.calls);
+    expect(calls.filter(c => c.command === 'update_check')).toHaveLength(scenario.retry ? 1 : 0);
+    expect(calls.filter(c => c.command === 'update_install')).toHaveLength(0);
+  });
+}

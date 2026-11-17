@@ -223,6 +223,59 @@ Versões anteriores permanecem para recuperação **manual**; não há downgrade
 schema nem restauração automática, e o updater continua recusando versões <= atual.
 Retenção e inclusão de WebView/segredos no backup não foram decididas nesta etapa.
 
+### Classificação de falhas e roteiro de recuperação (A1)
+
+O contrato Tauri preserva os códigos anteriores e acrescenta `manifest_invalid`
+(manifesto malformado, versão/URL inválida ou plataforma ausente) e `startup_failed`
+(falha de saúde depois de reiniciar). Falhas de transporte e respostas HTTP sem
+manifesto disponível continuam em `network`; assinatura inválida permanece
+`signature_invalid`; falhas locais de cache, encerramento e instalação permanecem
+`install_failed`. JSON inválido recebido com sucesso é manifesto inválido, não rede.
+A confirmação de saúde exige versão alvo em execução, backend autenticado,
+`ok=true`, `integrity_check=ok` e schema numérico positivo; a compatibilidade do
+schema continua sendo validada pelo backend ao abrir o banco.
+
+A interface não mostra mensagens técnicas brutas, caminhos absolutos do operador
+ou stack traces, inclusive em erros desconhecidos e rejeições de comandos. Rede
+orienta conferir conexão e repetir a consulta. Manifesto inválido orienta aguardar
+correção do canal; assinatura inválida orienta não executar o pacote. Instalação e
+inicialização exibem o roteiro abaixo, com locais padrão simbólicos e ressalvas
+para pasta de dados personalizada. Repetir consulta nunca instala: uma nova
+instalação continua exigindo confirmação. Inicialização inválida não oferece
+botão de repetição da instalação ou recuperação automática.
+
+O recibo `workspace/updater/pending-health.json` preserva o nome do backup criado
+(sem caminho absoluto) para a verificação pós-reinício; recibos antigos sem esse
+campo continuam aceitos. Se a saúde falhar, o recibo permanece e
+`last-update-result.json` registra `healthy=false`; a cada abertura o app reavalia
+a saúde e exibe `startup_failed` com orientação de recuperação caso continue
+falhando, sem mensagem genérica de instalação ou alegação de sucesso. Nenhum
+backup ou dado é removido por esse fluxo. Se o app não abrir, use este roteiro
+no repositório, fora do aplicativo:
+
+1. Feche o Hórus. Preserve o banco original, WAL/SHM e instalador atual; não marque
+   a opção de apagar dados no desinstalador.
+2. Confira o ZIP verificado pré-instalação em
+   `%LOCALAPPDATA%/com.horus.audiovisual/update-backups/pre-update-*.zip`.
+   Com dados personalizados, `update-backups/` fica ao lado da pasta de dados.
+   A verificação na criação não garante disponibilidade ou integridade futura:
+   confira o arquivo antes de restaurar.
+3. Procure a versão anterior em
+   `%LOCALAPPDATA%/com.horus.audiovisual/workspace/updater/installers/<versão>/setup.exe`
+   e `setup.exe.sig`; com dados personalizados, use `updater/installers/` dentro
+   dessa pasta. Só versões baixadas e verificadas pelo updater são guardadas;
+   a primeira instalação não guarda seu próprio instalador. Na ausência do cache,
+   obtenha o instalador original confiável; não execute o pacote recusado.
+4. Reinstale manualmente a versão anterior somente se compatível com o schema.
+   Caso contrário, restaure o backup verificado em uma pasta nova e preserve a
+   original. Não copie somente o SQLite vivo, deixando WAL/SHM para trás.
+   Preserve separadamente mídia, modelos, WebView, segredos e `updater/`, ausentes
+   do ZIP. Não há downgrade automático nem promessa de recuperação integral.
+
+A1 é validada por testes Rust e Playwright com IPC simulado. Não comprova
+recuperação instalada em outra máquina, queda de energia ou migração real;
+o ensaio instalado permanece reservado a ambiente isolado sem instalação real.
+
 ### Scripts para a etapa 3
 
 ```powershell

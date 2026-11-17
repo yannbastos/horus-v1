@@ -6,6 +6,7 @@ import {
   createDisabledUpdateState,
   formatUpdateBytes,
   formatUpdateErrorMessage,
+  formatUpdateErrorDetail,
   getUpdateState,
   installUpdate,
   isUpdateBusyPhase,
@@ -271,8 +272,8 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
     try {
       const next = await setUpdateAutoCheck(!activeState.auto_check);
       commitState(next);
-    } catch (reason) {
-      setCommandError(reason instanceof Error ? reason.message : String(reason));
+    } catch {
+      setCommandError('Não foi possível executar a ação de atualização. Preserve os dados e tente novamente mais tarde.');
     } finally {
       setPendingCommand(false);
     }
@@ -285,8 +286,8 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
     try {
       const next = await checkUpdates();
       commitState(next);
-    } catch (reason) {
-      setCommandError(reason instanceof Error ? reason.message : String(reason));
+    } catch {
+      setCommandError('Não foi possível executar a ação de atualização. Preserve os dados e tente novamente mais tarde.');
     } finally {
       setPendingCommand(false);
     }
@@ -301,8 +302,8 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
     try {
       const next = await installUpdate(targetVersion);
       commitState(next);
-    } catch (reason) {
-      setCommandError(reason instanceof Error ? reason.message : String(reason));
+    } catch {
+      setCommandError('Não foi possível executar a ação de atualização. Preserve os dados e tente novamente mais tarde.');
     } finally {
       setPendingCommand(false);
     }
@@ -509,12 +510,19 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
               <StatusMessage state="error" testId="update-error-message">
                 {formatUpdateErrorMessage(activeState.error)}
               </StatusMessage>
-              {activeState.error.message &&
-                activeState.error.message !== formatUpdateErrorMessage(activeState.error) && (
-                  <p className="muted" data-testid="update-error-detail">
-                    Detalhe técnico ({activeState.error.code}): {activeState.error.message}
-                  </p>
-                )}
+              {formatUpdateErrorDetail(activeState.error) && (
+                <p className="muted" data-testid="update-error-detail">
+                  {formatUpdateErrorDetail(activeState.error)}
+                </p>
+              )}
+              {['startup_failed', 'install_failed'].includes(activeState.error.code) && (
+                <div className="muted" data-testid="update-recovery-guidance">
+                  <p>Recuperação manual: feche o Hórus e preserve o banco, os arquivos WAL/SHM e o instalador atual. Não exclua dados nem marque a opção de apagar dados no desinstalador.</p>
+                  <p>O backup verificado criado antes da instalação fica em <code>update-backups/pre-update-*.zip</code>, ao lado da pasta de dados. No local padrão: <code>%LOCALAPPDATA%/com.horus.audiovisual/update-backups/</code>. Se a pasta de dados foi personalizada, procure ao lado dela. A existência do backup precisa ser conferida.</p>
+                  <p>Instaladores baixados e validados ficam em <code>workspace/updater/installers/&lt;versão&gt;/setup.exe</code> e <code>setup.exe.sig</code>, dentro da mesma pasta padrão (ou em <code>updater/installers/</code> na pasta de dados personalizada). A primeira instalação não guarda seu próprio instalador; se a versão anterior não estiver em cache, obtenha o instalador original confiável.</p>
+                  <p>Reinstale a versão anterior manualmente somente se ela for compatível com o schema dos dados. Caso contrário, restaure o backup verificado em uma pasta nova, preservando o original. O ZIP não inclui mídia, modelos, WebView ou segredos; preserve esses recursos separadamente. Não há downgrade automático. Roteiro completo: <code>docs/adr-atualizador.md</code>, seção “Instalação Windows e recuperação”, no repositório do Hórus, acessível mesmo se o app não abrir.</p>
+                </div>
+              )}
               {canRetryUpdateError(activeState.error.code) && (
                 <div className="row">
                   <button
