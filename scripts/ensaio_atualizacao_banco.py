@@ -97,6 +97,10 @@ def run(base: Path) -> None:
     cli('horus_backend.backups', 'restore', restored / 'horus.sqlite3', '--to', copied, '--json')
     migrate(copied)
     assert inspect_database(copied)['user_version'] == 12
+    with closing(sqlite3.connect(copied)) as db:
+        assert db.execute('SELECT origin, generator FROM scripts').fetchall() == [('human', None)]
+        assert db.execute('SELECT COUNT(*) FROM transmissions').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM human_checkpoints').fetchone()[0] == 0
     fields = {name: table['columns'] for name, table in baseline.items()}
     assert snapshot(copied, fields) == baseline
     print('PASSOU migração da cópia v9→v12, integridade e preservação dos dados anteriores')
@@ -108,6 +112,7 @@ def run(base: Path) -> None:
     before = snapshot(copied)
     migrate(copied)
     assert snapshot(copied) == before and list(copydir.glob('horus.backup-v9-*.sqlite3')) == backups
+    assert inspect_database(copied)['user_version'] == 12
     print('PASSOU idempotência ao reabrir (sem dados alterados nem novo backup)')
     rollback = safe_path(base / 'rollback.sqlite3')
     cli('horus_backend.backups', 'restore', backups[0], '--to', rollback, '--json')
