@@ -84,13 +84,13 @@ def settings(tmp_path):
     )
 
 
-def _make_service(store: Store, settings: Settings | None = None, *, hermes_client=None) -> WorkflowService:
+def _make_service(store: Store, settings: Settings | None = None, *, hermes_client=None, clock=None) -> WorkflowService:
     queue: asyncio.Queue = asyncio.Queue()
 
     async def noop():
         return None
 
-    service = WorkflowService(store, queue, noop, settings=settings)
+    service = WorkflowService(store, queue, noop, settings=settings, clock=clock)
     if hermes_client is not None:
         service.hermes = HermesStages(store, settings, client_factory=lambda: hermes_client)
     return service
@@ -301,6 +301,76 @@ def test_hermes_authorization_checkpoint_and_reconcile_without_resend(pg_pool, s
         done = service.get(wf["id"])
         assert done["status"] == "awaiting_approval"
         assert fake.submits == 1
+
+    asyncio.run(scenario())
+
+
+def test_artifact_hash_uses_canonical_bytes_independent_of_jsonb_normalization(pg_pool, settings):
+    from datetime import datetime, timezone
+    from horus_backend.workflows import _artifact_intact, _canonical_bytes, digest
+
+    # Reordenar chaves de entrada produz exatamente o mesmo hash canônico
+    a = {"z": 1, "a": {"k2": "v2", "k1": 1}}
+    b = {"a": {"k1": 1, "k2": "v2"}, "z": 1}
+    assert digest(a) == digest(b)
+    assert _canonical_bytes(a) == _canonical_bytes(b)
+
+    store = Store(pg_pool)
+    service = _make_service(store, settings)
+
+    async def scenario():
+        wf = await service.create(WorkflowRequest(objective="Canônico"), "wf-canon")
+        job1 = store.get_job(service.queue.get_nowait())
+        await service.run_step(job1)
+        with store.uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                art = cur.execute("SELECT * FROM horus.artifacts WHERE workflow_id = %s", (wf["id"],)).fetchone()
+        assert _artifact_intact(art)
+        # Trocar schema_version 1 -> 1.0 em content_canonical mantém jsonb equivalente,
+        # mas altera os bytes canônicos e deve ser detectado pela verificação de hash.
+        reformatted = bytes(art["content_canonical"]).replace(b'"schema_version":1', b'"schema_version":1.0')
+        assert reformatted != bytes(art["content_canonical"])
+        with store.uow() as conn:
+            conn.execute(
+                "UPDATE horus.artifacts SET content_canonical = %s WHERE id = %s",
+                (reformatted, art["id"]),
+            )
+        job2 = store.get_job(service.queue.get_nowait())
+        await service.run_step(job2)
+        assert service.get(wf["id"])["status"] == "failed"
+
+    asyncio.run(scenario())
+
+
+def test_authorize_uses_clock_provider_for_radar_expiration(pg_pool, settings):
+    from datetime import datetime, timedelta, timezone
+
+    now_box = [datetime.now(timezone.utc)]
+    expires = now_box[0] + timedelta(minutes=10)
+    store = Store(pg_pool)
+    service = _make_service(store, settings, clock=lambda: now_box[0])
+    req = WorkflowRequest(**HERMES_REQUEST)
+
+    async def scenario():
+        wf = await service.create(
+            req,
+            "wf-radar-exp",
+            executor="hermes",
+            radar={"dataset_id": "ds1", "expires_at": expires.isoformat()},
+        )
+        await _drain(service, store)
+        waiting = service.get(wf["id"])
+        auth_job = waiting["pending_authorization"]["job_id"]
+
+        # Avança o relógio injetado para além da expiração do Radar
+        now_box[0] = expires + timedelta(seconds=1)
+        with pytest.raises(WorkflowConflict, match="Dataset Radar expirado"):
+            await service.authorize(wf["id"], AuthorizationRequest(expected_revision=1, job_id=auth_job), "auth-exp")
+
+        # Volta o relógio para antes da expiração -> autorização é aceita
+        now_box[0] = expires - timedelta(seconds=30)
+        authorized = await service.authorize(wf["id"], AuthorizationRequest(expected_revision=1, job_id=auth_job), "auth-ok")
+        assert authorized["status"] == "queued"
 
     asyncio.run(scenario())
 
