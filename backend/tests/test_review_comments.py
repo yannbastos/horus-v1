@@ -1,14 +1,12 @@
 """HOR-088 (backend): comentários de revisão por timecode e versão, com trilha de decisão. Sem migração, rede ou dados reais."""
 import json
-import sqlite3
 
+import psycopg
 import pytest
 
-from test_workflows import settings, client_for  # noqa: F401
-from test_production import script_for, start
+from support_c import client_for, pg_connect, schema_state, script_for, settings, start  # noqa: F401
 from horus_backend.production import inspect_artifact
-from horus_backend.migrations import SCHEMA_VERSION
-from horus_backend.review_comments import DIRECTORY, MAX_COMMENTS
+from horus_backend.review_comments import MAX_COMMENTS
 
 H = {"Idempotency-Key": "k1"}
 
@@ -24,8 +22,8 @@ def env(settings):
         root.mkdir(parents=True)
         (root / "video.mp4").write_bytes(b"\x00\x00\x00\x18ftypunit-fixture")
         video = inspect_artifact(root, "video.mp4", "video")
-        with sqlite3.connect(settings.data_dir / "horus.sqlite3") as db:
-            db.execute("UPDATE productions SET artifacts=? WHERE id=?", (json.dumps([video]), item["id"]))
+        with pg_connect(settings) as db:
+            db.execute("UPDATE horus.productions SET artifacts=%s WHERE id=%s", (json.dumps([video]), item["id"]))
         yield client, item["id"], video["sha256"], settings
 
 
@@ -151,25 +149,46 @@ def test_trail_limit(env, monkeypatch):
 
 
 def test_corrupt_file_is_never_overwritten(env):
+    """Equivalente PG: trilha de eventos de comentários é append-only (triggers impedem UPDATE/DELETE) e sem JSON em disco."""
     client, pid, sha, settings = env
-    post(client, pid, body(sha))
-    path = settings.data_dir / DIRECTORY / f"{pid}.json"
-    path.write_text("{corrompido", encoding="utf-8")
-    for response in (post(client, pid, body(sha), key="k2"), client.get(f"/v1/productions/{pid}/comments")):
-        assert response.status_code == 409 and "ilegível" in response.json()["detail"]
-    assert path.read_text(encoding="utf-8") == "{corrompido"
+    created = post(client, pid, body(sha)).json()
+    cid = created["id"]
+    with pg_connect(settings) as db:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.execute("UPDATE horus.review_comment_events SET operator_id = 'adulterado' WHERE comment_id = %s", (cid,))
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.execute("DELETE FROM horus.review_comment_events WHERE comment_id = %s", (cid,))
+    assert not (settings.data_dir / "production-comments").exists()
+    listing = client.get(f"/v1/productions/{pid}/comments")
+    assert listing.status_code == 200
+    assert listing.json()["items"][0]["trail"] == created["trail"]
 
 
 def test_storage_is_atomic_json_without_secrets_or_paths_and_no_schema_change(env):
     client, pid, sha, settings = env
+    with pg_connect(settings) as db:
+        before_schema = schema_state(db)
     post(client, pid, body(sha))
-    folder = settings.data_dir / DIRECTORY
-    assert [p.name for p in folder.iterdir()] == [f"{pid}.json"]      # sem temporários residuais
-    document = json.loads((folder / f"{pid}.json").read_text(encoding="utf-8"))
-    assert document["schema_version"] == 1 and document["comments"][0]["author_kind"] == "human"
-    assert "Bearer" not in json.dumps(document) and str(settings.data_dir) not in json.dumps(document)
-    with sqlite3.connect(settings.data_dir / "horus.sqlite3") as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert not (settings.data_dir / "production-comments").exists()
+    with pg_connect(settings) as db:
+        rows = db.execute(
+            "SELECT id, production_id, author_kind, author, text, status FROM horus.review_comments WHERE production_id = %s",
+            (pid,),
+        ).fetchall()
+        events = db.execute(
+            "SELECT action, operator_id, data FROM horus.review_comment_events WHERE comment_id = %s",
+            (rows[0][0],),
+        ).fetchall()
+        receipts = db.execute(
+            "SELECT idempotency_key, response_canonical FROM horus.review_comment_receipts WHERE production_id = %s",
+            (pid,),
+        ).fetchall()
+        assert len(rows) == 1 and rows[0][2] == "human"
+        assert len(events) == 1 and events[0][0] == "created"
+        assert len(receipts) == 1
+        serialized = json.dumps({"rows": rows, "events": events, "receipts": receipts}, default=str)
+        assert "Bearer" not in serialized and str(settings.data_dir) not in serialized
+        assert schema_state(db) == before_schema
 
 
 def test_comments_do_not_change_the_existing_review_endpoint(env):

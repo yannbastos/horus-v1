@@ -6,9 +6,8 @@ from zipfile import ZipFile
 
 import pytest
 
-from test_workflows import settings, client_for
-from test_production import script_for, start, finished
-from test_license_reviews import body as license_body
+from support_c import client_for, finished, license_body, pg_connect, script_for, settings, start
+from horus_backend.exports import SCHEMA_VERSION
 from horus_backend.production import inspect_artifact
 
 
@@ -31,8 +30,8 @@ def production(settings):
                 [a for a in artifacts if a['kind'] in {'scene', 'audio'}], start=1)]}
         (root / 'asset-provenance.json').write_text(json.dumps(provenance), encoding='utf-8')
         artifacts.append(inspect_artifact(root, 'asset-provenance.json', 'manifest'))
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE productions SET mode='local_pilot', artifacts=? WHERE id=?",
+        with pg_connect(settings) as db:
+            db.execute("UPDATE horus.productions SET mode='local_pilot', artifacts=%s WHERE id=%s",
                        (json.dumps(artifacts), record['id']))
         asset = next(a for a in provenance['assets'] if a['sha256'] == scene['sha256'])
         payload = license_body(asset_id=asset['asset_id'], asset_sha256=scene['sha256'])
@@ -72,7 +71,6 @@ def test_export_approved_package_hashes_and_effective_licenses(production):
             assert str(settings.data_dir).encode() not in zipped.read(name)
         manifest = json.loads(zipped.read('manifest.json'))
         assert manifest['horus_version'] == '0.1.0'
-        from horus_backend.migrations import SCHEMA_VERSION
         assert manifest['database_schema_version'] == SCHEMA_VERSION
         assert len(manifest['files']) == 7
         for item in manifest['files']:
@@ -113,10 +111,10 @@ def test_export_refuses_tampering_and_unsafe_paths(production, change, monkeypat
     elif change == 'missing':
         video.unlink()
     elif change in {'traversal', 'absolute'}:
-        with client.app.state.store.connect() as db:
-            artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
+        with pg_connect(settings) as db:
+            artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
             next(a for a in artifacts if a['kind'] == 'video')['relative_path'] = '../video.mp4' if change == 'traversal' else str(tmp_path / 'video.mp4')
-            db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), record['id']))
+            db.execute('UPDATE horus.productions SET artifacts=%s WHERE id=%s', (json.dumps(artifacts), record['id']))
     else:
         # Simula também em Windows sem privilégio de criar links.
         from pathlib import Path
@@ -130,10 +128,10 @@ def test_export_refuses_tampering_and_unsafe_paths(production, change, monkeypat
 def test_export_refuses_production_without_registered_video(production):
     client, record, root, settings = production
     approve(client, record)
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?',
-            (json.dumps([a for a in artifacts if a['kind'] != 'video']), record['id']))
+    with pg_connect(settings) as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
+        db.execute('UPDATE horus.productions SET artifacts=%s WHERE id=%s',
+                   (json.dumps([a for a in artifacts if a['kind'] != 'video']), record['id']))
     assert export(client, record['id']).status_code == 409
 
 
@@ -161,10 +159,10 @@ def test_export_includes_registered_quality_report(production):
         'status': 'warn', 'checks': [provenance_check(provenance, inputs)],
         'blocking_errors': [], 'warnings': ['asset_provenance']}
     (root / 'quality-report.json').write_text(json.dumps(report), encoding='utf-8')
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
+    with pg_connect(settings) as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
         artifacts.append(inspect_artifact(root, 'quality-report.json', 'manifest'))
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), record['id']))
+        db.execute('UPDATE horus.productions SET artifacts=%s WHERE id=%s', (json.dumps(artifacts), record['id']))
     approve(client, record)
     response = export(client, record['id'])
     assert response.status_code == 201, response.text
@@ -214,10 +212,14 @@ def test_interrupted_export_does_not_overwrite_or_block_listing(production):
 def test_sensitive_audit_notes_are_redacted_and_disclosed(production, sensitive):
     client, record, root, settings = production
     approve(client, record)
-    with client.app.state.store.connect() as db:
-        review = json.loads(db.execute('SELECT review FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
+    with pg_connect(settings) as db:
+        review = db.execute('SELECT review FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
         review['notes'] = [{'at_seconds': 1.0, 'text': sensitive}]
-        db.execute('UPDATE productions SET review=? WHERE id=?', (json.dumps(review), record['id']))
+        review_json = json.dumps(review, sort_keys=True, ensure_ascii=False)
+        db.execute(
+            'UPDATE horus.productions SET review=%s, review_canonical=%s WHERE id=%s',
+            (review_json, review_json.encode('utf-8'), record['id']),
+        )
     response = export(client, record['id'])
     assert response.status_code == 201, response.text
     with ZipFile(settings.data_dir / response.json()['relative_path']) as zipped:
@@ -232,10 +234,10 @@ def test_font_source_path_in_provenance_does_not_block_export(production):
     provenance['assets'][0]['notes'] = 'Arquivo local: C:/Users/operator/font.ttf; sem licença presumida.'
     provenance['assets'][1]['notes'] = json.dumps({'voice_id': r'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Tokens\Maria'})
     (root / 'asset-provenance.json').write_text(json.dumps(provenance), encoding='utf-8')
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
+    with pg_connect(settings) as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
         artifacts = [inspect_artifact(root, a['relative_path'], a['kind']) for a in artifacts]
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), record['id']))
+        db.execute('UPDATE horus.productions SET artifacts=%s WHERE id=%s', (json.dumps(artifacts), record['id']))
     approve(client, record)
     response = export(client, record['id'])
     assert response.status_code == 201, response.text
@@ -249,11 +251,11 @@ def test_font_source_path_in_provenance_does_not_block_export(production):
 def test_sensitive_subtitles_are_refused_without_silent_change(production, sensitive):
     client, record, root, settings = production
     approve(client, record)
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (record['id'],)).fetchone()[0])
+    with pg_connect(settings) as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (record['id'],)).fetchone()[0]
         subtitles = next(a for a in artifacts if a['kind'] == 'subtitles')
         path = root / subtitles['relative_path']
         path.write_text('1\n00:00:00,000 --> 00:00:01,000\n' + sensitive, encoding='utf-8')
         artifacts = [inspect_artifact(root, a['relative_path'], a['kind']) for a in artifacts]
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), record['id']))
+        db.execute('UPDATE horus.productions SET artifacts=%s WHERE id=%s', (json.dumps(artifacts), record['id']))
     assert export(client, record['id']).status_code == 409

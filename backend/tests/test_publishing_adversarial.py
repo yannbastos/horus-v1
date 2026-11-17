@@ -12,7 +12,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from test_workflows import settings  # noqa: F401  (fixture)
+from support_c import settings  # noqa: F401  (fixture)
 from test_exports import production, approve, export  # noqa: F401
 from test_publishing import tools, thumbnail  # noqa: F401
 from horus_backend import publishing as publishing_module
@@ -26,8 +26,8 @@ def put_metadata(client, pid, title="Título", description="Descrição"):
 
 
 def registered_artifacts(client, pid):
-    with client.app.state.store.connect() as db:
-        return json.loads(db.execute("SELECT artifacts FROM productions WHERE id=?", (pid,)).fetchone()[0])
+    with client.app.state.store.uow(readonly=True) as db:
+        return db.execute("SELECT artifacts FROM horus.productions WHERE id=%s", (pid,)).fetchone()[0]
 
 
 def fake_run(monkeypatch, duration='{"format":{"duration":"4.0"}}', png=PNG, jpg=b"\xff\xd8\xfffixture", after_extract=None):
@@ -321,17 +321,25 @@ def test_publishing_routes_follow_the_current_approval_state(production, monkeyp
     approve(client, record)
     assert thumbnail(client, record["id"], 0.5, "antes").status_code == 201
     put_metadata(client, record["id"], title="Antes", description="Antes")
-    with client.app.state.store.connect() as db:
-        row = db.execute("SELECT review,job_id FROM productions WHERE id=?", (record["id"],)).fetchone()
-        review = json.loads(row["review"])
+    with client.app.state.store.uow() as db:
+        row = db.execute("SELECT review, job_id FROM horus.productions WHERE id=%s", (record["id"],)).fetchone()
+        review = row[0]
         if change in {"rejected", "revoked"}:
             review["decision"] = "reject" if change == "rejected" else "request_changes"
-            db.execute("UPDATE productions SET review=? WHERE id=?", (json.dumps(review), record["id"]))
+            review_json = json.dumps(review, sort_keys=True, ensure_ascii=False)
+            db.execute(
+                "UPDATE horus.productions SET review=%s, review_canonical=%s WHERE id=%s",
+                (review_json, review_json.encode("utf-8"), record["id"]),
+            )
         elif change == "job_failed":
-            db.execute("UPDATE jobs SET status='failed' WHERE id=?", (row["job_id"],))
+            db.execute("UPDATE horus.jobs SET status='failed' WHERE id=%s", (row[1],))
         elif change == "other_video":
             review["artifact_sha256"] = "0" * 64
-            db.execute("UPDATE productions SET review=? WHERE id=?", (json.dumps(review), record["id"]))
+            review_json = json.dumps(review, sort_keys=True, ensure_ascii=False)
+            db.execute(
+                "UPDATE horus.productions SET review=%s, review_canonical=%s WHERE id=%s",
+                (review_json, review_json.encode("utf-8"), record["id"]),
+            )
     if change == "video_missing":
         (root / "video.mp4").unlink()
     before = registered_artifacts(client, record["id"])
