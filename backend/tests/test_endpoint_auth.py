@@ -245,25 +245,26 @@ def ticket(settings, media_id, expires):
     return hmac.new(settings.token.encode(), f"{media_id}:{expires}".encode(), hashlib.sha256).hexdigest()
 
 
-def register_media(client, path):
-    response = client.post("/v1/media", headers=GOOD, json={"path": str(path)})
+def register_media(client, path, headers=None):
+    response = client.post("/v1/media", headers=headers or GOOD, json={"path": str(path)})
     assert response.status_code == 200, response.text
     return response.json()
 
 
-def test_media_stream_ticket_is_bound_to_id_and_expiry(client, settings, tmp_path):
+def test_media_stream_ticket_is_bound_to_id_and_expiry(pg_client, pg_app_settings, tmp_path):
+    pg_good = {"Authorization": f"Bearer {pg_app_settings.token}"}
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 100)
-    item = register_media(client, media)
-    assert client.get(item["stream_path"]).status_code == 200  # sem Bearer, com ticket válido
+    item = register_media(pg_client, media, headers=pg_good)
+    assert pg_client.get(item["stream_path"]).status_code == 200  # sem Bearer, com ticket válido
     other = tmp_path / "other.mp4"
     other.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"1" * 100)
-    item2 = register_media(client, other)
+    item2 = register_media(pg_client, other, headers=pg_good)
     mine = re.search(r"ticket=([0-9a-f]+)", item["stream_path"])[1]
-    assert client.get(f"/v1/media/{item2['id']}/stream?expires=9999999999&ticket={mine}").status_code == 401
+    assert pg_client.get(f"/v1/media/{item2['id']}/stream?expires=9999999999&ticket={mine}").status_code == 401
     expired = int(time.time()) - 10
-    assert client.get(f"/v1/media/{item['id']}/stream?expires={expired}&ticket={ticket(settings, item['id'], expired)}").status_code == 401
-    assert client.get(f"/v1/media/{item['id']}/stream?expires=9999999999&ticket={mine}").status_code == 401  # expires alterado
+    assert pg_client.get(f"/v1/media/{item['id']}/stream?expires={expired}&ticket={ticket(pg_app_settings, item['id'], expired)}").status_code == 401
+    assert pg_client.get(f"/v1/media/{item['id']}/stream?expires=9999999999&ticket={mine}").status_code == 401  # expires alterado
 
 
 @pytest.mark.parametrize("media_id", ["..", "..%2f..%2fetc%2fpasswd", "%2e%2e%2f", "....//", "C:%5CWindows%5Cwin.ini", "a%00b"])
@@ -305,19 +306,20 @@ def test_media_folder_skips_symlinks_and_subfolders(client, tmp_path):
     assert names == {"ok.mp4"}
 
 
-def test_media_stream_refuses_file_swapped_for_symlink(client, tmp_path):
+def test_media_stream_refuses_file_swapped_for_symlink(pg_client, pg_app_settings, tmp_path):
+    pg_good = {"Authorization": f"Bearer {pg_app_settings.token}"}
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 64)
     secret = tmp_path / "segredo.bin"
     secret.write_bytes(media.read_bytes())  # mesmo tamanho: a verificação de tamanho/mtime sozinha não basta
     os.utime(secret, ns=(media.stat().st_atime_ns, media.stat().st_mtime_ns))
-    item = register_media(client, media)
+    item = register_media(pg_client, media, headers=pg_good)
     media.unlink()
     try:
         media.symlink_to(secret)
     except OSError:
         pytest.skip("symlink indisponível neste ambiente")
-    assert client.get(item["stream_path"]).status_code in {404, 409}
+    assert pg_client.get(item["stream_path"]).status_code in {404, 409}
 
 
 @pytest.mark.parametrize("relative", ["../fora.json", "a/../../fora.json", "/abs.json", "C:/x.json", "a\\b.json", "./a.json", "", "a/./b.json"])
@@ -356,11 +358,12 @@ def test_narration_preview_is_authenticated_and_unknown_id_is_404(client):
     assert client.get("/v1/narration/previews/..%2f..%2fx", headers=GOOD).status_code == 404
 
 
-def test_media_stream_refuses_symlink_even_when_symlinks_cannot_be_created(client, tmp_path, monkeypatch):
+def test_media_stream_refuses_symlink_even_when_symlinks_cannot_be_created(pg_client, pg_app_settings, tmp_path, monkeypatch):
+    pg_good = {"Authorization": f"Bearer {pg_app_settings.token}"}
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"\x00\x00\x00ftypmp42" + b"0" * 64)
-    item = register_media(client, media)
-    assert client.get(item["stream_path"]).status_code == 200
+    item = register_media(pg_client, media, headers=pg_good)
+    assert pg_client.get(item["stream_path"]).status_code == 200
     real = Path.is_symlink
     monkeypatch.setattr(Path, "is_symlink", lambda self: True if self.name == "clip.mp4" else real(self))
-    assert client.get(item["stream_path"]).status_code == 409
+    assert pg_client.get(item["stream_path"]).status_code == 409
