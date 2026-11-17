@@ -217,7 +217,7 @@ export function DataDeletionDialog({
       >
         <header className="data-deletion-modal-header">
           <div>
-            <p className="eyebrow warn">EXCLUSÃO SEGURA DE DADOS LOCAIS</p>
+            <p className="eyebrow warn">EXCLUSÃO SEGURA DE DADOS</p>
             <h2 id={titleId}>Excluir arquivos locais</h2>
             <p id={descId} className="muted">
               {scopeLabel}: <strong>{targetLabel || targetId}</strong>
@@ -273,10 +273,16 @@ export function DataDeletionDialog({
                   automático (<code>pre-exclusao-*.zip</code>) fora da pasta de dados.
                 </p>
                 <p className="muted">
-                  <strong>Atenção:</strong> o pacote de backup inclui apenas o banco de dados e
-                  manifestos JSON — ele <strong>não</strong> contém vídeos, áudios ou exports. Os
-                  arquivos removidos da pasta ativa vão para a <strong>quarentena recuperável</strong>{' '}
-                  e podem ser restaurados em <strong>Ajustes → Privacidade e Segurança</strong>.
+                  <strong>Atenção:</strong> o pacote de backup é um export versionado, com manifesto,
+                  dos registros do banco PostgreSQL (Supabase) — ele <strong>não</strong> contém
+                  vídeos, áudios ou exports. Os arquivos removidos da pasta ativa vão para a{' '}
+                  <strong>quarentena recuperável</strong> e podem ser restaurados em{' '}
+                  <strong>Ajustes → Privacidade e Segurança</strong>.
+                </p>
+                <p className="muted">
+                  <strong>Sem garantia de zeragem física:</strong> a exclusão remove os dados do
+                  banco e dos arquivos locais, mas o provedor do banco pode reter cópias por algum
+                  tempo (WAL e backups). Isso não é apagamento imediato do armazenamento.
                 </p>
               </div>
 

@@ -403,7 +403,7 @@ async function setupRoutes(page: Page, state: MockState) {
             : [],
           can_execute: !state.blockedPreview,
           notice:
-            'Os arquivos vão para a quarentena (recuperáveis); o pacote local de pré-exclusão cobre banco e manifestos, não vídeos.',
+            'Os arquivos vão para a quarentena (recuperáveis); o pacote de pré-exclusão cobre os registros do banco e o manifesto, não vídeos.',
         },
       });
       return;
@@ -560,6 +560,8 @@ test('exclusão segura de produção: prévia, frase exata, acessibilidade e est
   await expect(dialog.getByTestId('data-deletion-backup-notice')).toContainText(
     'quarentena recuperável'
   );
+  await expect(dialog.getByTestId('data-deletion-backup-notice')).toContainText('PostgreSQL (Supabase)');
+  await expect(dialog.getByTestId('data-deletion-backup-notice')).toContainText('Sem garantia de zeragem física');
   await expect(dialog.getByTestId('data-deletion-items')).toContainText(`productions/${PRODUCTION_ID}`);
   await expect(dialog.getByTestId('data-deletion-db-kept')).toContainText('append-only');
   await expect(dialog.getByTestId('data-deletion-dependencies')).toContainText('scr-117-0001');
