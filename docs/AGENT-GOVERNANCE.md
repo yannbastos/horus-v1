@@ -8,11 +8,11 @@ Política vigente desde 13/11/2026, definida pelo usuário (idealizador e respon
 
 | Agente | Função | Preferências |
 |---|---|---|
-| Maestro (modelo Claude definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço alto em experimentação, Opus reservado a situações realmente complexas) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
+| Maestro (modelo Claude definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço médio no cotidiano (alto só em decisões complexas) em experimentação, Opus reservado a situações realmente complexas) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
 | Codex — programador | Python/FastAPI, fábrica, jobs e workflows, persistência, falhas, testes de integração, scripts operacionais, automação e auditorias de código e documentação | |
 | Claude Sonnet — programador | Contratos, validadores, qualidade audiovisual, segurança, testes, refatorações delimitadas | |
 | Antigravity — programador | React/TypeScript, interface, prévia e revisão audiovisual, acessibilidade, Playwright, auditorias e correções de documentação (referências e links), comparação Storybook × frontend, revisão de UX, verificação independente de entregas, scripts e tarefas técnicas em que demonstre competência | |
-| OpenCode — em avaliação (desde 17/11/2026) | Tarefas pequenas e reais de baixo risco: validação de links Markdown, revisão de documentação pública, scripts auxiliares, testes simples, revisão independente de pequenas alterações | Só após configuração de provedor autorizada pelo usuário; nenhum conteúdo privado a provedores não autorizados; modelos gratuitos não são presumidos ilimitados nem equivalentes em privacidade a Codex e Antigravity |
+| OpenCode — em avaliação (desde 17/11/2026) | Tarefas pequenas e reais de baixo risco: validação de links Markdown, revisão de documentação pública, scripts auxiliares, testes simples, revisão independente de pequenas alterações | Avaliação inicial autorizada em 17/11/2026 (opção A: modelos gratuitos, somente repositórios públicos), com instalação, conexão e transmissão só após o usuário aprovar o procedimento (HOR-154); nenhum conteúdo privado a provedores não autorizados; modelos gratuitos não são presumidos ilimitados nem equivalentes em privacidade a Codex e Antigravity |
 
 Codex, Claude Sonnet e Antigravity são os programadores preferenciais (Antigravity/Gemini e Codex recebem a maior parte da implementação, auditoria e verificação; Claude Sonnet só quando necessário; OpenCode participa em avaliação); as preferências não são limites rígidos e a distribuição pode mudar conforme a disponibilidade e os limites de uso de cada um. O Maestro redistribui por dependência, disponibilidade e limite de uso, não deixa agente ocioso quando há tarefa independente autorizada e não inicia tarefas simultâneas nos mesmos arquivos sem coordenação explícita (cada tarefa declara os arquivos de que é dona).
 
@@ -52,7 +52,7 @@ Cada incremento tem objetivo específico, escopo limitado, critérios de aceite,
 - Antes de integrar: testes dos módulos afetados, integração relevante, build quando houver frontend ou empacotamento, regressão das funcionalidades impactadas.
 - Mudanças críticas (segurança, autenticação, persistência, migrações, integração estrutural): todas as suítes relevantes, integridade de dados, testes negativos.
 - Periodicamente, e antes de release: validação completa da `main`.
-- Ao integrar na `main`: rodar também os testes transversais (`test_network_inventory`, snapshots de contrato, `test_supply_chain`, `test_endpoint_auth*`), regra mantida do registro de 16/11/2026 (RETOMADA §I, hoje no histórico).
+- Ao integrar código na `main`: rodar também os testes transversais (`test_network_inventory`, snapshots de contrato, `test_supply_chain`, `test_endpoint_auth*`), regra mantida do registro de 16/11/2026 (RETOMADA §I, hoje no histórico). Alterações exclusivamente documentais ficam fora das suítes de runtime: conferir diff, links, formatação e ausência de segredos.
 - Nunca reduzir cobertura, remover testes, ignorar falhas ou mudar critérios de aceite para obter resultado positivo.
 - Contrato da API: `backend/tests/test_api_contract_snapshot.py` compara o OpenAPI com `backend/tests/snapshots/openapi.json` e falha com diff legível (quebra ou mudança aditiva); mudança intencional: `HORUS_UPDATE_API_SNAPSHOT=1` no mesmo teste e commit do snapshot revisado.
 
@@ -125,7 +125,7 @@ Privacy First, Local First, Least Privilege, Deny by Default. Nenhuma inferênci
 
 ## Uso dos modelos
 
-Maestro (modelo definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço alto em experimentação; Opus só para situações realmente complexas) para coordenação, arquitetura complexa e revisão crítica; Antigravity/Gemini para frontend, testes visuais, auditorias e correções de documentação, verificação independente e scripts; Codex para backend, integrações, scripts operacionais, testes e auditorias; Claude Sonnet para implementação só quando necessário; OpenCode em avaliação. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
+Maestro (modelo definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço médio no cotidiano (alto só em decisões complexas) em experimentação; Opus só para situações realmente complexas) para coordenação, arquitetura complexa e revisão crítica; Antigravity/Gemini para frontend, testes visuais, auditorias e correções de documentação, verificação independente e scripts; Codex para backend, integrações, scripts operacionais, testes e auditorias; Claude Sonnet para implementação só quando necessário; OpenCode em avaliação. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
 
 ## Eficiência de consumo
 
