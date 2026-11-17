@@ -1,31 +1,44 @@
 """HOR-107: checkpoints humanos para gastar e publicar. Barreira no backend; servidor Hermes falso; sem rede real."""
 import hashlib
 import json
-import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 
-from test_workflow_hermes import (settings, hermes, client_for, create, pending, authorize, wait, Scenario, echo, TOKEN)
 from horus_backend.human_checkpoints import (ACTIONS, DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS,
     CheckpointRefused, CheckpointService, require_publication_checkpoint)
-from horus_backend.migrations import migrate
 from horus_backend.security import SecurityGate
-from horus_backend.storage import Store
 from horus_backend.transmissions import TransmissionLog
+from support_b import (
+    HERMES_TOKEN as TOKEN,  # noqa: F401
+    Scenario,
+    VALID_SCRIPT_OUTPUT,
+    approved_hermes_workflow as approved,
+    authorize_workflow as authorize,
+    client_for,  # noqa: F401
+    create_hermes_workflow as create,
+    echo,
+    generate_script,
+    hermes,  # noqa: F401
+    hermes_settings as settings,  # noqa: F401
+    pending_workflow as pending,
+    pg_store,  # noqa: F401
+    query_rows,
+    wait_workflow as wait,
+)
 
 SUBJECT = hashlib.sha256(b"objeto").hexdigest()
 OTHER = hashlib.sha256(b"outro").hexdigest()
-T0 = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
 
 
 class Clock:
-    def __init__(self):
-        self.now = T0
+    def __init__(self, initial=None):
+        self.now = initial or datetime.now(timezone.utc)
 
     def __call__(self):
         return self.now
@@ -35,18 +48,14 @@ class Clock:
 
 
 @pytest.fixture
-def env(tmp_path):
-    path = tmp_path / "horus.sqlite3"
-    migrate(path)
-    store = Store(path)
+def env(pg_store):
     clock = Clock()
-    log = TransmissionLog(store)
-    return SimpleNamespace(store=store, clock=clock, log=log, service=CheckpointService(store, log, clock))
+    log = TransmissionLog(pg_store)
+    return SimpleNamespace(store=pg_store, clock=clock, log=log, service=CheckpointService(pg_store, log, clock))
 
 
 def rows(store, table="human_checkpoints"):
-    with store.connect() as db:
-        return [dict(r) for r in db.execute(f"SELECT * FROM {table} ORDER BY seq")]
+    return query_rows(store, f"SELECT * FROM horus.{table} ORDER BY seq")
 
 
 def grant(service, **over):
@@ -58,9 +67,10 @@ def grant(service, **over):
 # --- concessão: quem, quando, o quê, limite -----------------------------------------------------------------
 
 def test_grant_records_who_when_what_limit_and_expiry(env):
+    t0 = env.clock.now
     record = grant(env.service, key="k1")
     assert (record["approved_by"], record["operator_id"], record["action"], record["subject"]) == ("human", "local-operator", "paid_narration", SUBJECT)
-    assert record["approved_at"] == T0.isoformat() and record["expires_at"] == (T0 + timedelta(seconds=600)).isoformat()
+    assert record["approved_at"] == t0.isoformat() and record["expires_at"] == (t0 + timedelta(seconds=600)).isoformat()
     assert (record["limit_amount"], record["currency"], record["consumed_at"]) == ("1.50", "USD", None)
     assert len(rows(env.store)) == 1
 
@@ -95,9 +105,8 @@ def test_backend_ceiling_refuses_larger_grants_before_insert(env, settings, acti
     kwargs = dict(action=action, limit_amount="0.20000001")  # reserva configurada = 0.2 USD
     with pytest.raises(CheckpointRefused) as error:
         if transactional:
-            with env.store.connect() as db:
-                db.execute("BEGIN IMMEDIATE")
-                grant(service, **kwargs, db=db)
+            with env.store.uow() as conn:
+                grant(service, **kwargs, db=conn)
         else:
             grant(service, **kwargs)
     assert error.value.code == "checkpoint_limit_exceeds_backend_ceiling"
@@ -182,9 +191,10 @@ def test_a_spending_action_with_an_unlimited_approval_is_refused(env):
 
 
 def test_replay_is_refused_and_a_new_approval_is_needed(env):
+    t0 = env.clock.now
     grant(env.service)
     done = env.service.consume(action="paid_narration", subject=SUBJECT, amount=Decimal("1"), currency="USD", ref="geracao-1")
-    assert done["consumed_ref"] == "geracao-1" and done["consumed_at"] == T0.isoformat()
+    assert done["consumed_ref"] == "geracao-1" and done["consumed_at"] == t0.isoformat()
     assert refusal(env) == "checkpoint_consumed"
     grant(env.service, description="nova aprovação")
     env.service.consume(action="paid_narration", subject=SUBJECT, amount=Decimal("1"), currency="USD", ref="geracao-2")
@@ -202,7 +212,7 @@ def test_concurrent_attempts_consume_the_approval_only_once(env):
             outcomes.append("ok")
         except CheckpointRefused as error:
             outcomes.append(error.code)
-        except sqlite3.OperationalError:
+        except psycopg.OperationalError:
             outcomes.append("busy")
     threads = [threading.Thread(target=attempt, args=(i,)) for i in range(8)]
     [t.start() for t in threads]
@@ -225,29 +235,50 @@ def test_publication_barrier_requires_a_human_checkpoint_per_object(env):
 def test_database_rejects_delete_edit_and_a_second_consumption(env):
     grant(env.service)
     env.service.consume(action="paid_narration", subject=SUBJECT, amount=Decimal("1"), currency="USD", ref="r")
-    with env.store.connect() as db:
-        for statement in ("DELETE FROM human_checkpoints", "UPDATE human_checkpoints SET limit_amount='999'",
-                          "UPDATE human_checkpoints SET expires_at='2099-01-01T00:00:00+00:00'",
-                          "UPDATE human_checkpoints SET consumed_at=NULL", "UPDATE human_checkpoints SET consumed_ref='outro'",
-                          "UPDATE human_checkpoints SET approved_by='human', operator_id='alguem'"):
-            with pytest.raises(sqlite3.IntegrityError):
-                db.execute(statement)
-    with env.store.connect() as db:
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("""INSERT INTO human_checkpoints(id,action,subject,description,approved_by,operator_id,approved_at,expires_at,request)
-                VALUES('x','publish',?, 'd','agent','op','a','b','{}')""", (SUBJECT,))
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("""INSERT INTO human_checkpoints(id,action,subject,description,approved_by,operator_id,approved_at,expires_at,
-                limit_amount,request) VALUES('y','publish',?, 'd','human','op','a','b','1','{}')""", (SUBJECT,))
+    with pytest.raises((psycopg.errors.InsufficientPrivilege, psycopg.errors.CheckViolation)):
+        with env.store.uow() as conn:
+            conn.execute("DELETE FROM horus.human_checkpoints")
+    for statement in (
+        "UPDATE horus.human_checkpoints SET consumed_at = NULL, consumed_ref = NULL",
+        "UPDATE horus.human_checkpoints SET consumed_ref = 'outro'",
+    ):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with env.store.uow() as conn:
+                conn.execute(statement)
+    for statement in (
+        "UPDATE horus.human_checkpoints SET limit_amount = 999",
+        "UPDATE horus.human_checkpoints SET expires_at = '2099-01-01T00:00:00+00:00'",
+        "UPDATE horus.human_checkpoints SET approved_by = 'human', operator_id = 'alguem'",
+    ):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with env.store.uow() as conn:
+                conn.execute(statement)
+    with pytest.raises((psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation, psycopg.errors.IntegrityError)):
+        with env.store.uow() as conn:
+            conn.execute(
+                """INSERT INTO horus.human_checkpoints(id, action, subject, description, approved_by, operator_id,
+                   approved_at, expires_at, request, request_canonical)
+                   VALUES ('x', 'publish', %s, 'd', 'agent', 'op', clock_timestamp(), clock_timestamp(), '{}'::jsonb, '{}'::bytea)""",
+                (SUBJECT,),
+            )
+    with pytest.raises((psycopg.errors.CheckViolation, psycopg.errors.NotNullViolation, psycopg.errors.IntegrityError)):
+        with env.store.uow() as conn:
+            conn.execute(
+                """INSERT INTO horus.human_checkpoints(id, action, subject, description, approved_by, operator_id,
+                   approved_at, expires_at, limit_amount, request, request_canonical)
+                   VALUES ('y', 'publish', %s, 'd', 'human', 'op', clock_timestamp(), clock_timestamp(), 1, '{}'::jsonb, '{}'::bytea)""",
+                (SUBJECT,),
+            )
 
 
 def test_cannot_edit_an_unconsumed_checkpoint_to_widen_it(env):
     grant(env.service)
-    with env.store.connect() as db:
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("UPDATE human_checkpoints SET limit_amount='1000000'")
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("UPDATE human_checkpoints SET subject=?", (OTHER,))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with env.store.uow() as conn:
+            conn.execute("UPDATE horus.human_checkpoints SET limit_amount = 1000000")
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with env.store.uow() as conn:
+            conn.execute("UPDATE horus.human_checkpoints SET subject = %s", (OTHER,))
 
 
 # --- auditoria em transmissions -----------------------------------------------------------------------------------
@@ -262,7 +293,7 @@ def test_refusals_are_audited_without_content_and_success_does_not_duplicate_the
     assert [(r["kind"], r["stage"], r["result"], r["detail"]) for r in ledger] == [
         ("gate_refusal", "checkpoint:publish", "refused_gate", "checkpoint_missing"),
         ("gate_refusal", "checkpoint:paid_narration", "refused_gate", "checkpoint_limit_exceeded")]
-    assert "segredo" not in json.dumps(ledger)
+    assert "segredo" not in json.dumps(ledger, default=str)
 
 
 # --- API HTTP ---------------------------------------------------------------------------------------------------
@@ -275,7 +306,7 @@ BODY = {"action": "paid_narration", "subject": SUBJECT, "description": "Narraç�
         "ttl_seconds": 600, "approved_by": "human"}
 
 
-def test_api_creates_lists_and_is_idempotent(settings):
+def test_api_creates_lists_and_is_idempotent(settings, client_for):
     with client_for(settings) as client:
         first = post(client, BODY)
         assert first.status_code == 201 and first.json()["approved_by"] == "human" and first.json()["consumed_at"] is None
@@ -285,7 +316,7 @@ def test_api_creates_lists_and_is_idempotent(settings):
         assert [i["id"] for i in listing["items"]] == [first.json()["id"]] and listing["next_after"] is None
 
 
-def test_api_cannot_expand_ttl_or_grant_cognitive_spending(settings):
+def test_api_cannot_expand_ttl_or_grant_cognitive_spending(settings, client_for):
     with client_for(settings) as client:
         assert post(client, BODY | {"ttl_seconds": MAX_TTL_SECONDS + 1}).status_code == 422
         assert post(client, BODY | {"action": "hermes_run", "limit_amount": "999"}).status_code == 422
@@ -299,13 +330,13 @@ def test_api_cannot_expand_ttl_or_grant_cognitive_spending(settings):
     {"approved_by": "agent"}, {"approved_by": None}, {"subject": "curto"}, {"ttl_seconds": 5}, {"ttl_seconds": 99999},
     {"limit_amount": "1e3"}, {"currency": "usd"}, {"extra": "campo"}, {"description": ""},
 ])
-def test_api_rejects_invalid_or_non_human_approvals(settings, change):
+def test_api_rejects_invalid_or_non_human_approvals(settings, client_for, change):
     with client_for(settings) as client:
         assert post(client, BODY | change).status_code == 422
         assert client.get("/v1/checkpoints").json()["items"] == []
 
 
-def test_api_requires_idempotency_key_and_authentication(settings):
+def test_api_requires_idempotency_key_and_authentication(settings, client_for):
     with client_for(settings) as client:
         assert client.post("/v1/checkpoints", json=BODY).status_code == 422
         client.headers.pop("Authorization")
@@ -316,11 +347,10 @@ def test_api_requires_idempotency_key_and_authentication(settings):
 # --- integração: execução cognitiva paga (Hermes) ----------------------------------------------------------------
 
 def checkpoints(client):
-    with client.app.state.store.connect() as db:
-        return [dict(r) for r in db.execute("SELECT * FROM human_checkpoints ORDER BY seq")]
+    return query_rows(client.app.state.store, "SELECT * FROM horus.human_checkpoints ORDER BY seq")
 
 
-def test_authorizing_a_hermes_run_registers_and_consumes_a_bounded_checkpoint(settings, hermes):
+def test_authorizing_a_hermes_run_registers_and_consumes_a_bounded_checkpoint(settings, hermes, client_for):
     hermes.scenarios.append(Scenario(output=echo()))
     with client_for(settings) as client:
         workflow = authorize(client, pending(client, create(client)["id"]))
@@ -328,51 +358,53 @@ def test_authorizing_a_hermes_run_registers_and_consumes_a_bounded_checkpoint(se
         [record] = checkpoints(client)
         attempt = workflow["attempts"][2]["id"]
         assert (record["action"], record["approved_by"], record["operator_id"]) == ("hermes_run", "human", "local-operator")
-        assert record["limit_amount"] == "0.2" and record["currency"] == "USD"          # 100000 tokens × US$ 2/Mtok
+        assert str(record["limit_amount"]).rstrip("0").rstrip(".") == "0.2" and record["currency"] == "USD"          # 100000 tokens × US$ 2/Mtok
         assert record["consumed_ref"] == attempt and record["consumed_at"] and record["expires_at"] > record["approved_at"]
         assert len(hermes.requests) == 1
 
 
-def test_expired_hermes_checkpoint_blocks_the_run_before_any_submission(settings, hermes, monkeypatch):
+def test_expired_hermes_checkpoint_blocks_the_run_before_any_submission(settings, hermes, client_for, monkeypatch):
     hermes.scenarios.append(Scenario(output=echo()))
     with client_for(settings) as client:
         service = client.app.state.manager.workflows.checkpoints
         calls = {"n": 0}
 
+        t0 = datetime.now(timezone.utc)
         def clock():
             calls["n"] += 1
-            return T0 if calls["n"] == 1 else T0 + timedelta(hours=2)          # 1ª chamada = concessão; depois, 2 h adiante
+            return t0 if calls["n"] == 1 else t0 + timedelta(hours=2)          # 1ª chamada = concessão; depois, 2 h adiante
         service.clock = clock
         workflow = authorize(client, pending(client, create(client)["id"]))
         time_to_settle = wait(client, workflow["id"], lambda w: w["status"] in {"failed", "blocked", "awaiting_approval", "interrupted"})
         assert time_to_settle["status"] != "awaiting_approval"
         assert hermes.requests == []
         assert [r["consumed_at"] for r in checkpoints(client)] == [None]
-        with client.app.state.store.connect() as db:
-            details = [r["detail"] for r in db.execute("SELECT detail FROM transmissions WHERE stage='checkpoint:hermes_run'")]
+        with client.app.state.store.uow(readonly=True) as conn:
+            details = [r[0] for r in conn.execute("SELECT detail FROM horus.transmissions WHERE stage = 'checkpoint:hermes_run'").fetchall()]
         assert details == ["checkpoint_expired"]
 
 
-def test_price_increase_after_approval_exceeds_the_approved_limit(settings, hermes):
+def test_price_increase_after_approval_exceeds_the_approved_limit(settings, hermes, client_for):
     hermes.scenarios.append(Scenario(output=echo()))
     with client_for(settings) as client:
         service = client.app.state.manager.workflows.checkpoints
         state = {"n": 0}
 
+        t0 = datetime.now(timezone.utc)
         def clock():
             state["n"] += 1
             if state["n"] == 1:                                              # concessão feita; depois o preço sobe 100×
                 object.__setattr__(settings, "price_output_usd_per_mtok", Decimal("200"))
-            return T0
+            return t0
         service.clock = clock
         workflow = authorize(client, pending(client, create(client)["id"]))
         settled = wait(client, workflow["id"], lambda w: w["status"] in {"failed", "blocked", "awaiting_approval", "interrupted"})
         assert settled["status"] != "awaiting_approval" and hermes.requests == []
-        with client.app.state.store.connect() as db:
-            assert [r["detail"] for r in db.execute("SELECT detail FROM transmissions WHERE stage='checkpoint:hermes_run'")] == ["checkpoint_limit_exceeded"]
+        with client.app.state.store.uow(readonly=True) as conn:
+            assert [r[0] for r in conn.execute("SELECT detail FROM horus.transmissions WHERE stage = 'checkpoint:hermes_run'").fetchall()] == ["checkpoint_limit_exceeded"]
 
 
-def test_attempt_without_a_checkpoint_is_refused_even_with_an_authorization_row(settings, hermes):
+def test_attempt_without_a_checkpoint_is_refused_even_with_an_authorization_row(settings, hermes, client_for):
     """Barreira independente da UI: autorização antiga sem checkpoint (ex.: criada por outro caminho) não gasta."""
     hermes.scenarios.append(Scenario(output=echo()))
     with client_for(settings) as client:
@@ -386,12 +418,11 @@ def test_attempt_without_a_checkpoint_is_refused_even_with_an_authorization_row(
 
 # --- integração: roteiro via Hermes e narração paga ----------------------------------------------------------------
 
-def test_hermes_script_stage_registers_a_consumed_checkpoint(settings, hermes):
-    from test_scripts_hermes_adversarial import run_script, valid_output
-    from test_scripts_hermes import approved
+def test_hermes_script_stage_registers_a_consumed_checkpoint(settings, hermes, client_for):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
-        assert run_script(client, hermes, workflow, valid_output()).status_code == 201
+        hermes.scenarios.append(Scenario(output=echo(VALID_SCRIPT_OUTPUT)))
+        assert generate_script(client, workflow, key="k1", source="hermes", authorize=True).status_code == 201
         records = [c for c in checkpoints(client) if c["action"] == "hermes_script"]
         assert len(records) == 1 and records[0]["consumed_at"] and records[0]["approved_by"] == "human"
 
