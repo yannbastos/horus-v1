@@ -8,14 +8,15 @@ Política vigente desde 13/11/2026, definida pelo usuário (idealizador e respon
 
 | Agente | Função | Preferências |
 |---|---|---|
-| Maestro (modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
-| Codex — programador | Python/FastAPI, fábrica, jobs e workflows, persistência, falhas, testes de integração | |
+| Maestro (modelo Claude definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço alto em experimentação, Opus reservado a situações realmente complexas) | Arquitetura, planejamento, delegação pelo Orca, worktrees, revisão, integração, conflitos, GitHub Projects | Evita implementar quando há agente disponível |
+| Codex — programador | Python/FastAPI, fábrica, jobs e workflows, persistência, falhas, testes de integração, scripts operacionais, automação e auditorias de código e documentação | |
 | Claude Sonnet — programador | Contratos, validadores, qualidade audiovisual, segurança, testes, refatorações delimitadas | |
-| Antigravity — programador | React/TypeScript, interface, prévia e revisão audiovisual, acessibilidade, Playwright | |
+| Antigravity — programador | React/TypeScript, interface, prévia e revisão audiovisual, acessibilidade, Playwright, auditorias e correções de documentação (referências e links), comparação Storybook × frontend, revisão de UX, verificação independente de entregas, scripts e tarefas técnicas em que demonstre competência | |
+| OpenCode — em avaliação (desde 17/11/2026) | Tarefas pequenas e reais de baixo risco: validação de links Markdown, revisão de documentação pública, scripts auxiliares, testes simples, revisão independente de pequenas alterações | Só após configuração de provedor autorizada pelo usuário; nenhum conteúdo privado a provedores não autorizados; modelos gratuitos não são presumidos ilimitados nem equivalentes em privacidade a Codex e Antigravity |
 
-Codex, Claude Sonnet e Antigravity são os programadores preferenciais; as preferências não são limites rígidos e a distribuição pode mudar conforme a disponibilidade e os limites de uso de cada um. O Maestro redistribui por dependência, disponibilidade e limite de uso, não deixa agente ocioso quando há tarefa independente autorizada e não inicia tarefas simultâneas nos mesmos arquivos sem coordenação explícita (cada tarefa declara os arquivos de que é dona).
+Codex, Claude Sonnet e Antigravity são os programadores preferenciais (Antigravity/Gemini e Codex recebem a maior parte da implementação, auditoria e verificação; Claude Sonnet só quando necessário; OpenCode participa em avaliação); as preferências não são limites rígidos e a distribuição pode mudar conforme a disponibilidade e os limites de uso de cada um. O Maestro redistribui por dependência, disponibilidade e limite de uso, não deixa agente ocioso quando há tarefa independente autorizada e não inicia tarefas simultâneas nos mesmos arquivos sem coordenação explícita (cada tarefa declara os arquivos de que é dona).
 
-**Distribuição automática (regra permanente):** tarefa enviada sem agente indicado é distribuída pelo Maestro a Codex, Claude Sonnet ou Antigravity/Gemini conforme competência, disponibilidade, cotas e dependências, em paralelo quando independentes e sem arquivos em comum. Agente indicado pelo usuário é respeitado. O Maestro (Opus) coordena, delega, acompanha, revisa e integra; só executa pessoalmente quando houver necessidade técnica justificada (ex.: correção trivial bloqueando uma integração).
+**Distribuição automática (regra permanente):** tarefa enviada sem agente indicado é distribuída pelo Maestro a Codex, Claude Sonnet ou Antigravity/Gemini conforme competência, disponibilidade, cotas e dependências, em paralelo quando independentes e sem arquivos em comum. Agente indicado pelo usuário é respeitado. O Maestro coordena, delega, acompanha, revisa e integra; só executa pessoalmente quando houver necessidade técnica justificada (ex.: correção trivial bloqueando uma integração).
 
 ## Ações autorizadas sem aprovação individual
 
@@ -123,7 +124,7 @@ Privacy First, Local First, Least Privilege, Deny by Default. Nenhuma inferênci
 
 ## Uso dos modelos
 
-Maestro (modelo Claude definido pelo usuário; em 16/11/2026, Fable 5.2) para coordenação, arquitetura complexa e revisão crítica; Sonnet para implementação, testes e validações; Codex para backend e integrações; Antigravity para frontend e testes visuais. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
+Maestro (modelo definido pelo usuário; desde 17/11/2026, Claude Sonnet 5.5 com esforço alto em experimentação; Opus só para situações realmente complexas) para coordenação, arquitetura complexa e revisão crítica; Antigravity/Gemini para frontend, testes visuais, auditorias e correções de documentação, verificação independente e scripts; Codex para backend, integrações, scripts operacionais, testes e auditorias; Claude Sonnet para implementação só quando necessário; OpenCode em avaliação. Modelos rápidos para tarefas simples. Não presumir que a assinatura de um produto cobre o uso por outra integração.
 
 ## Eficiência de consumo
 
@@ -134,7 +135,7 @@ Maximizar progresso real por unidade de consumo, sem reduzir qualidade ou segura
 - **Relatório do programador (`worker_done`):** 150–300 palavras com issue, resultado, arquivos, commit, testes (comando e contagem), problemas e bloqueios. Detalhes longos ficam num arquivo de relatório ou log citado pelo caminho, nunca descartados.
 - **Testes:** focados durante a implementação, com saída resumida; antes do merge, os relacionados e o build relevante. A suíte completa e a jornada real (`frontend/scripts/e2e-backend.mjs`) rodam **uma vez por lote integrado** que toque o fluxo de produção, não a cada merge. Não repetir suíte já executada sobre o mesmo estado. Registrar ambiente, commit e resultado.
 - **Contexto:** buscar antes de ler; ler trechos antes de arquivos inteiros; não reler documentos inalterados; não imprimir saídas longas (usar `tail`, `grep`, contagens). Sessão longa: compactar preservando objetivo, branch/HEAD, issues, pendências e agentes ativos; nova tarefa não relacionada: sessão limpa após registrar o estado.
-- **Modelos:** o menor nível que resolva com segurança. Opus só para decisões complexas, riscos e conflitos difíceis; nada de Opus para resumir logs, localizar arquivos ou verificações mecânicas.
+- **Modelos:** o menor nível que resolva com segurança. Opus só para decisões complexas, riscos e conflitos difíceis; nada de Opus para resumir logs, localizar arquivos ou verificações mecânicas. Inventários, correções de Markdown, buscas extensas, testes e implementações que Antigravity, Codex ou OpenCode (quando autorizado) possam executar não consomem a cota Claude.
 - **Cotas e balanceamento:** distribuir as tarefas entre provedores para nenhuma cota esgotar (Claude: Opus/Sonnet; OpenAI: Codex; Google: Antigravity). O Antigravity usa os modelos Gemini disponíveis (`agy models`), alternando entre famílias (ex.: Gemini 4 Hydrogen, Gemini 4 Argon, Gemini 3.8 Flash) e não usa modelos Claude, para não consumir a cota Claude. Quando a cota de um modelo acaba, trocar de modelo no mesmo provedor antes de redistribuir para outro. Segundo worker Claude só quando nenhum agente de outro provedor puder assumir.
 - **Despacho verificado:** depois de cada despacho, confirmar com `orca orchestration worker-show` que o worker começou (`activity=working`); ao revisar entregas, conferir também os workers que ainda não reportaram (`worker-read`: cota esgotada, espera ou travamento) e agir na hora.
 

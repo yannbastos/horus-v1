@@ -23,7 +23,7 @@ Leia só o pertinente ao escopo, buscando a seção antes de abrir o documento i
 |---|---|
 | Produto e funcionalidades | [VISION](docs/VISION.md) |
 | Arquitetura, backend ou persistência | [ARCHITECTURE](docs/ARCHITECTURE.md) e [migração](docs/migracao-local.md) |
-| Interface ou identidade visual | [Critérios visuais](docs/ARCHITECTURE.md#identidade-visual-e-equivalência), [layout](docs/layout-desktop.md) e tokens da implementação afetada |
+| Interface ou identidade visual | [Critérios visuais](docs/ARCHITECTURE.md#identidade-visual-e-equivalência) e tokens da implementação afetada (`frontend/src/styles/tokens.css`); componentes de referência no repositório irmão `horus-storybook` |
 | Hermes, agentes ou memória | [AI-SYSTEM](docs/AI-SYSTEM.md) e [integração Hermes](docs/integracao-hermes.md) |
 | Motion design, técnicas ou Remotion | [MOTION-LIBRARY](docs/MOTION-LIBRARY.md) e documentação própria da fábrica |
 | Autonomia, papéis e integração dos agentes | [AGENT-GOVERNANCE](docs/AGENT-GOVERNANCE.md) e [retomada em outro computador](docs/CONTINUAR-EM-OUTRO-PC.md) |
