@@ -1,19 +1,33 @@
-"""Cache/cota/datasets do coletor isolado. Nunca abre o SQLite operacional."""
+"""Cache/cota/datasets e trava do coletor Radar em PostgreSQL via UoW de I1."""
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import math
-from pathlib import Path
-import sqlite3
 import time
+import uuid
 
+from ..database.manager import DatabaseRefused
 from .models import Dataset
+
+# Namespace fixo do aplicativo (mesmo prefixo 'HORU' de I1) para locks consultivos do Radar.
+RADAR_LOCK_NS = 1213157973
+RADAR_COLLECTION_LOCK_KEY = 16406
+RADAR_QUOTA_NS = 16407
+
 
 def utcnow():
     return datetime.now(timezone.utc)
 
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class BudgetExceeded(RuntimeError):
     pass
+
 
 class CollectionCancelled(RuntimeError):
     """Cancelamento cooperativo; nenhuma revisão parcial é salva."""
@@ -29,135 +43,211 @@ def check_cancelled(cancel):
 
 
 class RadarState:
-    def __init__(self, path: Path, *, clock=utcnow, lock_timeout=5):
+    def __init__(self, db, *, clock=utcnow, lock_timeout=5):
         if not math.isfinite(lock_timeout) or lock_timeout < 0:
             raise ValueError('Timeout da trava deve ser finito e não negativo.')
+        if db is None or not hasattr(db, 'connection'):
+            raise ValueError('RadarState requer um gerenciador PostgreSQL (DatabaseManager) com .connection().')
+        self.db = db
+        self.clock = clock
         self.lock_timeout = lock_timeout
-        path = Path(path)
-        if path.name != 'radar-youtube.sqlite3' or path.is_symlink():
-            raise ValueError('Use somente um arquivo dedicado radar-youtube.sqlite3, sem symlink.')
-        self.path, self.clock = path, clock
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
-            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if tables - {'radar_cache', 'radar_usage', 'radar_blocks', 'radar_datasets'}:
-                raise ValueError('Arquivo contém outro banco; recusa de alteração.')
-            db.execute('CREATE TABLE IF NOT EXISTS radar_cache(key TEXT PRIMARY KEY, fetched TEXT NOT NULL, expires REAL NOT NULL, payload TEXT NOT NULL)')
-            db.execute('CREATE TABLE IF NOT EXISTS radar_usage(id TEXT PRIMARY KEY, at REAL NOT NULL, bucket TEXT NOT NULL)')
-            db.execute('CREATE TABLE IF NOT EXISTS radar_blocks(bucket TEXT PRIMARY KEY, until REAL NOT NULL)')
-            db.execute('CREATE TABLE IF NOT EXISTS radar_datasets(id TEXT NOT NULL, revision INTEGER NOT NULL, expires REAL NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(id,revision))')
-        self.purge()
+
+    def _now(self) -> datetime:
+        return _as_utc(self.clock())
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=5)
-        db.execute('PRAGMA secure_delete=ON')
+        """Uma conexão e transação explícita por unidade de trabalho."""
         try:
-            with db:
-                yield db
-        finally:
-            db.close()
+            with self.db.connection() as conn:
+                with conn.transaction():
+                    yield conn
+        except DatabaseRefused:
+            raise
 
     @contextmanager
     def collection_lock(self, cancel=None):
-        """Trava global por arquivo, inclusive entre processos; liberada em crash.
+        """Trava global por advisory lock de sessão no PostgreSQL; liberada em crash ou saída.
 
-        Banco auxiliar sem tabelas evita manter a transação do estado aberta
-        durante rede e permite que as reservas usem suas transações existentes.
+        Usa conexão dedicada em autocommit sem transação aberta durante a coleta,
+        permitindo que reservas e cache usem suas próprias transações curtas.
         """
-        path = self.path.with_suffix('.refresh-lock.sqlite3')
-        if path.is_symlink():
-            raise ValueError('Trava não pode ser symlink.')
-        db = sqlite3.connect(path, timeout=0)
         deadline = time.monotonic() + self.lock_timeout
-        try:
-            while True:
-                check_cancelled(cancel)
-                try:
-                    db.execute('BEGIN EXCLUSIVE')
-                    break
-                except sqlite3.OperationalError as error:
-                    if error.sqlite_errorcode != sqlite3.SQLITE_BUSY:
-                        raise
+        with self.db.connection() as conn:
+            acquired = False
+            try:
+                while True:
+                    check_cancelled(cancel)
+                    row = conn.execute(
+                        'SELECT pg_try_advisory_lock(%s, %s)',
+                        (RADAR_LOCK_NS, RADAR_COLLECTION_LOCK_KEY),
+                    ).fetchone()
+                    if row and row[0]:
+                        acquired = True
+                        break
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise CollectionLockTimeout('Tempo de espera pela trava do Radar excedido; tente novamente após a coleta em andamento.') from None
+                        raise CollectionLockTimeout(
+                            'Tempo de espera pela trava do Radar excedido; tente novamente após a coleta em andamento.'
+                        ) from None
                     time.sleep(min(0.05, remaining))
-            check_cancelled(cancel)
-            yield
-        finally:
-            db.close()
+                check_cancelled(cancel)
+                yield
+            finally:
+                if acquired:
+                    try:
+                        conn.execute(
+                            'SELECT pg_advisory_unlock(%s, %s)',
+                            (RADAR_LOCK_NS, RADAR_COLLECTION_LOCK_KEY),
+                        )
+                    except Exception:
+                        pass
 
     def purge(self):
-        now = self.clock().timestamp()
+        now = self._now()
+        window_start = now - timedelta(hours=26)
         with self.connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            db.execute('DELETE FROM radar_cache WHERE expires<=?', (now,))
-            db.execute('DELETE FROM radar_datasets WHERE expires<=?', (now,))
-            db.execute('DELETE FROM radar_usage WHERE at<=?', (now - 26 * 3600,))
-            db.execute('DELETE FROM radar_blocks WHERE until<=?', (now,))
+            db.execute('DELETE FROM horus.radar_cache WHERE expires <= %s', (now,))
+            db.execute('DELETE FROM horus.radar_datasets WHERE expires <= %s', (now,))
+            db.execute('DELETE FROM horus.radar_usage WHERE at <= %s', (window_start,))
+            db.execute('DELETE FROM horus.radar_blocks WHERE until <= %s', (now,))
 
     def cached(self, key):
         self.purge()
         with self.connect() as db:
-            row = db.execute('SELECT payload,fetched FROM radar_cache WHERE key=?', (key,)).fetchone()
-        return (json.loads(row[0]), datetime.fromisoformat(row[1])) if row else None
+            row = db.execute(
+                'SELECT payload, fetched FROM horus.radar_cache WHERE key = %s',
+                (key,),
+            ).fetchone()
+        if not row:
+            return None
+        payload, fetched = row
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return (payload, _as_utc(fetched))
 
     def cache(self, key, payload, fetched, hours):
         if not 0 < hours <= 24:
             raise ValueError('Cache deve durar até 24 horas.')
+        fetched_utc = _as_utc(fetched)
+        expires_utc = fetched_utc + timedelta(hours=hours)
         with self.connect() as db:
-            db.execute('INSERT OR REPLACE INTO radar_cache VALUES(?,?,?,?)',
-                       (key, fetched.isoformat(), (fetched + timedelta(hours=hours)).timestamp(), json.dumps(payload, ensure_ascii=False)))
+            db.execute(
+                """INSERT INTO horus.radar_cache (key, fetched, expires, payload)
+                   VALUES (%s, %s, %s, %s::jsonb)
+                   ON CONFLICT (key) DO UPDATE SET
+                       fetched = EXCLUDED.fetched,
+                       expires = EXCLUDED.expires,
+                       payload = EXCLUDED.payload""",
+                (key, fetched_utc, expires_utc, json.dumps(payload, ensure_ascii=False)),
+            )
 
     def reserve(self, bucket, limit):
-        """Janela móvel conservadora de 26h; não presume regras DST nem reinicia por processo."""
-        import uuid
-        self.purge()
-        now = self.clock().timestamp()
+        """Janela móvel conservadora de 26h em UTC, serializada por bucket via advisory xact lock."""
+        now = self._now()
+        window_start = now - timedelta(hours=26)
         with self.connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            if db.execute('SELECT 1 FROM radar_blocks WHERE bucket=? AND until>?', (bucket, now)).fetchone():
+            db.execute('SELECT pg_advisory_xact_lock(%s, hashtext(%s))', (RADAR_QUOTA_NS, bucket))
+            db.execute('DELETE FROM horus.radar_usage WHERE at <= %s', (window_start,))
+            db.execute('DELETE FROM horus.radar_blocks WHERE until <= %s', (now,))
+            if db.execute(
+                'SELECT 1 FROM horus.radar_blocks WHERE bucket = %s AND until > %s',
+                (bucket, now),
+            ).fetchone():
                 raise BudgetExceeded('Cota bloqueada após recusa do servidor; aguarde a janela local.')
-            used = db.execute('SELECT COUNT(*) FROM radar_usage WHERE bucket=? AND at>?', (bucket, now - 26 * 3600)).fetchone()[0]
+            used = db.execute(
+                'SELECT COUNT(*) FROM horus.radar_usage WHERE bucket = %s AND at > %s',
+                (bucket, window_start),
+            ).fetchone()[0]
             if used >= limit:
                 raise BudgetExceeded('Limite local da janela móvel de 26h atingido.')
-            db.execute('INSERT INTO radar_usage VALUES(?,?,?)', (uuid.uuid4().hex, now, bucket))
+            db.execute(
+                'INSERT INTO horus.radar_usage (id, at, bucket) VALUES (%s, %s, %s)',
+                (uuid.uuid4().hex, now, bucket),
+            )
 
     def block(self, bucket):
+        until = self._now() + timedelta(hours=26)
         with self.connect() as db:
-            db.execute('INSERT OR REPLACE INTO radar_blocks VALUES(?,?)',
-                       (bucket, (self.clock() + timedelta(hours=26)).timestamp()))
+            db.execute(
+                """INSERT INTO horus.radar_blocks (bucket, until)
+                   VALUES (%s, %s)
+                   ON CONFLICT (bucket) DO UPDATE SET until = EXCLUDED.until""",
+                (bucket, until),
+            )
 
     def invalidate(self, kind, identifiers):
         """Remove cópias gerenciadas antigas quando a consulta atual não retorna um recurso."""
+        targets = list(identifiers)
+        if not targets:
+            return
         with self.connect() as db:
-            for key, payload in db.execute('SELECT key,payload FROM radar_cache').fetchall():
-                if any(item.get('id') in identifiers for item in json.loads(payload).get('items', [])):
-                    db.execute('DELETE FROM radar_cache WHERE key=?', (key,))
-            for identifier, revision, payload in db.execute('SELECT id,revision,payload FROM radar_datasets').fetchall():
-                if any(item['kind'] == kind and item['youtube_id'] in identifiers for item in json.loads(payload)['records']):
-                    db.execute('DELETE FROM radar_datasets WHERE id=? AND revision=?', (identifier, revision))
+            db.execute(
+                """DELETE FROM horus.radar_cache
+                   WHERE EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements(COALESCE(payload->'items', '[]'::jsonb)) AS item
+                       WHERE item->>'id' = ANY(%s)
+                   )""",
+                (targets,),
+            )
+            db.execute(
+                """DELETE FROM horus.radar_datasets
+                   WHERE EXISTS (
+                       SELECT 1
+                       FROM jsonb_array_elements(COALESCE(payload->'records', '[]'::jsonb)) AS item
+                       WHERE item->>'kind' = %s AND item->>'youtube_id' = ANY(%s)
+                   )""",
+                (kind, targets),
+            )
 
     def save(self, dataset: Dataset):
-        if dataset.expires_at <= self.clock():
+        if _as_utc(dataset.expires_at) <= self._now():
             raise ValueError('Não é permitido salvar dataset expirado.')
         with self.connect() as db:
-            db.execute('INSERT INTO radar_datasets VALUES(?,?,?,?)',
-                       (dataset.snapshot_id, dataset.revision, dataset.expires_at.timestamp(), dataset.model_dump_json()))
+            db.execute(
+                """INSERT INTO horus.radar_datasets (id, revision, expires, collected_at, payload)
+                   VALUES (%s, %s, %s, %s, %s::jsonb)""",
+                (
+                    dataset.snapshot_id,
+                    dataset.revision,
+                    _as_utc(dataset.expires_at),
+                    _as_utc(dataset.collected_at),
+                    dataset.model_dump_json(),
+                ),
+            )
 
     def load(self, snapshot_id, revision):
         self.purge()
         with self.connect() as db:
-            row = db.execute('SELECT payload FROM radar_datasets WHERE id=? AND revision=?', (snapshot_id, revision)).fetchone()
+            row = db.execute(
+                'SELECT payload FROM horus.radar_datasets WHERE id = %s AND revision = %s',
+                (snapshot_id, revision),
+            ).fetchone()
         if not row:
             raise KeyError('Dataset ausente ou expirado.')
-        return Dataset.model_validate_json(row[0])
+        payload = row[0]
+        if isinstance(payload, dict):
+            return Dataset.model_validate(payload)
+        return Dataset.model_validate_json(payload)
 
     def list_datasets(self):
         self.purge()
         with self.connect() as db:
-            rows = db.execute("""SELECT d.payload FROM radar_datasets d
-                WHERE d.revision=(SELECT MAX(r.revision) FROM radar_datasets r WHERE r.id=d.id)
-                ORDER BY julianday(json_extract(d.payload,'$.collected_at')) DESC,d.id DESC LIMIT 100""").fetchall()
-        return [Dataset.model_validate_json(row[0]) for row in rows]
+            rows = db.execute(
+                """SELECT d.payload
+                   FROM horus.radar_datasets d
+                   WHERE d.revision = (
+                       SELECT MAX(r.revision) FROM horus.radar_datasets r WHERE r.id = d.id
+                   )
+                   ORDER BY d.collected_at DESC, d.id DESC
+                   LIMIT 100"""
+            ).fetchall()
+        result = []
+        for row in rows:
+            payload = row[0]
+            if isinstance(payload, dict):
+                result.append(Dataset.model_validate(payload))
+            else:
+                result.append(Dataset.model_validate_json(payload))
+        return result
