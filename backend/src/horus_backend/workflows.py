@@ -135,11 +135,23 @@ def _json_val(value):
     return value
 
 
+def _canonical_bytes(value) -> bytes:
+    """Bytes UTF-8 canônicos do serializador editorial (`encode`), preservando 1 vs 1.0 e ordem."""
+    return encode(value).encode("utf-8")
+
+
+def _artifact_intact(artifact: dict | None) -> bool:
+    if not artifact or artifact.get("content_canonical") is None:
+        return False
+    return hashlib.sha256(bytes(artifact["content_canonical"])).hexdigest() == artifact["content_hash"]
+
+
 class WorkflowService:
-    def __init__(self, store: Store, queue: asyncio.Queue, notify, settings=None):
+    def __init__(self, store: Store, queue: asyncio.Queue, notify, settings=None, *, clock=None):
         self.store, self.queue, self.notify = store, queue, notify
         self.settings = settings
-        self.checkpoints = CheckpointService(store, _audit(store), settings=settings)
+        self.clock = clock
+        self.checkpoints = CheckpointService(store, _audit(store), clock=clock, settings=settings)
         # Substituição somente em testes; nunca aceitar um executor informado pela API.
         self.executor = simulate
         self.executor_kind = getattr(settings, "workflow_executor", "simulated")
@@ -424,6 +436,7 @@ class WorkflowService:
                         canonical_json_bytes(content),
                     ),
                 )
+                content_canonical = _canonical_bytes(content)
                 cur.execute(
                     """INSERT INTO horus.artifacts(
                         id, workflow_id, revision, stage, job_id, attempt_id, schema_version,
@@ -435,8 +448,8 @@ class WorkflowService:
                         job_id,
                         attempt_id,
                         Jsonb(content),
-                        canonical_json_bytes(content),
-                        digest(content),
+                        content_canonical,
+                        hashlib.sha256(content_canonical).hexdigest(),
                         timestamp,
                     ),
                 )
@@ -553,9 +566,9 @@ class WorkflowService:
                     if not previous or previous["status"] != "succeeded":
                         raise WorkflowConflict("A dependência desta etapa não foi concluída.")
                     source = cur.execute("SELECT * FROM horus.artifacts WHERE job_id = %s", (previous["id"],)).fetchone()
-                    source_content = _json_val(source["content"]) if source else None
-                    if not source or digest(source_content) != source["content_hash"]:
+                    if not _artifact_intact(source):
                         raise WorkflowConflict("Artefato de entrada ausente ou com integridade inválida.")
+                    source_content = _json_val(source["content"])
                     sources = [{"id": source["id"], "content": source_content, "hash": source["content_hash"]}]
                 elif job["depends_on"] is not None:
                     raise WorkflowConflict("A primeira etapa não aceita dependências.")
@@ -676,6 +689,7 @@ class WorkflowService:
                 timestamp = datetime.now(timezone.utc)
                 if outcome == "succeeded":
                     artifact_id = uuid.uuid4().hex
+                    content_canonical = _canonical_bytes(content)
                     cur.execute(
                         """INSERT INTO horus.artifacts(
                             id, workflow_id, revision, stage, job_id, attempt_id, schema_version,
@@ -689,8 +703,8 @@ class WorkflowService:
                             job_id,
                             attempt_id,
                             Jsonb(content),
-                            canonical_json_bytes(content),
-                            digest(content),
+                            content_canonical,
+                            hashlib.sha256(content_canonical).hexdigest(),
                             timestamp,
                         ),
                     )
@@ -916,7 +930,8 @@ class WorkflowService:
                 if radar_redacted(payload):
                     raise WorkflowConflict(RADAR_REDACTED)
                 radar = payload.get("radar")
-                if radar and datetime.fromisoformat(radar["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+                moment = pg_clock(conn, clock=self.clock)
+                if radar and datetime.fromisoformat(radar["expires_at"].replace("Z", "+00:00")) <= moment:
                     raise WorkflowConflict("Dataset Radar expirado; colete uma nova revisão antes de autorizar.")
                 existing = cur.execute(
                     "SELECT * FROM horus.authorizations WHERE workflow_id = %s AND idempotency_key = %s",
@@ -935,11 +950,10 @@ class WorkflowService:
                         or job["step_key"] not in AUTHORIZED_STAGES.get(workflow["executor"], ())):
                     raise WorkflowConflict("Nenhuma etapa desta revisão aguarda autorização com esse identificador.")
                 source = cur.execute("SELECT * FROM horus.artifacts WHERE job_id = %s", (job["depends_on"],)).fetchone()
-                source_content = _json_val(source["content"]) if source else None
-                if not source or digest(source_content) != source["content_hash"]:
+                if not _artifact_intact(source):
                     raise WorkflowConflict("Artefato de entrada ausente ou com integridade inválida.")
                 authorization_id = uuid.uuid4().hex
-                timestamp = datetime.now(timezone.utc)
+                timestamp = moment
                 cur.execute(
                     """INSERT INTO horus.authorizations(
                         id, workflow_id, revision, job_id, input_artifact_id, scope, max_runs,
@@ -1035,8 +1049,7 @@ class WorkflowService:
                         "SELECT * FROM horus.artifacts WHERE id = %s AND workflow_id = %s AND revision = %s AND stage = 'proposal'",
                         (request.artifact_id, workflow_id, request.expected_revision),
                     ).fetchone()
-                    artifact_content = _json_val(artifact["content"]) if artifact else None
-                    if not artifact or digest(artifact_content) != artifact["content_hash"]:
+                    if not _artifact_intact(artifact):
                         raise WorkflowConflict("Proposta com integridade inválida.")
                     if request.decision == "request_changes" and radar_redacted(_json_val(workflow["payload"])):
                         raise WorkflowConflict(RADAR_REDACTED)  # nova revisão reexecutaria análise sem o dataset

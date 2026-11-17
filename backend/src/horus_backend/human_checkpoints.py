@@ -3,7 +3,7 @@
 Toda ação paga (execução cognitiva do Hermes, narração por API paga) ou de publicação exige um checkpoint registrado
 **antes**: quem aprovou (`human`/operador local), quando, o quê (SHA-256 do objeto aprovado + descrição curta), até que
 valor (`limit_amount`/`currency`) e por quanto tempo (`expires_at`). O código que executa a ação chama `consume`, que, numa
-transação do SQLite, confere ação, objeto, validade, limite e uso único, e só então marca o checkpoint como consumido
+transação do PostgreSQL, confere ação, objeto, validade, limite e uso único, e só então marca o checkpoint como consumido
 (replay recusado). Falta, expiração, valor acima do limite, objeto diferente ou reuso levantam `CheckpointRefused`
 (subclasse de `SecurityGate`: o HTTP já o traduz em 409 `security_gate`) e a recusa vai para `transmissions`
 (kind `gate_refusal`, stage `checkpoint:<ação>`, só o código). O consumo bem-sucedido fica na própria linha do checkpoint
