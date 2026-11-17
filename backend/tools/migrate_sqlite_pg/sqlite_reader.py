@@ -18,6 +18,7 @@ from .mapping import (
     parse_json_canonical,
     parse_utc_timestamp,
     table_digest,
+    validate_row_constraints,
 )
 
 
@@ -99,6 +100,12 @@ def _topological_sort(rows: list[dict[str, Any]], id_key: str, parent_key: str) 
     return ordered
 
 
+def _decode_raw_value(val: Any) -> Any:
+    if isinstance(val, bytes):
+        return val.decode("utf-8")
+    return val
+
+
 def _convert_row(table: str, raw: dict[str, Any], user_version: int) -> dict[str, Any]:
     spec = TABLE_SPECS[table]
     out: dict[str, Any] = {}
@@ -122,22 +129,25 @@ def _convert_row(table: str, raw: dict[str, Any], user_version: int) -> dict[str
             if col in canonical_pairs:
                 out[canonical_pairs[col]] = raw_bytes
         elif col in spec.ts_cols:
+            val = _decode_raw_value(val)
             if val is None and col in spec.nullable_cols:
                 out[col] = None
             else:
                 out[col] = parse_utc_timestamp(val)
         elif col in spec.epoch_ts_cols:
+            val = _decode_raw_value(val)
             if val is None and col in spec.nullable_cols:
                 out[col] = None
             else:
                 out[col] = parse_utc_timestamp(float(val))
         elif col in spec.numeric_cols:
+            val = _decode_raw_value(val)
             if val is None and col in spec.nullable_cols:
                 out[col] = None
             else:
                 out[col] = parse_finite_decimal(val)
         else:
-            out[col] = val
+            out[col] = _decode_raw_value(val)
 
     if table == "radar_datasets" and "collected_at" not in out:
         payload = out["payload"]
@@ -146,6 +156,7 @@ def _convert_row(table: str, raw: dict[str, Any], user_version: int) -> dict[str
             parse_utc_timestamp(collected_raw) if collected_raw is not None else out["expires"]
         )
 
+    validate_row_constraints(table, out)
     return out
 
 
@@ -191,9 +202,10 @@ def read_and_validate_sqlite(
     data: dict[str, list[dict[str, Any]]] = {}
 
     with closing(sqlite3.connect(f"{core_backup.as_uri()}?mode=ro", uri=True)) as db:
+        db.text_factory = bytes
         db.row_factory = sqlite3.Row
         found_tables = {
-            r[0]
+            r[0].decode("utf-8") if isinstance(r[0], bytes) else r[0]
             for r in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
@@ -224,7 +236,14 @@ def read_and_validate_sqlite(
             converted: list[dict[str, Any]] = []
             for idx, raw_row in enumerate(raw_rows):
                 raw_dict = dict(raw_row)
-                pk_ref = {pk: raw_dict.get(pk) for pk in spec.pk_cols}
+                pk_ref = {
+                    pk: (
+                        raw_dict.get(pk).decode("utf-8", errors="replace")
+                        if isinstance(raw_dict.get(pk), bytes)
+                        else raw_dict.get(pk)
+                    )
+                    for pk in spec.pk_cols
+                }
                 try:
                     converted.append(_convert_row(tbl, raw_dict, user_version))
                 except Exception as exc:
@@ -237,9 +256,15 @@ def read_and_validate_sqlite(
                         }
                     )
             if tbl == "jobs" and not rejected:
-                converted = _topological_sort(converted, "id", "depends_on")
+                try:
+                    converted = _topological_sort(converted, "id", "depends_on")
+                except SqliteSourceError as exc:
+                    rejected.append({"table": tbl, "reason": str(exc)})
             elif tbl == "license_reviews" and not rejected:
-                converted = _topological_sort(converted, "id", "supersedes")
+                try:
+                    converted = _topological_sort(converted, "id", "supersedes")
+                except SqliteSourceError as exc:
+                    rejected.append({"table": tbl, "reason": str(exc)})
             data[tbl] = converted
 
     # Garante que tabelas de versões posteriores existam vazias no dicionário unificado.
@@ -248,9 +273,10 @@ def read_and_validate_sqlite(
 
     if radar_backup is not None:
         with closing(sqlite3.connect(f"{radar_backup.as_uri()}?mode=ro", uri=True)) as rdb:
+            rdb.text_factory = bytes
             rdb.row_factory = sqlite3.Row
             found_radar = {
-                r[0]
+                r[0].decode("utf-8") if isinstance(r[0], bytes) else r[0]
                 for r in rdb.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
                 ).fetchall()
@@ -275,7 +301,14 @@ def read_and_validate_sqlite(
                 converted_radar: list[dict[str, Any]] = []
                 for idx, raw_row in enumerate(raw_rows):
                     raw_dict = dict(raw_row)
-                    pk_ref = {pk: raw_dict.get(pk) for pk in spec.pk_cols}
+                    pk_ref = {
+                        pk: (
+                            raw_dict.get(pk).decode("utf-8", errors="replace")
+                            if isinstance(raw_dict.get(pk), bytes)
+                            else raw_dict.get(pk)
+                        )
+                        for pk in spec.pk_cols
+                    }
                     try:
                         converted_radar.append(_convert_row(tbl, raw_dict, user_version))
                     except Exception as exc:

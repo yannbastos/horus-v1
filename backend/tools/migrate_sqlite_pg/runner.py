@@ -7,7 +7,7 @@ import tempfile
 from typing import Any
 import uuid
 
-from .guards import MigrationGuardError, validate_source_path
+from .guards import MigrationGuardError, validate_output_dir, validate_source_path
 from .mapping import MAPPING_VERSION
 from .pg_loader import MigrationVerificationError, execute_pg_load
 from .sqlite_reader import (
@@ -55,10 +55,6 @@ def run_migration(
 ) -> dict[str, Any]:
     """Executa prévia (dry-run por padrão) ou migração transacional verificável."""
     parsed_run_id = uuid.UUID(run_id) if run_id else uuid.uuid4()
-    if backup_dir is None:
-        backup_dir = Path(tempfile.mkdtemp(prefix="horus-mig-backup-"))
-    else:
-        backup_dir = Path(backup_dir)
 
     report: dict[str, Any] = {
         "run_id": str(parsed_run_id),
@@ -71,17 +67,22 @@ def run_migration(
     }
 
     try:
+        if backup_dir is None:
+            resolved_backup_dir = Path(tempfile.mkdtemp(prefix="horus-mig-backup-"))
+        else:
+            resolved_backup_dir = validate_output_dir(backup_dir)
+
         core_path, radar_path = _resolve_source_files(
             source_dir=source_dir, source_db=source_db, radar_db=radar_db
         )
         core_backup, core_sha, user_version = backup_and_inspect_sqlite(
-            core_path, backup_dir, label="horus"
+            core_path, resolved_backup_dir, label="horus"
         )
         radar_backup = None
         combined_sha = core_sha
         if radar_path is not None:
             radar_backup, radar_sha, _ = backup_and_inspect_sqlite(
-                radar_path, backup_dir, label="radar"
+                radar_path, resolved_backup_dir, label="radar"
             )
             combined_sha = hashlib.sha256(
                 f"{core_sha}:{radar_sha}".encode("ascii")
@@ -131,5 +132,7 @@ def run_migration(
     except Exception as exc:
         report["status"] = "failed"
         report["error_code"] = type(exc).__name__
-        report["error"] = "Falha na migração; transação revertida."
+        report["error"] = (
+            "Falha na migração; se ocorreu durante o COMMIT, consulte --check-run-id antes de repetir."
+        )
         return report

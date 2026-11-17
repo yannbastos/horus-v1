@@ -1,9 +1,11 @@
 """Guardas de segurança: recusa origem operacional/quente, links, destino remoto/não vazio e segredos."""
 from __future__ import annotations
 
+import ctypes
 import ipaddress
 import os
 from pathlib import Path
+import tempfile
 from urllib.parse import urlparse
 
 from psycopg.conninfo import conninfo_to_dict
@@ -13,8 +15,58 @@ class MigrationGuardError(ValueError):
     """Erro de pré-condição ou segurança que impede a migração."""
 
 
+def _strip_win_extended_prefix(raw: str) -> str:
+    """Remove prefixos estendidos do Windows (\\\\?\\ e \\\\?\\UNC\\) para comparação canônica."""
+    if raw.startswith("\\\\?\\UNC\\") or raw.startswith("//?/UNC/"):
+        return "\\\\" + raw[8:]
+    if raw.startswith("\\\\?\\") or raw.startswith("//?/"):
+        return raw[4:]
+    return raw
+
+
+def _reject_device_namespace(raw: str) -> None:
+    if raw.startswith("\\\\.\\") or raw.startswith("//./"):
+        raise MigrationGuardError("Caminho de dispositivo Windows (\\\\.\\) recusado.")
+
+
+def _win_long_path(raw: str) -> str:
+    """Expande nomes curtos 8.3 no Windows para o segmento existente mais longo."""
+    if os.name != "nt":
+        return raw
+    try:
+        get_long = ctypes.windll.kernel32.GetLongPathNameW
+    except Exception:
+        return raw
+
+    candidate = Path(raw)
+    tail: list[str] = []
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            return raw
+        tail.append(candidate.name)
+        candidate = parent
+
+    buf = ctypes.create_unicode_buffer(32768)
+    length = get_long(str(candidate), buf, len(buf))
+    resolved_base = buf.value if 0 < length < len(buf) else str(candidate)
+    result = Path(resolved_base)
+    for part in reversed(tail):
+        result = result / part
+    return str(result)
+
+
+def _canonical_path_str(path: Path) -> str:
+    raw = str(path)
+    _reject_device_namespace(raw)
+    stripped = _strip_win_extended_prefix(raw)
+    resolved = _strip_win_extended_prefix(str(Path(stripped).resolve()))
+    expanded = _win_long_path(resolved)
+    return _strip_win_extended_prefix(expanded)
+
+
 def _norm_key(path: Path) -> str:
-    return str(path.resolve()).replace("\\", "/").casefold().rstrip("/")
+    return _canonical_path_str(path).replace("\\", "/").casefold().rstrip("/")
 
 
 def _is_inside(path: Path, parent: Path) -> bool:
@@ -28,7 +80,7 @@ def _operational_roots() -> list[Path]:
     candidates = [Path.home() / "AppData" / "Local"]
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
-        candidates.append(Path(local_app_data))
+        candidates.append(Path(_strip_win_extended_prefix(local_app_data)))
     for base in candidates:
         for name in ("com.horus.audiovisual", "Horus", "Programs/Horus"):
             roots.append(base / name)
@@ -37,7 +89,10 @@ def _operational_roots() -> list[Path]:
 
 def validate_no_links(path: Path) -> None:
     """Recusa symlinks e junctions em qualquer segmento do caminho."""
-    for candidate in (path, *path.parents):
+    raw = str(path)
+    _reject_device_namespace(raw)
+    clean = Path(_strip_win_extended_prefix(raw))
+    for candidate in (clean, *clean.parents):
         try:
             is_link = candidate.is_symlink() or candidate.is_junction()
         except OSError:
@@ -46,20 +101,115 @@ def validate_no_links(path: Path) -> None:
             raise MigrationGuardError("Caminho com symlink ou junction recusado.")
 
 
-def validate_source_path(raw_path: str | Path, *, must_exist: bool = True) -> Path:
-    """Garante que a origem é uma cópia explícita absoluta fora das pastas operacionais."""
-    path = Path(raw_path)
-    if not path.is_absolute():
-        raise MigrationGuardError("Caminho de origem deve ser absoluto.")
-    validate_no_links(path)
+def _check_not_operational(path: Path) -> None:
     for op_root in _operational_roots():
         if _is_inside(path, op_root):
             raise MigrationGuardError(
-                "Origem operacional ou de instalação recusada; use apenas uma cópia explícita."
+                "Pasta operacional ou de instalação recusada; use apenas caminhos isolados."
             )
-    resolved = path.resolve()
+
+
+def _temp_root() -> Path:
+    raw_temp = os.environ.get("TEMP") or tempfile.gettempdir()
+    temp = Path(_strip_win_extended_prefix(raw_temp))
+    if not temp.is_absolute():
+        raise MigrationGuardError("TEMP relativo proibido.")
+    validate_no_links(temp)
+    return Path(_canonical_path_str(temp))
+
+
+def _allowed_output_roots(allowlist_roots: tuple[Path, ...] | list[Path] | None = None) -> list[Path]:
+    roots = [_temp_root()]
+    env_allow = os.environ.get("HORUS_MIGRATION_ALLOWLIST_DIR")
+    if env_allow:
+        for item in env_allow.split(os.pathsep):
+            if item.strip():
+                roots.append(Path(_canonical_path_str(Path(item.strip()))))
+    if allowlist_roots:
+        for item in allowlist_roots:
+            roots.append(Path(_canonical_path_str(Path(item))))
+    return roots
+
+
+def validate_source_path(raw_path: str | Path, *, must_exist: bool = True) -> Path:
+    """Garante que a origem é uma cópia explícita absoluta fora das pastas operacionais."""
+    raw_str = str(raw_path)
+    _reject_device_namespace(raw_str)
+    stripped = _strip_win_extended_prefix(raw_str)
+    if stripped.startswith("\\\\") or stripped.startswith("//"):
+        raise MigrationGuardError("Caminho UNC remoto recusado para origem; use cópia local.")
+    path = Path(stripped)
+    if not path.is_absolute():
+        raise MigrationGuardError("Caminho de origem deve ser absoluto.")
+    validate_no_links(path)
+    _check_not_operational(path)
+    resolved = Path(_canonical_path_str(path))
+    _check_not_operational(resolved)
     if must_exist and not resolved.exists():
         raise MigrationGuardError("Caminho de origem não encontrado.")
+    return resolved
+
+
+def validate_output_dir(
+    raw_path: str | Path,
+    *,
+    allowlist_roots: tuple[Path, ...] | list[Path] | None = None,
+) -> Path:
+    """Valida --backup-dir: absoluto, sem links, fora de pastas operacionais, em TEMP/allowlist e novo/vazio."""
+    raw_str = str(raw_path)
+    _reject_device_namespace(raw_str)
+    stripped = _strip_win_extended_prefix(raw_str)
+    if stripped.startswith("\\\\") or stripped.startswith("//"):
+        raise MigrationGuardError("Caminho UNC recusado para diretório de saída.")
+    path = Path(stripped)
+    if not path.is_absolute():
+        raise MigrationGuardError("Diretório de saída deve ser absoluto.")
+    validate_no_links(path)
+    _check_not_operational(path)
+    resolved = Path(_canonical_path_str(path))
+    _check_not_operational(resolved)
+
+    temp = _temp_root()
+    if _norm_key(resolved) == _norm_key(temp):
+        raise MigrationGuardError("Exige uma subpasta exclusiva dentro de TEMP, não a raiz de TEMP.")
+    allowed = _allowed_output_roots(allowlist_roots)
+    if not any(_is_inside(resolved, root) for root in allowed):
+        raise MigrationGuardError("Diretório de saída deve estar dentro de TEMP ou pasta allowlisted.")
+    if resolved.exists():
+        if not resolved.is_dir():
+            raise MigrationGuardError("Diretório de saída aponta para um arquivo existente.")
+        if any(resolved.iterdir()):
+            raise MigrationGuardError("Diretório de backup já existe e não está vazio; recusa sobrescrita.")
+    return resolved
+
+
+def validate_report_out(
+    raw_path: str | Path,
+    *,
+    allowlist_roots: tuple[Path, ...] | list[Path] | None = None,
+) -> Path:
+    """Valida --report-out: absoluto, sem links, fora de pastas operacionais, em TEMP/allowlist e sem sobrescrever."""
+    raw_str = str(raw_path)
+    _reject_device_namespace(raw_str)
+    stripped = _strip_win_extended_prefix(raw_str)
+    if stripped.startswith("\\\\") or stripped.startswith("//"):
+        raise MigrationGuardError("Caminho UNC recusado para relatório.")
+    path = Path(stripped)
+    if not path.is_absolute():
+        raise MigrationGuardError("Caminho do relatório deve ser absoluto.")
+    validate_no_links(path)
+    _check_not_operational(path)
+    resolved = Path(_canonical_path_str(path))
+    _check_not_operational(resolved)
+
+    temp = _temp_root()
+    if _norm_key(resolved) == _norm_key(temp) or _norm_key(resolved.parent) == _norm_key(temp):
+        raise MigrationGuardError("Relatório exige uma subpasta exclusiva dentro de TEMP.")
+    allowed = _allowed_output_roots(allowlist_roots)
+    if not any(_is_inside(resolved, root) for root in allowed):
+        raise MigrationGuardError("Relatório deve estar dentro de TEMP ou pasta allowlisted.")
+    if resolved.exists():
+        raise MigrationGuardError("Arquivo de relatório já existe; recusa sobrescrita.")
     return resolved
 
 
@@ -80,7 +230,7 @@ def validate_target_dsn(dsn: str) -> dict[str, str]:
     if not dsn or not isinstance(dsn, str):
         raise MigrationGuardError("DSN de destino obrigatório.")
     low = dsn.lower()
-    if "password=" in low or "://" in low and "@" in urlparse(dsn).netloc:
+    if "password=" in low or ("://" in low and "@" in urlparse(dsn).netloc):
         raise MigrationGuardError("Segredos/credenciais em DSN/argv são proibidos.")
     try:
         opts = conninfo_to_dict(dsn)
