@@ -6,12 +6,13 @@
 @font-face { font-family: Geist; src: url('/fonts/GeistMono-Medium.ttf') format('truetype'); font-weight: 500; font-display: swap; }
 
 * { box-sizing: border-box; }
+html, body, #root { height: 100%; overflow: hidden; }
 body { margin: 0; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 :focus-visible { outline: var(--FocusRingWidth) solid var(--FocusRingColor, var(--AccentInk)); outline-offset: var(--FocusRingOffset); }
-.horus { background: var(--Background); color: var(--Ink); font: var(--TextBody)/1.2 var(--FontSans); height: 100vh; display: grid; grid-template-columns: 216px minmax(0,1fr); }
+.horus { background: var(--Background); color: var(--Ink); font: var(--TextBody)/1.2 var(--FontSans); height: 100%; display: grid; grid-template-columns: 216px minmax(0,1fr); grid-template-rows: minmax(0,1fr); }
 h1, h2, h3, .brand-name { font-family: var(--FontDisplay); font-weight: 600; color: var(--InkStrong); line-height: 1.1; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: var(--TextH1); }
@@ -60,7 +61,7 @@ h3 { font-size: var(--TextH3); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--Space4); align-items: center; }
 .row { display: flex; align-items: center; gap: var(--Space4); }
 .spread { justify-content: space-between; flex-wrap: wrap; }
-.sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--Sunken); border-right: 1px solid var(--Line); }
+.sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--Sunken); border-right: 1px solid var(--Line); }
 .brand { margin: 30px 24px 26px; }
 .brand-name { display: flex; align-items: center; gap: 8px; font-size: 23px; letter-spacing: 3px; }
 .brand-name svg { color: var(--AccentInk); flex-shrink: 0; }
@@ -82,7 +83,7 @@ h3 { font-size: var(--TextH3); }
 .workspace-shell { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .topbar { border-bottom: 1px solid var(--Line); padding: 17px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 55px; }
 .topbar .eyebrow { font-size: 11px; }
-main { flex: 1; overflow: auto; min-height: 0; outline: none; }
+main { position: relative; flex: 1; overflow: auto; min-height: 0; outline: none; }
 footer { border-top: 1px solid var(--Line); padding: 10px 28px; font-size: 11px; color: var(--Muted); display: flex; gap: 12px; flex-wrap: wrap; }
 .page { padding: 28px 32px; display: flex; flex-direction: column; gap: 26px; }
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
