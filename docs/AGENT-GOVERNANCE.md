@@ -52,6 +52,7 @@ Cada incremento tem objetivo específico, escopo limitado, critérios de aceite,
 - Antes de integrar: testes dos módulos afetados, integração relevante, build quando houver frontend ou empacotamento, regressão das funcionalidades impactadas.
 - Mudanças críticas (segurança, autenticação, persistência, migrações, integração estrutural): todas as suítes relevantes, integridade de dados, testes negativos.
 - Periodicamente, e antes de release: validação completa da `main`.
+- Ao integrar na `main`: rodar também os testes transversais (`test_network_inventory`, snapshots de contrato, `test_supply_chain`, `test_endpoint_auth*`), regra mantida do registro de 16/11/2026 (RETOMADA §I, hoje no histórico).
 - Nunca reduzir cobertura, remover testes, ignorar falhas ou mudar critérios de aceite para obter resultado positivo.
 - Contrato da API: `backend/tests/test_api_contract_snapshot.py` compara o OpenAPI com `backend/tests/snapshots/openapi.json` e falha com diff legível (quebra ou mudança aditiva); mudança intencional: `HORUS_UPDATE_API_SNAPSHOT=1` no mesmo teste e commit do snapshot revisado.
 
