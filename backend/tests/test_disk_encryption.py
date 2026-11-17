@@ -6,7 +6,7 @@ import pytest
 
 from horus_backend import disk_encryption as de
 from horus_backend.diagnostics import diagnose
-from test_workflows import settings, client_for  # noqa: F401
+from support_d import auth_headers
 
 
 def status(raw, data_dir='C:/dados'):
@@ -70,13 +70,12 @@ def test_result_is_cached_briefly_for_the_real_query(monkeypatch, tmp_path):
     assert calls == ['Z:']
 
 
-def test_diagnostics_exposes_disk_encryption_without_affecting_production_readiness(settings, monkeypatch):
+def test_diagnostics_exposes_disk_encryption_without_affecting_production_readiness(pg_app_settings, pg_client, monkeypatch):
     monkeypatch.setattr(de, '_query', lambda letter: '2')
     monkeypatch.setattr(de, '_drive_letter', lambda d: 'C:')
-    result = diagnose(settings)
+    result = diagnose(pg_app_settings)
     assert result['disk_encryption']['status'] == 'not_encrypted' and result['disk_encryption']['volume'] == 'C:'
     assert 'disk_encryption' not in {c['id'] for c in result['production']['checks']}
     assert 'disk_encryption' not in result['production']['missing']
-    with client_for(settings) as client:
-        body = client.get('/v1/diagnostics').json()
-        assert set(body['disk_encryption']) == {'status', 'protection', 'method', 'volume', 'detail', 'guidance'}
+    body = pg_client.get('/v1/diagnostics', headers=auth_headers()).json()
+    assert set(body['disk_encryption']) == {'status', 'protection', 'method', 'volume', 'detail', 'guidance'}

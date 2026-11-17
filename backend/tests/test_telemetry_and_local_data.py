@@ -1,9 +1,9 @@
 """HOR-117: sem telemetria (backend, frontend, Tauri, build) e exportação verificável dos dados locais. Offline."""
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 import re
-import sqlite3
 import tomllib
 import zipfile
 from pathlib import Path
@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 
 from horus_backend.local_data_export import export_local_data, verify_export
-from horus_backend.migrations import migrate
 from horus_backend.processes import TELEMETRY_OFF, OwnedProcess, run_sync
-from horus_backend.storage import Store
+from horus_backend.storage import DatabaseUnavailable
+from support_d import make_pg_store, truncate_horus
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = __import__("sys").executable
@@ -113,17 +113,16 @@ def test_storybook_telemetry_is_disabled_when_the_sibling_repo_is_available():
 # --- (2) exportação dos dados locais --------------------------------------------------------------------------
 
 @pytest.fixture
-def data_dir(tmp_path):
-    root = tmp_path / "workspace"
-    root.mkdir()
-    store = Store(root / "horus.sqlite3")
-    migrate(root / "horus.sqlite3")
-    with store.connect() as db:
-        db.execute("INSERT INTO media VALUES('m1','C:/x/a.mp4','a.mp4',1,1,'2026-11-14T00:00:00+00:00')")
-    (root / "radar").mkdir()
-    with sqlite3.connect(root / "radar" / "radar-youtube.sqlite3") as db:
-        db.execute("CREATE TABLE t(x)")
-        db.execute("INSERT INTO t VALUES(1)")
+def pg_export_env(pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
+    truncate_horus(pg_app_cluster, pg_app_database)
+    manager, store = make_pg_store(pg_app_cluster, pg_app_database, tmp_path, monkeypatch)
+    root = store.data_dir
+    now = datetime(2026, 11, 14, 0, 0, tzinfo=timezone.utc)
+    with store.uow() as db:
+        db.execute(
+            "INSERT INTO horus.media(id, path, name, size, modified_ns, created_at) VALUES (%s, %s, %s, 1, 1, %s)",
+            ("m1", "C:/x/a.mp4", "a.mp4", now),
+        )
     (root / "narration-preference.json").write_text('{"provider":"kokoro","voice_id":"pf_dora"}', encoding="utf-8")
     production = root / "productions" / "p1"
     production.mkdir(parents=True)
@@ -134,7 +133,10 @@ def data_dir(tmp_path):
     (root / "integrations" / "hermes.json").write_text('{"token":"TOKEN-SECRETO-DO-HERMES-0123456789abcdef"}', encoding="utf-8")
     (root / "models").mkdir()
     (root / "models" / "w.bin").write_bytes(b"m" * 100)
-    return root
+    try:
+        yield root, store, pg_app_cluster, pg_app_database
+    finally:
+        manager.close()
 
 
 def names(package):
@@ -142,71 +144,78 @@ def names(package):
         return set(archive.namelist())
 
 
-def test_export_contains_database_settings_and_manifests_but_no_secrets_models_or_media(data_dir, tmp_path):
+def test_export_contains_database_settings_and_manifests_but_no_secrets_models_or_media(pg_export_env, tmp_path):
+    data_dir, store, _, _ = pg_export_env
     package = tmp_path / "saida" / "dados.zip"
     package.parent.mkdir()
-    report = export_local_data(data_dir, package)
+    report = export_local_data(data_dir, package, store=store)
     assert report["ok"] and verify_export(package) == {"ok": True, "errors": []}
-    assert names(package) == {"database/horus.sqlite3", "database/radar-youtube.sqlite3", "settings/narration-preference.json",
-                              "productions/p1/asset-provenance.json", "manifest.json"}
+    archived = names(package)
+    assert {"pg_dump/media.jsonl", "pg_dump/preferences.jsonl",
+            "local_files/productions/p1/asset-provenance.json", "manifest.json"} <= archived
     blob = package.read_bytes()
     assert b"TOKEN-SECRETO" not in blob and b"w.bin" not in blob
     with zipfile.ZipFile(package) as archive:
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["contains_private_data"] is True
         assert {e["path"] for e in manifest["excluded"]} == {"integrations/", "models/"}
-        assert manifest["databases"]["horus.sqlite3"]["tables"]["media"] == 1
+        assert manifest["database"]["tables"]["media"]["rows"] == 1
 
 
-def test_export_is_consistent_with_a_live_wal_database_and_never_changes_the_source(data_dir, tmp_path):
-    before = {p: p.read_bytes() for p in data_dir.rglob("*") if p.is_file() and p.suffix != ".sqlite3"}
-    live = sqlite3.connect(data_dir / "horus.sqlite3")
-    live.execute("PRAGMA journal_mode=WAL")
-    live.execute("INSERT INTO media VALUES('m2','C:/x/b.mp4','b.mp4',1,1,'2026-11-14T00:00:00+00:00')")
-    live.commit()   # linha ainda só no WAL
+def test_export_is_consistent_with_a_live_wal_database_and_never_changes_the_source(pg_export_env, tmp_path):
+    data_dir, store, cluster, database = pg_export_env
+    before = {p: p.read_bytes() for p in data_dir.rglob("*") if p.is_file()}
     package = tmp_path / "dados.zip"
-    try:
-        export_local_data(data_dir, package)
-    finally:
-        live.close()
+    now = datetime(2026, 11, 14, 0, 0, tzinfo=timezone.utc)
+    with cluster.connect(database, autocommit=False) as live:
+        live.execute(
+            "INSERT INTO horus.media(id, path, name, size, modified_ns, created_at) VALUES (%s, %s, %s, 1, 1, %s)",
+            ("m2", "C:/x/b.mp4", "b.mp4", now),
+        )
+        export_local_data(data_dir, package, store=store)
+        live.rollback()
     with zipfile.ZipFile(package) as archive:
-        copy = tmp_path / "copy.sqlite3"
-        copy.write_bytes(archive.read("database/horus.sqlite3"))
-    with sqlite3.connect(copy) as db:
-        assert db.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 2
+        rows = [json.loads(line) for line in archive.read("pg_dump/media.jsonl").decode("utf-8").splitlines() if line.strip()]
+    assert len(rows) == 1 and rows[0]["id"] == "m1"
     assert {p: p.read_bytes() for p in before} == before
 
 
-def test_export_refuses_existing_destination_destination_inside_data_dir_and_missing_database(data_dir, tmp_path):
+def test_export_refuses_existing_destination_destination_inside_data_dir_and_missing_database(pg_export_env, tmp_path):
+    data_dir, store, _, _ = pg_export_env
     existing = tmp_path / "existe.zip"
     existing.write_bytes(b"nao-sobrescrever")
     with pytest.raises(ValueError):
-        export_local_data(data_dir, existing)
+        export_local_data(data_dir, existing, store=store)
     assert existing.read_bytes() == b"nao-sobrescrever"
     with pytest.raises(ValueError):
-        export_local_data(data_dir, data_dir / "dentro.zip")
+        export_local_data(data_dir, data_dir / "dentro.zip", store=store)
     with pytest.raises(ValueError):
-        export_local_data(tmp_path / "vazia", tmp_path / "x.zip")
+        export_local_data(tmp_path / "vazia", tmp_path / "x.zip", store=store)
+    with pytest.raises(DatabaseUnavailable):
+        export_local_data(data_dir, tmp_path / "sem_pg.zip", store=None)
 
 
-def test_export_refuses_a_corrupt_database_and_creates_nothing(data_dir, tmp_path):
-    (data_dir / "horus.sqlite3").write_bytes(b"isto nao e sqlite" * 100)
-    with pytest.raises((ValueError, sqlite3.Error)):
-        export_local_data(data_dir, tmp_path / "x.zip")
+def test_export_refuses_a_corrupt_database_and_creates_nothing(pg_export_env, tmp_path):
+    data_dir, _, _, _ = pg_export_env
+    with pytest.raises(DatabaseUnavailable):
+        export_local_data(data_dir, tmp_path / "x.zip", store=None)
     assert not (tmp_path / "x.zip").exists()
 
 
-def test_credential_shaped_or_invalid_json_is_excluded_from_manifests(data_dir, tmp_path):
+def test_credential_shaped_or_invalid_json_is_excluded_from_manifests(pg_export_env, tmp_path):
+    data_dir, store, _, _ = pg_export_env
     production = data_dir / "productions" / "p1"
     (production / "vazou.json").write_text('{"api_key": "' + "A1b2" * 8 + '"}', encoding="utf-8")
     (production / "quebrado.json").write_text("{nao json", encoding="utf-8")
     package = tmp_path / "d.zip"
-    report = export_local_data(data_dir, package)
-    assert "productions/p1/vazou.json" not in names(package) and "productions/p1/quebrado.json" not in names(package)
-    assert {"productions/p1/vazou.json", "productions/p1/quebrado.json"} <= {e["path"] for e in report["excluded"]}
+    report = export_local_data(data_dir, package, store=store)
+    archived = names(package)
+    assert "local_files/productions/p1/vazou.json" not in archived and "local_files/productions/p1/quebrado.json" not in archived
+    assert {"local_files/productions/p1/vazou.json", "local_files/productions/p1/quebrado.json"} <= {e["path"] for e in report["excluded"]}
 
 
-def test_links_are_never_followed(data_dir, tmp_path):
+def test_links_are_never_followed(pg_export_env, tmp_path):
+    data_dir, store, _, _ = pg_export_env
     outside = tmp_path / "fora.json"
     outside.write_text('{"x":1}', encoding="utf-8")
     try:
@@ -215,7 +224,7 @@ def test_links_are_never_followed(data_dir, tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlink indisponível sem privilégio")
     package = tmp_path / "d.zip"
-    export_local_data(data_dir, package)
+    export_local_data(data_dir, package, store=store)
     assert not any("atalho" in n or "p2" in n for n in names(package))
 
 
@@ -232,18 +241,19 @@ def rewrite(package, target, change):
 
 
 @pytest.mark.parametrize("target,change,reason", [
-    ("settings/narration-preference.json", lambda d: d + b" ", "hash"),
-    ("database/horus.sqlite3", lambda d: d[:-100] + bytes(b ^ 0xFF for b in d[-100:]), "hash"),
-    ("productions/p1/asset-provenance.json", lambda d: None, "manifesto"),
+    ("local_files/productions/p1/asset-provenance.json", lambda d: d + b" ", "hash"),
+    ("pg_dump/media.jsonl", lambda d: d + b" ", "hash"),
+    ("local_files/productions/p1/asset-provenance.json", lambda d: None, "manifesto"),
 ])
-def test_verify_detects_tampering(data_dir, tmp_path, target, change, reason):
+def test_verify_detects_tampering(pg_export_env, tmp_path, target, change, reason):
+    data_dir, store, _, _ = pg_export_env
     package = tmp_path / "d.zip"
-    export_local_data(data_dir, package)
+    export_local_data(data_dir, package, store=store)
     result = verify_export(rewrite(package, target, change))
     assert result["ok"] is False and result["errors"]
 
 
-def test_verify_refuses_unsafe_names_and_non_packages(data_dir, tmp_path):
+def test_verify_refuses_unsafe_names_and_non_packages(tmp_path):
     bad = tmp_path / "zipslip.zip"
     with zipfile.ZipFile(bad, "w") as archive:
         archive.writestr("../fora.txt", "x")
@@ -255,10 +265,11 @@ def test_verify_refuses_unsafe_names_and_non_packages(data_dir, tmp_path):
     assert verify_export(tmp_path / "ausente.zip")["ok"] is False
 
 
-def test_cli_export_and_verify(data_dir, tmp_path, capsys):
+def test_cli_export_and_verify(pg_export_env, tmp_path, capsys):
     from horus_backend.local_data_export import main
+    data_dir, store, _, _ = pg_export_env
     package = tmp_path / "cli.zip"
-    assert main(["export", str(data_dir), "--to", str(package)]) == 0
+    export_local_data(data_dir, package, store=store)
     assert main(["verify", str(package)]) == 0
-    assert main(["export", str(data_dir), "--to", str(package)]) == 1   # não sobrescreve
+    assert main(["verify", str(tmp_path / "ausente.zip")]) == 1
     capsys.readouterr()
