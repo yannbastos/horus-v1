@@ -89,14 +89,11 @@ jobs:
     needs: [verify-version, test]
     runs-on: windows-latest
     timeout-minutes: 60
-    environment: ${{ needs.verify-version.outputs.channel }}
     env:
       HORUS_UPDATE_CHANNEL: ${{ needs.verify-version.outputs.channel }}
-      HORUS_UPDATE_BASE_URL: ${{ vars.HORUS_UPDATE_BASE_URL }}
-      HORUS_UPDATER_PUBKEY: ${{ vars.HORUS_UPDATER_PUBKEY }}
-      # createUpdaterArtifacts exige assinatura no próprio build Tauri.
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Sem Environment nem secrets: somente configuração pública do repositório.
+      HORUS_UPDATE_BASE_URL: ${{ vars[format('UPDATE_{0}_BASE_URL', needs.verify-version.outputs.channel == 'test' && 'TEST' || 'PRODUCTION')] }}
+      HORUS_UPDATER_PUBKEY: ${{ vars[format('UPDATE_{0}_UPDATER_PUBKEY', needs.verify-version.outputs.channel == 'test' && 'TEST' || 'PRODUCTION')] }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -115,21 +112,23 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node scripts/release/cli.mjs overlay
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: NSIS por usuário e artefatos updater (sem executar instalador)
+      - name: NSIS sem assinatura e sem segredos (sem executar instalador)
         run: |
-          npm --prefix frontend run tauri build -- --config "$env:HORUS_RELEASE_DIR/tauri.generated.json"
+          npm --prefix frontend run tauri build -- --no-sign --config "$env:HORUS_RELEASE_DIR/tauri.generated.json"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node scripts/release/cli.mjs collect
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-build
-          path: ${{ env.HORUS_RELEASE_DIR }}/*.exe*
+          path: |
+            ${{ env.HORUS_RELEASE_DIR }}/*.exe
+            ${{ env.HORUS_RELEASE_DIR }}/tauri.generated.json
           if-no-files-found: error
           retention-days: 3
 
   sign:
-    needs: [verify-version, build]
+    needs: [verify-version, test, build]
     runs-on: windows-latest
     timeout-minutes: 15
     environment: ${{ needs.verify-version.outputs.channel }}

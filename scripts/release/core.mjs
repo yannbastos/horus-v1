@@ -51,6 +51,10 @@ export function assertUploadSize(bytes) {
   return bytes;
 }
 
+export function assertBuildConfiguration(actual, env, template) {
+  if (JSON.stringify(actual) !== JSON.stringify(overlay(env, template))) throw Error('Overlay público do build diverge da configuração do Environment de assinatura.');
+}
+
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
 export const installerName = version => `HORUS_${version}_x64-setup.exe`;
 export const releasePrefix = (channel, version) => `${channel}/releases/${version}`;

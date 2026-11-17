@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { releaseTag, guard, overlay, baseURL, candidate, productVersions, publish, assertUploadSize } from './core.mjs';
+import { releaseTag, guard, overlay, baseURL, candidate, productVersions, publish, assertUploadSize, assertBuildConfiguration } from './core.mjs';
 import { root } from './runtime.mjs';
 
 test('tags aceitas e canais separados; SemVer/NSIS inválidos recusados', () => {
@@ -21,7 +21,10 @@ test('guarda de igualdade, duplicata, regressão, monotonia e canal', () => {
 });
 test('overlay exige HTTPS e parâmetros; não aceita credenciais ou caminhos', () => {
   const env = { HORUS_UPDATE_CHANNEL: 'test', HORUS_UPDATE_BASE_URL: 'https://updates.example', HORUS_UPDATER_PUBKEY: 'public-test' };
-  const result = overlay(env, JSON.parse(fs.readFileSync(path.join(root, 'frontend/src-tauri/tauri.release.conf.json'))));
+  const template = JSON.parse(fs.readFileSync(path.join(root, 'frontend/src-tauri/tauri.release.conf.json')));
+  const result = overlay(env, template);
+  assert.doesNotThrow(() => assertBuildConfiguration(result, env, template));
+  for (const change of [{ HORUS_UPDATE_CHANNEL: 'production' }, { HORUS_UPDATER_PUBKEY: 'different-key' }, { HORUS_UPDATE_BASE_URL: 'https://other.example' }]) assert.throws(() => assertBuildConfiguration(result, { ...env, ...change }, template), /diverge/);
   assert.deepEqual(result.plugins.updater.endpoints, ['https://updates.example/test/latest.json']);
   assert.equal(result.plugins.updater.requireSignedVersion, true);
   assert.equal(result.plugins.updater.dangerousInsecureTransportProtocol, false);

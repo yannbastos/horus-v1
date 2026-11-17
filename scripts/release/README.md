@@ -41,9 +41,20 @@ Criar os GitHub Environments **test** e **production**; production deve ter revi
 obrigatório, preferencialmente impedir autoaprovação e bypass administrativo, e aceitar
 somente tags estáveis. test deve aceitar somente tags de teste e não exigir aprovação.
 O YAML não configura proteção de Environment: o job publish consulta a API do GitHub e
-**recusa publicar em production se não houver required reviewers**. Build/sign também
-usam o Environment porque o Tauri exige a chave ao criar artefatos updater; pode haver
-aprovação antes do build e novamente na publicação. Apenas publicação aprovada é efetivada.
+**recusa publicar em production se não houver required reviewers**. O build não usa
+Environment nem secrets: usa somente as variáveis públicas do repositório e executa
+`tauri build --no-sign`, mantendo `createUpdaterArtifacts:true`. No Tauri CLI 2.12.5,
+esse flag pula também a assinatura do updater; o NSIS é o mesmo artefato que o job
+sign assina depois, com `tauri signer --app-version`. A coleta do build não exige `.sig`.
+Fonte conferida: [sign_updaters no CLI 2.12.5](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.5/crates/tauri-cli/src/bundle.rs).
+
+Planejar **duas aprovações sequenciais de production**: uma para `sign`, que só fica
+elegível após verify-version, testes e build aprovados; outra para `publish`, após
+sign. Ambos mantêm seu próprio Environment protegido; não se depende de eventual
+reutilização da aprovação pela interface do GitHub. Não há aprovação no build.
+A chave/senha só são referenciadas no job sign e as credenciais R2 só em publish,
+portanto nenhum desses segredos é disponibilizado antes da aprovação correspondente.
+Para test, configurado sem required reviewers, são zero aprovações humanas.
 O GITHUB_TOKEN precisa somente `contents: read`; a consulta de proteção deve ser legível
 no repositório público. Não aumentar permissões automaticamente caso a API a recuse.
 
@@ -60,8 +71,13 @@ Secrets por Environment: `TAURI_SIGNING_PRIVATE_KEY` (conteúdo base64 Tauri),
 `R2_SECRET_ACCESS_KEY`. O token de CI é token de instalação/leitura do Worker do canal,
 nunca credencial administrativa de emissão/revogação. No repositório, cadastrar também
 `UPDATE_TEST_CI_TOKEN`, `UPDATE_PRODUCTION_CI_TOKEN`, e variáveis
-`UPDATE_TEST_BASE_URL`, `UPDATE_PRODUCTION_BASE_URL` para a guarda anterior aos jobs.
-Esses valores precisam corresponder aos de cada Environment. Ausência não faz fallback
+`UPDATE_TEST_BASE_URL`, `UPDATE_PRODUCTION_BASE_URL` para a guarda anterior aos jobs
+e o build, mais `UPDATE_TEST_UPDATER_PUBKEY`, `UPDATE_PRODUCTION_UPDATER_PUBKEY` para
+o build sem Environment. Esses valores públicos precisam corresponder aos de cada
+Environment; o overlay público acompanha o setup no artifact e o job sign exige
+igualdade com a configuração do Environment antes de assinar, recusando divergência
+de chave pública, canal ou endpoint. A configuração deve ser revisada antes da tag.
+Ausência não faz fallback
 para outro canal. Não colocar segredo em variável pública, argumento CLI, chat ou log.
 
 Exemplo seguro de envio da chave **de teste** via stdin (não executar com transcript):

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { releaseTag, guard, productVersions, baseURL, overlay, candidate, publish, installerName, sha256 } from './core.mjs';
+import { releaseTag, guard, productVersions, baseURL, overlay, candidate, publish, installerName, sha256, assertBuildConfiguration } from './core.mjs';
 import { root, run, tauri, signatureCheck, buildVerifier } from './runtime.mjs';
 
 const env = process.env;
@@ -105,13 +105,13 @@ async function main() {
       const name = installerName(version);
       const source = path.join(root, 'frontend/src-tauri/target/release/bundle/nsis', name);
       write(name, fs.readFileSync(source));
-      // A chave é exigida pelo Tauri para createUpdaterArtifacts; o job sign assina/verifica de novo.
-      write(`${name}.sig`, fs.readFileSync(`${source}.sig`));
+      // Build usa --no-sign: .sig só é criada no job sign, após a aprovação.
       break;
     }
     case 'sign': {
       const { version } = releaseTag(tag);
       if (!env.TAURI_SIGNING_PRIVATE_KEY || !env.HORUS_UPDATER_PUBKEY) throw Error('Chaves do ambiente ausentes.');
+      assertBuildConfiguration(JSON.parse(read('tauri.generated.json')), env, JSON.parse(fs.readFileSync(path.join(root, 'frontend/src-tauri/tauri.release.conf.json'))));
       run(process.execPath, [tauri, 'signer', 'sign', '--app-version', version, path.join(dir, installerName(version))]);
       buildVerifier();
       signatureCheck(env.HORUS_UPDATER_PUBKEY, read(installerName(version)), read(`${installerName(version)}.sig`), version);
