@@ -21,9 +21,14 @@ from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from pydantic import ValidationError
 
+from datetime import datetime, timezone
+
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+
 from .media_contracts import validate_quality_report
 from .script_contract import ScriptDocument
-from .storage import now
+from .storage import DatabaseUnavailable, now
 
 REQUIRED = {"video.mp4", "subtitles.srt", "script.json", "quality-report.json", "licenses.json", "review.json"}
 OPTIONAL = {"script.txt", "metadata.json", "thumbnail.png", "thumbnail.jpg"}
@@ -204,34 +209,44 @@ def verify_package(path: Path) -> dict:
 
 
 class ImportService:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, store=None, *, device_id: str = "default"):
         self.root = Path(data_dir) / "imports"
+        self.store = store
+        self.device_id = device_id
         self.lock = threading.Lock()
+
+    def _uow(self, *, readonly: bool = False):
+        if self.store is None or not hasattr(self.store, "uow"):
+            raise DatabaseUnavailable("database_unavailable")
+        return self.store.uow(readonly=readonly)
 
     # --- leitura -------------------------------------------------------------------------------------------------
 
-    def _record_path(self, import_id: str) -> Path:
-        return self.root / import_id / "import.json"
+    @staticmethod
+    def _valid_record(record) -> bool:
+        return (
+            isinstance(record, dict)
+            and isinstance(record.get("id"), str)
+            and bool(ID.fullmatch(record["id"]))
+            and isinstance(record.get("files"), list)
+        )
 
     def _records(self) -> list[dict]:
-        records = []
-        if self.root.is_dir() and not self.root.is_symlink():
-            for folder in self.root.iterdir():
-                if ID.fullmatch(folder.name) and folder.is_dir() and not folder.is_symlink():
-                    record = self._read_record(folder.name)
-                    if record:
-                        records.append(record)
-        return sorted(records, key=lambda r: (r["imported_at"], r["id"]), reverse=True)
+        with self._uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT manifest FROM horus.imports ORDER BY created_at DESC, id DESC LIMIT 200"
+                )
+                return [row["manifest"] for row in cur.fetchall() if self._valid_record(row["manifest"])]
 
     def _read_record(self, import_id: str) -> dict | None:
-        path = self._record_path(import_id)
-        try:
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MANIFEST_BYTES:
-                return None
-            record = json.loads(path.read_text(encoding="utf-8"))
-            return record if isinstance(record, dict) and record.get("id") == import_id else None
-        except (OSError, ValueError, UnicodeError):
+        with self._uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT manifest FROM horus.imports WHERE id = %s", (import_id,))
+                row = cur.fetchone()
+        if row is None or not self._valid_record(row["manifest"]):
             return None
+        return row["manifest"]
 
     @staticmethod
     def _summary(record: dict) -> dict:
@@ -239,7 +254,7 @@ class ImportService:
                                        "files", "imported", "publishable")}
 
     def list(self) -> dict:
-        return {"items": [self._summary(r) for r in self._records()[:200]]}
+        return {"items": [self._summary(r) for r in self._records()]}
 
     def _folder_file(self, import_id: str, name: str) -> Path:
         folder = self.root / import_id
@@ -251,12 +266,8 @@ class ImportService:
             raise ImportRefused("import_missing_file", "Arquivo da importação ausente.", 409)
         return path
 
-    def get(self, import_id: str) -> dict:
-        if not ID.fullmatch(import_id):
-            raise KeyError(import_id)
-        record = self._read_record(import_id)
-        if record is None:
-            raise KeyError(import_id)
+    def _build_detail(self, record: dict) -> dict:
+        import_id = record["id"]
         history = {}
         for name, key in (("script.json", "script"), ("quality-report.json", "quality_report"), ("licenses.json", "licenses"),
                           ("review.json", "original_review"), ("metadata.json", "metadata")):
@@ -273,6 +284,14 @@ class ImportService:
                 **history, "historical_only": True, "approved": False,
                 "notice": "Histórico de um pacote importado: revisão, licenças e QC originais não valem como aprovação neste computador."}
 
+    def get(self, import_id: str) -> dict:
+        if not ID.fullmatch(import_id):
+            raise KeyError(import_id)
+        record = self._read_record(import_id)
+        if record is None:
+            raise KeyError(import_id)
+        return self._build_detail(record)
+
     def file(self, import_id: str, name: str) -> tuple[Path, int]:
         if not ID.fullmatch(import_id) or name not in {"video.mp4", "subtitles.srt"}:
             raise KeyError(import_id)
@@ -287,20 +306,32 @@ class ImportService:
 
     # --- importação ---------------------------------------------------------------------------------------------
 
+    def _find_by_export_id(self, conn, export_id: str) -> dict | None:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT manifest FROM horus.imports WHERE manifest->>'export_id' = %s LIMIT 1",
+                (export_id,),
+            )
+            row = cur.fetchone()
+        return row["manifest"] if row and self._valid_record(row["manifest"]) else None
+
     def import_package(self, path: Path, key: str) -> tuple[dict, bool]:
         request_hash = hashlib.sha256(f"{key}".encode()).hexdigest()
         verified = verify_package(path)                       # fase 1: nada foi escrito até aqui
         manifest, parsed = verified["manifest"], verified["parsed"]
         fingerprint = hashlib.sha256(json.dumps({"files": sorted((n, d["sha256"]) for n, d in manifest["_declared"].items()),
                                                  "id": manifest["id"]}, sort_keys=True).encode()).hexdigest()
+        with self._uow(readonly=True) as conn:
+            existing = self._find_by_export_id(conn, manifest["id"])
+        if existing is not None:
+            if existing.get("idempotency_key_hash") == request_hash and existing.get("fingerprint") == fingerprint:
+                return self._build_detail(existing), False
+            raise ImportRefused("already_imported", "Este pacote já foi importado.", 409, existing_id=existing["id"])
+
         with self.lock:
-            for record in self._records():
-                if record["export_id"] == manifest["id"]:
-                    if record.get("idempotency_key_hash") == request_hash and record.get("fingerprint") == fingerprint:
-                        return self.get(record["id"]), False
-                    raise ImportRefused("already_imported", "Este pacote já foi importado.", 409, existing_id=record["id"])
             import_id = uuid.uuid4().hex
             staging = self.root / f".staging-{uuid.uuid4().hex}"
+            target = self.root / import_id
             self.root.mkdir(parents=True, exist_ok=True)
             if self.root.is_symlink():
                 raise ImportRefused("imports_dir_invalid", "Pasta de importações inválida.", 409)
@@ -310,19 +341,39 @@ class ImportService:
                     for name, declared in manifest["_declared"].items():
                         with (staging / name).open("xb") as sink:
                             _stream(archive, name, declared, sink)
-                record = {"id": import_id, "imported": True, "imported_at": now(), "title": parsed["_title"],
+                moment_dt = datetime.now(timezone.utc)
+                record = {"id": import_id, "imported": True, "imported_at": moment_dt.isoformat(), "title": parsed["_title"],
                           "export_id": manifest["id"], "source_production_id": manifest["production_id"],
                           "source_created_at": manifest.get("created_at") if isinstance(manifest.get("created_at"), str) else None,
                           "horus_version": str(manifest.get("horus_version"))[:40],
                           "database_schema_version": manifest.get("database_schema_version") if type(manifest.get("database_schema_version")) is int else None,
                           "files": [{"name": n, "sha256": d["sha256"], "size_bytes": d["size_bytes"]} for n, d in sorted(manifest["_declared"].items())],
                           "publishable": False, "idempotency_key_hash": request_hash, "fingerprint": fingerprint}
-                (staging / "import.json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-                os.replace(staging, self.root / import_id)   # promoção atômica
+                os.replace(staging, target)               # promoção atômica dos artefatos em disco
             except ImportRefused:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
             except (OSError, BadZipFile):
                 shutil.rmtree(staging, ignore_errors=True)
                 raise ImportRefused("import_failed", "Não foi possível gravar a importação; nada foi mantido.", 409) from None
-        return self.get(import_id), True
+
+            try:
+                with self._uow() as conn:
+                    conn.execute("SELECT pg_advisory_xact_lock(16408, hashtext(%s))", (manifest["id"],))
+                    existing = self._find_by_export_id(conn, manifest["id"])
+                    if existing is not None:
+                        shutil.rmtree(target, ignore_errors=True)
+                        if existing.get("idempotency_key_hash") == request_hash and existing.get("fingerprint") == fingerprint:
+                            return self._build_detail(existing), False
+                        raise ImportRefused("already_imported", "Este pacote já foi importado.", 409, existing_id=existing["id"])
+                    conn.execute(
+                        """
+                        INSERT INTO horus.imports (id, device_id, path, hash, manifest, created_at, approved, publishable)
+                        VALUES (%s, %s, %s, %s, %s, %s, false, false)
+                        """,
+                        (import_id, self.device_id, f"imports/{import_id}", fingerprint, Jsonb(record), moment_dt),
+                    )
+            except Exception:
+                shutil.rmtree(target, ignore_errors=True)
+                raise
+        return self._build_detail(record), True
