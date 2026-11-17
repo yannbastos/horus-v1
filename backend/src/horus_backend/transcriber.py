@@ -83,6 +83,7 @@ def transcribe(path: Path, model_name: str, language: str, models_dir: Path):
 
 
 def _transcribe(path: Path, model_name: str, language: str, models_dir: Path, cuda_ready: bool):
+    os.environ.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1')
     import ctranslate2
     from faster_whisper import WhisperModel
 

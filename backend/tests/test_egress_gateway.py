@@ -58,7 +58,9 @@ def rows(log):
 def test_default_policy_lists_only_the_known_product_destinations():
     allowed = {(r.purpose, r.host) for r in DEFAULT_RULES}
     assert allowed == {("youtube_download", "www.youtube.com"), ("youtube_download", "youtube.com"),
-                       ("youtube_download", "m.youtube.com"), ("youtube_download", "music.youtube.com"), ("youtube_download", "youtu.be"), ("radar_youtube", "www.googleapis.com")}
+                       ("youtube_download", "m.youtube.com"), ("youtube_download", "music.youtube.com"), ("youtube_download", "youtu.be"), ("radar_youtube", "www.googleapis.com"),
+                       ("whisper_model_download", "huggingface.co"), ("whisper_model_download", "cdn-lfs.huggingface.co"),
+                       ("whisper_model_download", "cdn-lfs-us-1.huggingface.co"), ("whisper_model_download", "cas-bridge.xethub.hf.co")}
 
 
 @pytest.mark.parametrize("purpose,url", [

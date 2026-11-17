@@ -101,6 +101,8 @@ def job_environment(request, settings: Settings) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items()
            if k.upper() in allowed or (cuda and k.upper().startswith(_CUDA_PREFIX))}
     env.update(PYTHONUNBUFFERED="1", PYTHONUTF8="1")
+    if request.operation == 'transcription.run':
+        env.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', HF_HUB_DISABLE_TELEMETRY='1')
     if isinstance(request, FactoryRequest) and settings.factory_root:
         from .bundled_runtime import tool_path
         env['PATH'] = tool_path(env.get('PATH', ''))

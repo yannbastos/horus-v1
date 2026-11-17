@@ -10,8 +10,8 @@ Todo destino de rede do backend passa por aqui, em duas formas:
 Toda decisão vira linha em `transmissions` (kind `submit`/`gate_refusal`, stage `egress:<finalidade>`): só destino
 (host:porta), tamanho e SHA-256 da carga e um código curto; nunca conteúdo. Regras extras: `HORUS_EGRESS_ALLOW`
 (`finalidade=https://host[:porta][,auth][,loopback][,methods=GET+POST]`, separadas por `;`).
-Limites: o yt-dlp e o download de modelos (Hugging Face) rodam em subprocessos que fazem a própria rede; aqui só se
-autoriza o destino inicial (ver docs/politica-destinos-e-ameacas.md).
+Whisper usa authorize e validação DNS do gateway em cada salto com transporte de streaming e IP fixado.
+Limite: yt-dlp roda em subprocesso e aqui só se autoriza o destino inicial (ver docs/politica-destinos-e-ameacas.md).
 """
 from __future__ import annotations
 
@@ -62,6 +62,8 @@ class Rule:
 DEFAULT_RULES = (
     *(Rule("youtube_download", "https", host) for host in sorted(YOUTUBE_DOWNLOAD_HOSTS)),
     Rule("radar_youtube", "https", "www.googleapis.com"),
+    *(Rule("whisper_model_download", "https", host) for host in (
+        "huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs-us-1.huggingface.co", "cas-bridge.xethub.hf.co")),
 )
 
 
