@@ -158,9 +158,22 @@ test.describe('Checkpoints humanos (HOR-107)', () => {
 
     await assertNoAxeViolations(page, 'diálogo de checkpoint humano');
 
-    // Escape fecha sem autorizar
+    // Focus trap e restauração de foco
+    const authorizeBtn = page.getByRole('button', { name: 'Autorizar uma execução' });
+    const checkbox = dialog.getByRole('checkbox');
+    const cancelBtn = dialog.getByRole('button', { name: 'Cancelar' });
+    await expect(checkbox).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(cancelBtn).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(checkbox).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(cancelBtn).toBeFocused();
+
+    // Escape fecha sem autorizar e restaura foco no botão de origem
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
+    await expect(authorizeBtn).toBeFocused();
     expect(authorizeCalls).toBe(0);
 
     // Reabre, marca confirmação explícita e envia
@@ -370,6 +383,7 @@ test.describe('Checkpoints humanos (HOR-107)', () => {
 
     const table = section.getByRole('table', { name: 'Checkpoints humanos recentes' });
     await expect(table).toBeVisible();
+    await expect(table.locator('thead th[scope="col"]')).toHaveCount(5);
     await expect(table.locator('tbody tr')).toHaveCount(3);
     await expect(table.getByText('Ativo', { exact: true })).toBeVisible();
     await expect(table.getByText('Usado', { exact: true })).toBeVisible();

@@ -14,6 +14,20 @@ export interface HumanCheckpointDialogProps {
   onConfirm: () => void | Promise<void>;
 }
 
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  const selector = [
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(', ');
+  return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter(
+    el => !el.hasAttribute('hidden') && el.offsetParent !== null,
+  );
+}
+
 /**
  * Diálogo acessível de confirmação explícita para checkpoints humanos (HOR-107).
  * Exibe escopo (o quê), custo estimado, limite em USD, validade e regra de uso único.
@@ -33,26 +47,56 @@ export function HumanCheckpointDialog({
   const [confirmed, setConfirmed] = useState(false);
   const titleId = useId();
   const descId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const checkboxRef = useRef<HTMLInputElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) {
       setConfirmed(false);
       return;
     }
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const frame = window.requestAnimationFrame(() => {
       checkboxRef.current?.focus();
     });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !busy) {
         event.preventDefault();
+        event.stopPropagation();
         onCancel();
+        return;
+      }
+      if (event.key === 'Tab' && dialogRef.current) {
+        const focusable = getFocusableElements(dialogRef.current);
+        if (focusable.length === 0) {
+          event.preventDefault();
+          dialogRef.current.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey) {
+          if (active === first || !dialogRef.current.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !dialogRef.current.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener('keydown', onKeyDown);
+      const restoreTarget = previousFocusRef.current;
+      if (restoreTarget && document.contains(restoreTarget)) {
+        restoreTarget.focus();
+      }
     };
   }, [open, busy, onCancel]);
 
@@ -69,11 +113,13 @@ export function HumanCheckpointDialog({
       }}
     >
       <div
+        ref={dialogRef}
         className="card modal-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
+        tabIndex={-1}
         data-testid="human-checkpoint-dialog"
       >
         <div className="row spread">
