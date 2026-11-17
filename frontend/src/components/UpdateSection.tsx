@@ -3,7 +3,9 @@ import type { RefObject } from 'react';
 import {
   canRetryUpdateError,
   checkUpdates,
+  clearUpdateEnrollment,
   createDisabledUpdateState,
+  enrollUpdateToken,
   formatUpdateBytes,
   formatUpdateErrorMessage,
   formatUpdateErrorDetail,
@@ -167,6 +169,9 @@ function UpdateConfirmDialog({
               </span>
             </li>
           </ul>
+          <p className="muted" data-testid="update-confirm-deferral-warning">
+            Durante uma produção ou operação crítica em andamento, a instalação é adiada ou bloqueada para proteger seus dados.
+          </p>
         </div>
         <div className="data-deletion-modal-footer">
           <button type="button" className="button" onClick={onCancel}>
@@ -178,7 +183,7 @@ function UpdateConfirmDialog({
             data-testid="update-confirm-install-button"
             onClick={onConfirm}
           >
-            Confirmar e instalar
+            Instalar e reiniciar
           </button>
         </div>
       </section>
@@ -215,8 +220,10 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
   const [pendingCommand, setPendingCommand] = useState(false);
   const [commandError, setCommandError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
   const installButtonRef = useRef<HTMLButtonElement | null>(null);
   const autoCheckLabelId = useId();
+  const enrollInputId = useId();
   const sectionTitleId = useId();
 
   const activeState = controlledState ?? internalState;
@@ -309,8 +316,43 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
     }
   }
 
+  async function handleEnrollSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const candidate = tokenInput.trim();
+    if (!candidate || isDisabled || busy) return;
+    setTokenInput('');
+    setPendingCommand(true);
+    setCommandError('');
+    try {
+      const next = await enrollUpdateToken(candidate);
+      commitState(next);
+    } catch {
+      setCommandError('Não foi possível salvar o token de acesso ao canal. Tente novamente.');
+    } finally {
+      setPendingCommand(false);
+    }
+  }
+
+  async function handleClearEnrollment() {
+    if (isDisabled || busy) return;
+    setTokenInput('');
+    setPendingCommand(true);
+    setCommandError('');
+    try {
+      const next = await clearUpdateEnrollment();
+      commitState(next);
+    } catch {
+      setCommandError('Não foi possível remover o token de acesso ao canal. Tente novamente.');
+    } finally {
+      setPendingCommand(false);
+    }
+  }
+
   const downloadPercent =
-    activeState.progress && activeState.progress.total && activeState.progress.total > 0
+    activeState.progress &&
+    typeof activeState.progress.downloaded === 'number' &&
+    activeState.progress.total &&
+    activeState.progress.total > 0
       ? Math.min(100, Math.round((activeState.progress.downloaded / activeState.progress.total) * 100))
       : null;
 
@@ -347,11 +389,89 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                 {activeState.current_version}
               </p>
             </div>
+            {activeState.channel && (
+              <div className="fact-item">
+                <p className="eyebrow">CANAL</p>
+                <p className="mono" data-testid="update-channel">
+                  {activeState.channel}
+                </p>
+              </div>
+            )}
             <div className="fact-item">
               <p className="eyebrow">ÚLTIMA VERIFICAÇÃO</p>
               <p data-testid="update-last-check">{formatDateTime(activeState.last_check_at)}</p>
             </div>
           </div>
+
+          {activeState.just_updated && !busy && activeState.phase !== 'error' && (
+            <StatusMessage state="success" testId="update-post-update-notice">
+              Atualização concluída para a versão {activeState.current_version}
+              {activeState.updated_from_version
+                ? ` (anterior: ${activeState.updated_from_version})`
+                : ''}
+              .
+            </StatusMessage>
+          )}
+
+          {typeof activeState.enrolled === 'boolean' && (
+            <div className="card sunken" data-testid="update-channel-access">
+              <div className="row spread">
+                <div>
+                  <p className="eyebrow">ACESSO AO CANAL</p>
+                  <p className="muted">
+                    {activeState.enrolled
+                      ? 'Token de instalação armazenado com segurança no cofre do sistema.'
+                      : 'Cole o token de instalação emitido para acessar este canal de atualizações.'}
+                  </p>
+                </div>
+                <span className="tag" data-testid="update-enrollment-status">
+                  {activeState.enrolled ? 'Inscrito' : 'Não inscrito'}
+                </span>
+              </div>
+              {activeState.enrolled ? (
+                <div className="row" style={{ gap: 'var(--Space3)', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={busy}
+                    data-testid="update-clear-enrollment-button"
+                    onClick={() => void handleClearEnrollment()}
+                  >
+                    REMOVER TOKEN
+                  </button>
+                </div>
+              ) : (
+                <form
+                  className="row"
+                  style={{ gap: 'var(--Space3)', flexWrap: 'wrap', alignItems: 'flex-end' }}
+                  onSubmit={event => void handleEnrollSubmit(event)}
+                >
+                  <label htmlFor={enrollInputId} style={{ flex: '1 1 240px', minWidth: 0 }}>
+                    <span>Token de instalação</span>
+                    <input
+                      id={enrollInputId}
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={tokenInput}
+                      disabled={busy}
+                      placeholder="Cole o token de acesso ao canal"
+                      data-testid="update-enroll-token-input"
+                      onChange={event => setTokenInput(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    className="button"
+                    disabled={busy || tokenInput.trim().length === 0}
+                    data-testid="update-enroll-submit-button"
+                  >
+                    SALVAR TOKEN
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
 
           <div className="update-preference-row">
             <div className="update-preference-info">
@@ -434,14 +554,16 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                     {downloadPercent !== null ? `${downloadPercent}%` : '…'}
                   </span>
                 </div>
-                {activeState.progress && (
+                {activeState.progress && typeof activeState.progress.downloaded === 'number' ? (
                   <p className="muted">
                     {formatUpdateBytes(activeState.progress.downloaded)}
                     {activeState.progress.total !== null
                       ? ` de ${formatUpdateBytes(activeState.progress.total)}`
                       : ''}
                   </p>
-                )}
+                ) : activeState.progress?.phase ? (
+                  <p className="muted">Fase: {activeState.progress.phase}</p>
+                ) : null}
               </div>
             )}
 
@@ -450,9 +572,41 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                 <p className="loading">
                   Verificando assinatura e instalando atualização. O aplicativo será reiniciado…
                 </p>
+                <div className="progress-container">
+                  <div
+                    className="progress indeterminate"
+                    role="progressbar"
+                    aria-label="Progresso da instalação da atualização"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <span style={{ width: '60%' }} />
+                  </div>
+                  <span className="progress-value mono">…</span>
+                </div>
                 {activeState.backup_path_label && (
                   <p className="muted">Backup preservado: {activeState.backup_path_label}</p>
                 )}
+              </div>
+            )}
+
+            {activeState.phase === 'restarting' && (
+              <div className="card sunken" role="status" data-testid="update-status-restarting">
+                <p className="loading">
+                  Reiniciando o aplicativo para concluir a atualização…
+                </p>
+                <div className="progress-container">
+                  <div
+                    className="progress indeterminate"
+                    role="progressbar"
+                    aria-label="Progresso do reinício do aplicativo"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <span style={{ width: '85%' }} />
+                  </div>
+                  <span className="progress-value mono">…</span>
+                </div>
               </div>
             )}
           </div>
@@ -464,7 +618,9 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                   <div className="row spread">
                     <div>
                       <p className="eyebrow accent">NOVA VERSÃO DISPONÍVEL</p>
-                      <h3>Versão {activeState.available.version}</h3>
+                      <h3 data-testid="update-available-version">
+                        Versão {activeState.available.version}
+                      </h3>
                     </div>
                     {activeState.available.pub_date && (
                       <span className="tag">
@@ -472,7 +628,7 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                       </span>
                     )}
                   </div>
-                  <p className="muted" style={{ whiteSpace: 'pre-line' }}>
+                  <p className="muted" style={{ whiteSpace: 'pre-line' }} data-testid="update-available-notes">
                     {activeState.available.notes || 'Sem notas de versão informadas.'}
                   </p>
                 </>
@@ -490,6 +646,10 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                 </div>
               )}
 
+              <p className="muted" data-testid="update-deferral-note">
+                A instalação é adiada ou bloqueada durante produção ou operação crítica em andamento.
+              </p>
+
               <div className="row" style={{ gap: 'var(--Space3)', flexWrap: 'wrap' }}>
                 <button
                   ref={installButtonRef}
@@ -499,7 +659,7 @@ export function UpdateSection({ state: controlledState, onStateChange }: UpdateS
                   data-testid="update-install-button"
                   onClick={() => setConfirmOpen(true)}
                 >
-                  BAIXAR E INSTALAR
+                  INSTALAR E REINICIAR
                 </button>
               </div>
             </div>

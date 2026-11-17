@@ -13,16 +13,25 @@ type MockUpdateState = {
     | 'backing_up'
     | 'downloading'
     | 'installing'
+    | 'restarting'
     | 'error';
   current_version: string;
+  installed_version?: string;
   auto_check: boolean;
   configured: boolean;
+  channel?: string | null;
+  enrolled?: boolean;
   last_check_at: string | null;
   available: { version: string; notes: string; pub_date: string | null } | null;
+  available_version?: string | null;
+  notes?: string | null;
   blocked_reason: 'job_running' | 'backend_unavailable' | null;
-  progress: { downloaded: number; total: number | null } | null;
+  progress: { phase?: string; downloaded: number; total: number | null } | null;
   backup_path_label: string | null;
+  just_updated?: boolean;
+  updated_from_version?: string | null;
   error: { code: string; message: string } | null;
+  last_error?: { code: string; message: string } | null;
 };
 
 type InvokeCall = { command: string; args: Record<string, unknown> };
@@ -124,6 +133,14 @@ async function setupTauriUpdater(page: Page, initialState: MockUpdateState) {
               currentState = nextInstallState;
               nextInstallState = null;
             }
+            return currentState;
+          }
+          if (command === 'update_enroll') {
+            currentState = { ...currentState, enrolled: true, error: null, phase: 'idle' };
+            return currentState;
+          }
+          if (command === 'update_clear_enrollment') {
+            currentState = { ...currentState, enrolled: false, available: null, phase: 'idle' };
             return currentState;
           }
           if (command === 'plugin:event|listen') {
@@ -409,3 +426,247 @@ for (const scenario of [
     expect(calls.filter(c => c.command === 'update_install')).toHaveLength(0);
   });
 }
+
+test('fluxo completo: verificar -> aviso -> notas -> confirmar -> progresso -> reinício -> pós-atualização', async ({
+  page,
+}) => {
+  await setupTauriUpdater(
+    page,
+    makeState({
+      phase: 'idle',
+      current_version: '0.1.0',
+      channel: 'test',
+      enrolled: true,
+    }),
+  );
+  await openSettings(page);
+
+  await expect(page.getByTestId('update-channel')).toHaveText('test');
+  await expect(page.getByTestId('update-enrollment-status')).toHaveText('Inscrito');
+
+  await page.evaluate(() => {
+    (window as unknown as UpdaterMockWindow).__updaterMock.setNextCheckState({
+      phase: 'available',
+      current_version: '0.1.0',
+      auto_check: true,
+      configured: true,
+      channel: 'test',
+      enrolled: true,
+      last_check_at: '2026-11-17T10:00:00Z',
+      available: {
+        version: '0.2.0-test.1',
+        notes: 'Melhoria de estabilidade na fila.',
+        pub_date: '2026-11-17T09:50:00Z',
+      },
+      blocked_reason: null,
+      progress: null,
+      backup_path_label: null,
+      error: null,
+    });
+  });
+
+  await page.getByTestId('update-check-button').click();
+  await expect(page.getByTestId('update-available-notice')).toContainText('0.2.0-test.1');
+  await expect(page.getByTestId('update-available-version')).toContainText('0.2.0-test.1');
+  await expect(page.getByTestId('update-available-notes')).toContainText('Melhoria de estabilidade na fila.');
+  await expect(page.getByTestId('update-deferral-note')).toContainText('adiada ou bloqueada');
+
+  await page.evaluate(() => {
+    (window as unknown as UpdaterMockWindow).__updaterMock.setNextInstallState({
+      phase: 'downloading',
+      current_version: '0.1.0',
+      auto_check: true,
+      configured: true,
+      channel: 'test',
+      enrolled: true,
+      last_check_at: '2026-11-17T10:00:00Z',
+      available: { version: '0.2.0-test.1', notes: 'Melhoria de estabilidade na fila.', pub_date: null },
+      blocked_reason: null,
+      progress: { phase: 'downloading', downloaded: 2500, total: 10000 },
+      backup_path_label: null,
+      error: null,
+    });
+  });
+
+  await page.getByTestId('update-install-button').click();
+  await expect(page.getByTestId('update-confirm-deferral-warning')).toContainText('adiada ou bloqueada');
+  await page.getByTestId('update-confirm-install-button').click();
+
+  const downloadBar = page.getByTestId('update-status-downloading').getByRole('progressbar');
+  await expect(downloadBar).toHaveAttribute('aria-valuenow', '25');
+  await expect(page.getByTestId('update-status-downloading')).toContainText('25%');
+
+  await page.evaluate(() => {
+    (window as unknown as UpdaterMockWindow).__updaterMock.emitState({
+      phase: 'installing',
+      current_version: '0.1.0',
+      auto_check: true,
+      configured: true,
+      channel: 'test',
+      enrolled: true,
+      last_check_at: '2026-11-17T10:00:00Z',
+      available: { version: '0.2.0-test.1', notes: '', pub_date: null },
+      blocked_reason: null,
+      progress: null,
+      backup_path_label: 'horus-backup-0.1.0.db',
+      error: null,
+    });
+  });
+  await expect(page.getByTestId('update-status-installing').getByRole('progressbar')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as unknown as UpdaterMockWindow).__updaterMock.emitState({
+      phase: 'restarting',
+      current_version: '0.1.0',
+      auto_check: true,
+      configured: true,
+      channel: 'test',
+      enrolled: true,
+      last_check_at: '2026-11-17T10:00:00Z',
+      available: null,
+      blocked_reason: null,
+      progress: null,
+      backup_path_label: null,
+      error: null,
+    });
+  });
+  await expect(page.getByTestId('update-status-restarting')).toContainText('Reiniciando o aplicativo');
+  await expect(page.getByTestId('update-status-restarting').getByRole('progressbar')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as unknown as UpdaterMockWindow).__updaterMock.emitState({
+      phase: 'up_to_date',
+      current_version: '0.2.0-test.1',
+      auto_check: true,
+      configured: true,
+      channel: 'test',
+      enrolled: true,
+      last_check_at: '2026-11-17T10:02:00Z',
+      available: null,
+      blocked_reason: null,
+      progress: null,
+      backup_path_label: null,
+      just_updated: true,
+      updated_from_version: '0.1.0',
+      error: null,
+    });
+  });
+  await expect(page.getByTestId('update-current-version')).toHaveText('0.2.0-test.1');
+  await expect(page.getByTestId('update-post-update-notice')).toContainText('0.2.0-test.1');
+  await expect(page.getByTestId('update-post-update-notice')).toContainText('0.1.0');
+});
+
+test('inscrição e remoção de token no canal com teclado e acessibilidade', async ({ page }) => {
+  await setupTauriUpdater(
+    page,
+    makeState({
+      phase: 'idle',
+      channel: 'test',
+      enrolled: false,
+    }),
+  );
+  await openSettings(page);
+
+  await expect(page.getByTestId('update-enrollment-status')).toHaveText('Não inscrito');
+  const input = page.getByTestId('update-enroll-token-input');
+  await expect(input).toHaveAttribute('type', 'password');
+  await expect(page.getByTestId('update-enroll-submit-button')).toBeDisabled();
+
+  const axeResults = await new AxeBuilder({ page })
+    .include('[data-testid="settings-updates-section"]')
+    .analyze();
+  expect(axeResults.violations).toEqual([]);
+
+  await input.focus();
+  await input.fill('horus_tok_demo_value_999');
+  await expect(page.getByTestId('update-enroll-submit-button')).toBeEnabled();
+  await input.press('Enter');
+
+  await expect(page.getByTestId('update-enrollment-status')).toHaveText('Inscrito');
+  await expect(page.getByTestId('update-enroll-token-input')).toHaveCount(0);
+
+  await page.getByTestId('update-clear-enrollment-button').click();
+  await expect(page.getByTestId('update-enrollment-status')).toHaveText('Não inscrito');
+  await expect(page.getByTestId('update-enroll-token-input')).toHaveValue('');
+
+  const enrollCalls = await page.evaluate(() =>
+    (window as unknown as UpdaterMockWindow).__updaterMock.calls.filter(
+      c => c.command === 'update_enroll' || c.command === 'update_clear_enrollment',
+    ),
+  );
+  expect(enrollCalls).toEqual([
+    { command: 'update_enroll', args: { token: 'horus_tok_demo_value_999' } },
+    { command: 'update_clear_enrollment', args: {} },
+  ]);
+});
+
+test('degradação graciosa quando backend omite campos novos ou usa nomes aditivos', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', err => pageErrors.push(err.message));
+
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (event: unknown) => void>();
+    let id = 0;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
+      __TAURI_INTERNALS__: {
+        metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
+        transformCallback(callback: (event: unknown) => void) {
+          callbacks.set(++id, callback);
+          return id;
+        },
+        unregisterCallback(identifier: number) {
+          callbacks.delete(identifier);
+        },
+        async invoke(command: string) {
+          if (command === 'backend_connection') return null;
+          if (command === 'plugin:event|listen') return ++id;
+          if (command === 'plugin:event|unlisten') return;
+          if (command === 'update_get_state') {
+            return {
+              configured: true,
+              installed_version: '0.1.5',
+              available_version: '0.2.0',
+              notes: 'Notas aditivas',
+              phase: 'available',
+            };
+          }
+          return null;
+        },
+      },
+    });
+  });
+
+  await openSettings(page);
+
+  await expect(page.getByTestId('update-current-version')).toHaveText('0.1.5');
+  await expect(page.getByTestId('update-available-version')).toContainText('0.2.0');
+  await expect(page.getByTestId('update-available-notes')).toContainText('Notas aditivas');
+  await expect(page.getByTestId('update-channel')).toHaveCount(0);
+  await expect(page.getByTestId('update-channel-access')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('progresso indeterminado quando backend envia progress.phase sem downloaded ou total', async ({
+  page,
+}) => {
+  await setupTauriUpdater(
+    page,
+    makeState({
+      phase: 'downloading',
+      available: { version: '0.2.0', notes: 'Notas.', pub_date: null },
+      progress: { phase: 'downloading', total: null },
+    }),
+  );
+  await openSettings(page);
+
+  const downloading = page.getByTestId('update-status-downloading');
+  const bar = downloading.getByRole('progressbar');
+  await expect(bar).toBeVisible();
+  await expect(bar).not.toHaveAttribute('aria-valuenow', /.+/);
+  await expect(downloading).toContainText('Fase: downloading');
+  await expect(downloading).not.toContainText('%');
+});
