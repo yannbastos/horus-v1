@@ -270,6 +270,8 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "keyring" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
     { name = "uvicorn" },
 ]
 
@@ -283,8 +285,6 @@ measure = [
 test = [
     { name = "httpx" },
     { name = "pgserver" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "psycopg-pool" },
     { name = "pytest" },
     { name = "pytest-xdist" },
 ]
@@ -303,8 +303,8 @@ requires-dist = [
     { name = "keyring", specifier = ">=25,<26" },
     { name = "pgserver", marker = "extra == 'test'", specifier = "==0.1.4" },
     { name = "psutil", marker = "extra == 'measure'", specifier = ">=7,<8" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'test'", specifier = ">=3.3,<4" },
-    { name = "psycopg-pool", marker = "extra == 'test'", specifier = ">=3.3,<4" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3,<4" },
+    { name = "psycopg-pool", specifier = ">=3.3,<4" },
     { name = "pyinstaller", marker = "extra == 'bundle'", specifier = ">=6.12,<7" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<10" },
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.8,<4" },
