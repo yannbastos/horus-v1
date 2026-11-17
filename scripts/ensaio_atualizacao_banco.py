@@ -13,19 +13,34 @@ import tempfile
 
 
 def safe_path(value: str | Path) -> Path:
-    path = Path(os.path.abspath(value))
-    local = Path(os.path.abspath(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local')))
-    for forbidden in (local / 'com.horus.audiovisual', local / 'Horus'):
-        if path == forbidden or forbidden in path.parents:
-            raise ValueError('Pasta operacional proibida')
-    path = path.resolve()
-    for forbidden in (local / 'com.horus.audiovisual', local / 'Horus'):
-        if path == forbidden or forbidden in path.parents:
-            raise ValueError('Pasta operacional proibida')
-    temp = Path(os.environ.get('TEMP', tempfile.gettempdir())).resolve()
-    if path == temp or temp not in path.parents:
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError('Caminho relativo proibido')
+    def key(p: Path) -> str:
+        return str(p.resolve()).replace('\\', '/').casefold().rstrip('/')
+    def inside(p: Path, parent: Path) -> bool:
+        return key(p) == key(parent) or key(p).startswith(key(parent) + '/')
+    # Não seguir links/junctions, mesmo quando apontam de volta para TEMP.
+    for candidate in (path, *path.parents):
+        if candidate.is_symlink() or candidate.is_junction():
+            raise ValueError('Links e junctions proibidos')
+    local_roots = [Path.home() / 'AppData' / 'Local']
+    if os.environ.get('LOCALAPPDATA'):
+        local_roots.append(Path(os.environ['LOCALAPPDATA']))
+    for local in local_roots:
+        for name in ('com.horus.audiovisual', 'Horus'):
+            if inside(path, local / name):
+                raise ValueError('Pasta operacional proibida')
+    temp = Path(os.environ.get('TEMP', tempfile.gettempdir()))
+    if not temp.is_absolute():
+        raise ValueError('TEMP relativo proibido')
+    for candidate in (temp, *temp.parents):
+        if candidate.is_symlink() or candidate.is_junction():
+            raise ValueError('TEMP com link proibido')
+    if key(path) == key(temp) or not inside(path, temp):
         raise ValueError('Exige uma subpasta exclusiva dentro de TEMP')
-    return path
+    return path.resolve()
+
 
 
 def snapshot(path: Path, columns: dict | None = None) -> dict:
@@ -85,12 +100,22 @@ def run(base: Path) -> None:
     assert inspect_database(original)['user_version'] == 9
     print('PASSOU criação sintética v9, integridade e chaves estrangeiras')
     package = base / 'pacote.zip'
+    radar = source / 'radar' / 'radar-youtube.sqlite3'
+    radar.parent.mkdir()
+    with closing(sqlite3.connect(radar)) as db:
+        db.execute('CREATE TABLE exemplo (id INTEGER PRIMARY KEY, titulo TEXT)')
+        db.execute("INSERT INTO exemplo VALUES (1, 'Radar fictício')")
+        db.commit()
+    radar_baseline = snapshot(radar)
     cli('horus_backend.local_data_export', 'export', source, '--to', package)
+    package_hash = hashlib.sha256(package.read_bytes()).hexdigest()
     cli('horus_backend.local_data_export', 'verify', package)
     print('PASSOU exportação e verificação SHA-256 do pacote')
     restored = safe_path(base / 'restaurado')
     cli('horus_backend.local_data_export', 'restore', package, '--to', restored)
     assert snapshot(restored / 'horus.sqlite3') == baseline
+    assert snapshot(restored / 'radar' / 'radar-youtube.sqlite3') == radar_baseline
+    assert hashlib.sha256(package.read_bytes()).hexdigest() == package_hash
     print('PASSOU restauração do pacote e comparação de contagens/hashes de todas as tabelas')
     copydir = safe_path(base / 'migrado'); copydir.mkdir()
     copied = copydir / 'horus.sqlite3'

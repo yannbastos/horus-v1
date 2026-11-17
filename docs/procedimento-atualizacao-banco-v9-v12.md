@@ -83,3 +83,52 @@ No ensaio, ambos os caminhos foram testados: restauração do pacote e restaura�
 - NO-GO para qualquer falha, versão inesperada, WAL/journal pendente, backup ausente, diferença de dados não explicada, mídia necessária sem cópia independente ou falta de autorização. Preservar evidências e pedir decisão; não corrigir o banco operacional por tentativa.
 - Registrar data, operador, autorização específica, versão do app/commit, caminho escolhido (em registro privado), tamanho/espaço, versão SQLite inicial/final, comandos e códigos de saída, manifesto/SHA-256 do pacote, contagens/hashes por tabela, nome e verificação do backup, resultado da restauração e rollback. Guardar logs sem credenciais e não publicar conteúdo do banco.
 - Aprovação dos testes sintéticos não valida dados reais, instalação, espaço real disponível, encerramento dos processos reais nem compatibilidade de conteúdo operacional. Tudo isso permanece pendente de uma execução supervisionada expressamente autorizada pelo usuário.
+
+## Condições bloqueantes adicionais (revisão independente)
+
+**NO-GO sem cópia física fria integral verificada**, mesmo com ZIP válido. Somente após autorização real separada, fechar todos os processos e copiar a pasta de dados inteira para armazenamento seguro fora dela, incluindo mídia, modelos, configurações, credenciais e todos os SQLite e sidecars. Proteger o acesso ao destino por conter segredos. Não executar essa cópia nesta entrega. Conferir entre origem e destino contagem de arquivos, soma dos tamanhos e SHA-256 de cada SQLite, `-wal` e `-shm`; registrar também sidecars ausentes, data, caminhos e resultados em registro privado durável. Qualquer diferença bloqueia a atualização. O ZIP cobre apenas os bancos Hórus/Radar e configurações JSON permitidas pelo exportador; não substitui a cópia integral, pois exclui mídia, modelos, exports e credenciais.
+
+Comandos de inspeção, para uso supervisionado autorizado (não encerram processos):
+
+```powershell
+Get-Process -Name 'horus*','python*','node*' -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path
+Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free,Root
+```
+
+A lista de processos é triagem, não prova ausência de handles. No Monitor de Recursos (`resmon.exe`), CPU → Identificadores Associados, buscar o nome e caminho do SQLite; qualquer detentor bloqueia a cópia. Reservar espaço também para a cópia integral, além das seis cópias dos dados exportáveis já previstas.
+
+### WAL em cópia exclusiva
+
+Preservar a cópia fria intacta. Criar uma segunda cópia descartável do SQLite **junto com seus sidecars de mesmo nome**, todos obtidos com escritores fechados. Nunca apagar WAL manualmente nem executar checkpoint no original. Inspecionar os arquivos `*.sqlite3-wal`, `*.sqlite3-shm` e `*.sqlite3-journal`: sidecar sem o SQLite correspondente é órfão; ausência de WAL junto de SHM também exige investigação. Não juntar arquivos de momentos diferentes, não migrar e não descartar órfãos para liberar o procedimento.
+
+Com o executável `sqlite3` já disponível, somente sobre essa segunda cópia:
+
+```powershell
+sqlite3 $copia 'PRAGMA wal_checkpoint(TRUNCATE); PRAGMA integrity_check;'
+if ($LASTEXITCODE -ne 0) { throw 'NO-GO: checkpoint' }
+```
+
+Exigir retorno do checkpoint com `busy=0` (em WAL truncado, `0|0|0`) e integridade `ok`; depois fechar a conexão e repetir `backups verify` sobre a cópia. Se não houver ferramenta, houver busy ou journal pendente, parar e pedir análise; não improvisar no original.
+
+### Hash externo do ZIP
+
+Imediatamente após exportar, registrar em local protegido o SHA-256 externo; repetir antes e depois da restauração/transporte e comparar ao registro original:
+
+```powershell
+$hashOriginal = (Get-FileHash -LiteralPath $pacote -Algorithm SHA256).Hash
+# Guardar hashOriginal em registro durável separado antes de transportar.
+if ((Get-FileHash -LiteralPath $pacote -Algorithm SHA256).Hash -ne $hashOriginal) { throw 'NO-GO: ZIP alterado' }
+# Repetir a comparação depois do restore; o manifesto interno continua obrigatório.
+```
+
+### Contraindicações e efeitos do rollback
+
+Não usar rollback depois de qualquer gravação na v12 sem antes preservar integralmente o estado v12 e decidir como recuperar os dados novos. Restaurar v9 perde, no destino restaurado, todas as gravações posteriores ao backup, inclusive transmissões, checkpoints humanos e alterações de roteiros. Não existe downgrade automático que mescle esses dados. Nunca restaurar sobre o único exemplar atual.
+
+Rollback somente a partir da cópia física fria verificada ou de `horus.backup-v9-*` verificado. A cópia integral recupera o estado de toda a pasta no instante registrado; o backup automático recupera apenas o SQLite Hórus naquele instante, sem recuperar mídia, Radar, configurações ou credenciais. O ZIP pode servir à recuperação parcial ensaiada, mas não é fonte suficiente de rollback integral. Preservar as duas versões e resolver qualquer divergência antes de retomar a operação.
+
+### Cobertura e limites do ensaio
+
+O snapshot compara todas as tabelas e colunas v9, mesmo vazias. Há linhas em `media`, `workflows`, `jobs`, `job_attempts`, `artifacts`, `scripts` e `script_receipts`; as demais tabelas v9 não têm linhas, portanto sua preservação de conteúdo não foi exercitada. As novas tabelas `transmissions` e `human_checkpoints` são verificadas vazias, e `scripts.generator` é verificado NULL. O ensaio inclui agora um banco Radar sintético com snapshot na restauração e compara o hash externo do ZIP. Não cobre dados reais, volume, concorrência, recuperação de WAL pendente, mídia, modelos, credenciais ou todas as restrições de domínio das tabelas vazias.
+
+Testes da guarda (sem dados reais): `python -m unittest discover -s scripts -p test_ensaio_atualizacao_banco.py -v`. Simulam perfil e variáveis em TEMP, recusando relativos, escape, raiz TEMP, pastas operacionais com caixa diferente, TEMP adulterado e junction/link.
