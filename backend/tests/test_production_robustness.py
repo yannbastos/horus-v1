@@ -14,7 +14,7 @@ from horus_backend.narration import providers
 from horus_backend.processes import OwnedProcess, ProductionFailure, sanitized_tail
 from horus_backend.worker_lock import WorkerLock
 from test_production import script_for, start, finished
-from test_workflows import settings, client_for
+from support_a import client_for, pg_admin_connect, settings
 
 
 def test_sanitized_diagnostic_redacts_before_limiting():
@@ -143,17 +143,42 @@ def test_restart_preserves_stage_without_reexecuting_or_serving_partial(settings
         assert other['status'] == 'succeeded' and other['id'] != item['id']
 
 
-def test_worker_lock_is_released_by_os_after_crash(tmp_path):
-    database = tmp_path/'state.sqlite'
-    command = [sys.executable, '-c',
-        'import os,sys; from pathlib import Path; from horus_backend.worker_lock import WorkerLock; '
-        'lock=WorkerLock(Path(sys.argv[1])); lock.acquire(); os._exit(7)', str(database)]
-    assert subprocess.run(command, timeout=10).returncode == 7
-    lock = WorkerLock(database)
+def test_worker_lock_is_released_after_crash_ttl_and_on_close(pg_app_cluster, pg_app_database):
+    from contextlib import contextmanager
+    import time
+    import psycopg
+    from conftest import PG_TEST_CONFIG
+    from horus_backend.storage import Store
+
+    dsn = pg_app_cluster.dsn(pg_app_database, "horus_app")
+    password = PG_TEST_CONFIG["password"]
+    child_code = (
+        "import os, sys\nfrom contextlib import contextmanager\nimport psycopg\n"
+        "from horus_backend.storage import Store\nfrom horus_backend.worker_lock import WorkerLock\n"
+        "dsn, pwd = sys.argv[1], sys.argv[2]\n"
+        "class DB:\n"
+        "  @contextmanager\n"
+        "  def connection(self):\n"
+        "    with psycopg.connect(dsn, autocommit=True, password=pwd, prepare_threshold=None) as c: yield c\n"
+        "lock = WorkerLock(Store(DB()), ttl_seconds=0.4)\nlock.acquire()\nos._exit(7)"
+    )
+    assert subprocess.run([sys.executable, "-c", child_code, dsn, password], timeout=10).returncode == 7
+
+    class _LocalDB:
+        @contextmanager
+        def connection(self):
+            with psycopg.connect(dsn, autocommit=True, password=password, prepare_threshold=None) as conn:
+                yield conn
+
+    store = Store(_LocalDB())
+    lock = WorkerLock(store, ttl_seconds=5.0)
+    with pytest.raises(RuntimeError):
+        lock.acquire()
+    time.sleep(0.5)
     lock.acquire()
     with pytest.raises(RuntimeError):
         lock.acquire()
-    other = WorkerLock(database)
+    other = WorkerLock(store, ttl_seconds=5.0)
     with pytest.raises(RuntimeError):
         other.acquire()
     lock.close()
@@ -188,16 +213,27 @@ def test_failed_worker_never_registers_video_and_queue_continues(settings, monke
         assert finished(client, start(client, script, key='next').json())['status'] == 'succeeded'
 
 
-def test_artifacts_and_success_are_atomic(settings):
+def test_artifacts_and_success_are_atomic(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         script = script_for(client)
-        with client.app.state.store.connect() as db:
-            db.execute("""CREATE TRIGGER fail_success BEFORE UPDATE OF status ON jobs
-                WHEN NEW.status='succeeded' AND json_extract(NEW.payload,'$.operation')='production.run'
-                BEGIN SELECT RAISE(ABORT,'simulated crash before commit'); END""")
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute("""
+                CREATE OR REPLACE FUNCTION horus.fail_production_success()
+                RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF NEW.status = 'succeeded' AND NEW.payload->>'operation' = 'production.run' THEN
+                        RAISE EXCEPTION 'simulated crash before commit' USING ERRCODE = '23000';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$;
+                CREATE TRIGGER fail_success
+                BEFORE UPDATE OF status ON horus.jobs
+                FOR EACH ROW EXECUTE FUNCTION horus.fail_production_success();
+            """)
         item = finished(client, start(client, script).json())
         assert item['status'] == 'failed' and item['artifacts'] == []
-        assert item['failure']['type'] == 'IntegrityError'
+        assert item['failure']['type'] in {'IntegrityError', 'IntegrityConstraintViolation'}
 
 
 @pytest.mark.parametrize('proof', ['missing', 'hash_mismatch', 'no_video_frames', 'no_audio_frames', 'invalid_duration'])

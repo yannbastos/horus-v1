@@ -14,7 +14,7 @@ import pytest
 from horus_backend import local_pilot
 from horus_backend.processes import OwnedProcess
 from test_production import script_for, start, finished
-from test_workflows import settings, client_for  # noqa: F401
+from support_a import client_for, pg_admin_connect, settings  # noqa: F401
 
 
 def count_worker_runs(monkeypatch):
@@ -110,26 +110,26 @@ def test_same_idempotency_key_returns_the_interrupted_production_and_never_start
     assert runs == []
 
 
-def test_equal_inputs_produce_an_equal_plan_across_productions(settings):
+def test_equal_inputs_produce_an_equal_plan_across_productions(settings, pg_app_cluster, pg_app_database):
     """Base para um futuro 'hash das entradas': o plano aprovado é determinístico para o mesmo roteiro/seleção."""
     with client_for(settings) as client:
         script = script_for(client)
         client.portal.call(client.app.state.manager.worker.cancel)
         first, second = (start(client, script, key=k).json() for k in ('a', 'b'))
-        with client.app.state.store.connect() as db:
-            plans = [json.loads(db.execute('SELECT plan FROM productions WHERE id=?', (p['id'],)).fetchone()[0]) for p in (first, second)]
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            plans = [db.execute('SELECT plan FROM horus.productions WHERE id=%s', (p['id'],)).fetchone()[0] for p in (first, second)]
         assert first['id'] != second['id']
         assert plans[0] == plans[1]
 
 
-def test_local_pilot_synthesizes_all_sections_in_one_call_with_no_per_segment_reuse(settings, monkeypatch, tmp_path):
+def test_local_pilot_synthesizes_all_sections_in_one_call_with_no_per_segment_reuse(settings, pg_app_cluster, pg_app_database, monkeypatch, tmp_path):
     """Hoje a narração é uma chamada única para todas as seções; WAV por seção já existente não é consultado."""
     with client_for(settings) as client:
         script = script_for(client)
         client.portal.call(client.app.state.manager.worker.cancel)
         item = start(client, script, mode='local_pilot').json()
-        with client.app.state.store.connect() as db:
-            plan = json.loads(db.execute('SELECT plan FROM productions WHERE id=?', (item['id'],)).fetchone()[0])
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            plan = db.execute('SELECT plan FROM horus.productions WHERE id=%s', (item['id'],)).fetchone()[0]
     folder = tmp_path / 'folder'
     folder.mkdir()
     (folder / 'section-1.wav').write_bytes(b'RIFF-ja-existia')

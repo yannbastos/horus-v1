@@ -1,6 +1,5 @@
 """Revisão adversarial 14/11/2026: exportação de dados locais, run_sync e política de caminhos. Só diretórios temporários."""
 import json
-import sqlite3
 import subprocess
 import sys
 import zipfile
@@ -11,21 +10,18 @@ import pytest
 from horus_backend import local_data_export as lde
 from horus_backend.file_access import PathNotAllowed, client_path
 from horus_backend.local_data_export import export_local_data, verify_export
-from horus_backend.migrations import migrate
 from horus_backend.processes import run_sync
-from horus_backend.storage import Store
+from support_a import client_for, settings  # noqa: F401
 
 
 @pytest.fixture
-def data_dir(tmp_path):
-    root = tmp_path / "workspace"
-    root.mkdir()
-    Store(root / "horus.sqlite3")
-    migrate(root / "horus.sqlite3")
-    production = root / "productions" / "p1"
-    production.mkdir(parents=True)
-    (production / "asset-provenance.json").write_text('{"schema_version":1,"assets":[]}', encoding="utf-8")
-    return root
+def pg_workspace(settings):
+    with client_for(settings) as client:
+        root = settings.data_dir
+        production = root / "productions" / "p1"
+        production.mkdir(parents=True, exist_ok=True)
+        (production / "asset-provenance.json").write_text('{"schema_version":1,"assets":[]}', encoding="utf-8")
+        yield root, client.app.state.store
 
 
 def names(package):
@@ -33,7 +29,8 @@ def names(package):
         return set(archive.namelist())
 
 
-def test_json_that_is_a_link_is_never_exported(data_dir, tmp_path, monkeypatch):
+def test_json_that_is_a_link_is_never_exported(pg_workspace, tmp_path, monkeypatch):
+    data_dir, store = pg_workspace
     outside = tmp_path / "particular.json"
     outside.write_text('{"nota": "conteudo-particular-do-usuario"}', encoding="utf-8")
     link = data_dir / "productions" / "p1" / "atalho.json"
@@ -44,12 +41,13 @@ def test_json_that_is_a_link_is_never_exported(data_dir, tmp_path, monkeypatch):
         real = lde._is_link
         monkeypatch.setattr(lde, "_is_link", lambda p: p.name == "atalho.json" or real(p))
     package = tmp_path / "d.zip"
-    export_local_data(data_dir, package)
-    assert "productions/p1/atalho.json" not in names(package) and b"conteudo-particular" not in package.read_bytes()
-    assert "productions/p1/asset-provenance.json" in names(package)
+    export_local_data(data_dir, package, store=store)
+    assert "local_files/productions/p1/atalho.json" not in names(package) and b"conteudo-particular" not in package.read_bytes()
+    assert "local_files/productions/p1/asset-provenance.json" in names(package)
 
 
-def test_exported_manifest_is_exactly_what_was_read_even_if_the_file_changes_meanwhile(data_dir, tmp_path, monkeypatch):
+def test_exported_manifest_is_exactly_what_was_read_even_if_the_file_changes_meanwhile(pg_workspace, tmp_path, monkeypatch):
+    data_dir, store = pg_workspace
     target = data_dir / "productions" / "p1" / "asset-provenance.json"
     original = target.read_bytes()
     real_loads = lde.json.loads
@@ -62,25 +60,27 @@ def test_exported_manifest_is_exactly_what_was_read_even_if_the_file_changes_mea
         return real_loads(raw, *a, **k)
     monkeypatch.setattr(lde.json, "loads", loads)
     package = tmp_path / "d.zip"
-    export_local_data(data_dir, package)
+    export_local_data(data_dir, package, store=store)
     with zipfile.ZipFile(package) as archive:
-        assert archive.read("productions/p1/asset-provenance.json") == original
+        assert archive.read("local_files/productions/p1/asset-provenance.json") == original
     assert verify_export(package)["ok"] is True
 
 
-def test_failed_export_leaves_no_partial_package(data_dir, tmp_path, monkeypatch):
+def test_failed_export_leaves_no_partial_package(pg_workspace, tmp_path, monkeypatch):
+    data_dir, store = pg_workspace
     def boom(self, *a, **k):
         raise OSError("disco cheio")
     monkeypatch.setattr(zipfile.ZipFile, "writestr", boom)
     package = tmp_path / "d.zip"
     with pytest.raises(OSError):
-        export_local_data(data_dir, package)
+        export_local_data(data_dir, package, store=store)
     assert not package.exists()
 
 
-def test_verify_streams_members_and_rejects_lying_sizes(data_dir, tmp_path, monkeypatch):
+def test_verify_streams_members_and_rejects_lying_sizes(pg_workspace, tmp_path, monkeypatch):
+    data_dir, store = pg_workspace
     package = tmp_path / "d.zip"
-    export_local_data(data_dir, package)
+    export_local_data(data_dir, package, store=store)
     real_read = zipfile.ZipFile.read
 
     def only_manifest(self, name, *a, **k):
@@ -97,7 +97,7 @@ def test_verify_streams_members_and_rejects_lying_sizes(data_dir, tmp_path, monk
             if item.filename == "manifest.json":
                 manifest = json.loads(data)
                 for f in manifest["files"]:
-                    if f["name"] == "database/horus.sqlite3":
+                    if f["name"] == "local_files/productions/p1/asset-provenance.json":
                         f["size"] = 10
                 data = json.dumps(manifest).encode()
             dest.writestr(item.filename, data)

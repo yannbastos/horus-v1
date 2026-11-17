@@ -1,15 +1,13 @@
 import copy
 import hashlib
 import json
-import sqlite3
-from pathlib import Path
 
+import psycopg
 import pytest
 
-from test_workflows import settings, client_for
+from support_a import client_for, pg_admin_connect, settings
 from test_production import script_for, start, finished
 from horus_backend.media_contracts import apply_license_reviews, commercial_use_permitted, validate_asset_provenance, ProvenanceAsset
-from horus_backend.migrations import migrate, MIGRATIONS
 
 PREFIX = 'canais/demo/videos/fixture/'
 LOCAL, STOCK = 'a' * 64, 'b' * 64
@@ -37,7 +35,7 @@ def body(**over):
 
 
 @pytest.fixture
-def production(settings):
+def production(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         record = finished(client, start(client, script_for(client)).json())
         root = settings.data_dir / 'productions' / record['id']
@@ -48,8 +46,8 @@ def production(settings):
                       'sha256': hashlib.sha256(text.encode()).hexdigest()},
                      {'kind': 'image', 'relative_path': PREFIX + 'scene-1.png', 'sha256': LOCAL},
                      {'kind': 'image', 'relative_path': PREFIX + 'scene-2.png', 'sha256': STOCK}]
-        with client.app.state.store.connect() as db:
-            db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), record['id']))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('UPDATE horus.productions SET artifacts=%s::jsonb WHERE id=%s', (json.dumps(artifacts), record['id']))
         yield client, record['id'], root
 
 
@@ -182,14 +180,14 @@ def test_missing_or_tampered_provenance_is_conflict(production):
     assert listing['effective_provenance'] is None and listing['history'] == []
 
 
-def test_database_rejects_update_and_delete(production):
+def test_database_rejects_update_and_delete(production, pg_app_cluster, pg_app_database):
     client, pid, _ = production
     post(client, pid, body())
-    with client.app.state.store.connect() as db:
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("UPDATE license_reviews SET decision='rejected'")
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute('DELETE FROM license_reviews')
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        with pytest.raises((psycopg.IntegrityError, psycopg.errors.InsufficientPrivilege, psycopg.errors.RaiseException)):
+            db.execute("UPDATE horus.license_reviews SET decision='rejected'")
+        with pytest.raises((psycopg.IntegrityError, psycopg.errors.InsufficientPrivilege, psycopg.errors.RaiseException)):
+            db.execute('DELETE FROM horus.license_reviews')
 
 
 def test_approval_does_not_publish_or_change_artifacts(production):
@@ -200,53 +198,21 @@ def test_approval_does_not_publish_or_change_artifacts(production):
     assert after['artifacts'] == before and after['publishable'] is False and after['demo_only'] is True
 
 
-# --- migração v7 -> v8 -----------------------------------------------------------------------------------
-
-def seed_v7(settings, monkeypatch):
-    with monkeypatch.context() as old:
-        old.setattr('horus_backend.migrations.SCHEMA_VERSION', 7)
-        with client_for(settings) as client:
-            record = finished(client, start(client, script_for(client)).json())
-            with client.app.state.store.connect() as db:
-                tables = {t: [tuple(r) for r in db.execute(f'SELECT * FROM {t} ORDER BY 1')]
-                          for t in ('jobs', 'productions', 'production_receipts', 'scripts', 'workflows')}
-                path = Path(db.execute('PRAGMA database_list').fetchone()[2])
-    return path, tables, record
-
-
-def test_migration_v8_preserves_data_is_idempotent_and_adds_only_table(settings, monkeypatch):
-    path, tables, record = seed_v7(settings, monkeypatch)
-    for _ in range(2):
-        migrate(path)
-        with sqlite3.connect(path) as db:
-            db.execute('PRAGMA foreign_keys=ON')
-            assert db.execute('PRAGMA user_version').fetchone()[0] == __import__("horus_backend.migrations", fromlist=["SCHEMA_VERSION"]).SCHEMA_VERSION
-            for name, rows in tables.items():
-                # v9 acrescenta scripts.origin (HOR-133); os valores anteriores permanecem intactos.
-                assert [tuple(r)[:len(rows[0])] if rows else tuple(r) for r in db.execute(f'SELECT * FROM {name} ORDER BY 1')] == rows
-            assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-            assert db.execute('SELECT COUNT(*) FROM license_reviews').fetchone()[0] == 0
-            with pytest.raises(sqlite3.IntegrityError):  # FK de produção
-                db.execute("""INSERT INTO license_reviews(id,production_id,asset_id,asset_sha256,decision,license,evidence,
-                    reviewed_by,reviewed_at,idempotency_key,request) VALUES('x','nope','a','b','verified','{}','e','human','t','k','r')""")
-            db.rollback()
-    assert len(list(path.parent.glob(path.stem + '.backup-v7-*.sqlite3'))) == 1
-    with client_for(settings) as client:
-        assert client.get(f'/v1/productions/{record["id"]}/license-reviews').status_code == 200
+def test_license_reviews_foreign_key_requires_existing_production(production, pg_app_cluster, pg_app_database):
+    client, pid, _ = production
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        with pytest.raises(psycopg.IntegrityError):
+            db.execute(
+                """INSERT INTO horus.license_reviews(
+                    id, production_id, asset_id, asset_sha256, decision, license, evidence,
+                    reviewed_by, reviewed_at, idempotency_key, request, request_canonical
+                ) VALUES('x', 'nope', 'a', repeat('0', 64), 'verified', '{}', 'e', 'human',
+                    now(), 'k', '{}'::jsonb, '{}'::bytea)"""
+            )
+    assert client.get(f'/v1/productions/{pid}/license-reviews').status_code == 200
 
 
-def test_migration_v8_failure_rolls_back(settings, monkeypatch):
-    path, tables, _ = seed_v7(settings, monkeypatch)
-    monkeypatch.setitem(MIGRATIONS, 8, (*MIGRATIONS[8], 'INSERT INTO missing_table VALUES(1)'))
-    with pytest.raises(sqlite3.OperationalError):
-        migrate(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 7
-        assert not db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'license_reviews%'").fetchall()
-        assert [tuple(r) for r in db.execute('SELECT * FROM productions ORDER BY 1')] == tables['productions']
-
-
-def test_font_input_registered_by_libass_overlay_is_accepted(production):
+def test_font_input_registered_by_libass_overlay_is_accepted(production, pg_app_cluster, pg_app_database):
     """J-13: a fonte copiada para fonts/ pela legenda libass faz parte das entradas; sem ela a proveniência some."""
     client, pid, root = production
     font = PREFIX + 'fonts/ArchivoExpanded-SemiBold.ttf'
@@ -258,11 +224,11 @@ def test_font_input_registered_by_libass_overlay_is_accepted(production):
                            'author': 'Omnibus-Type', 'license': ofl, 'status': 'unverified', 'notes': ''})
     text = json.dumps(data)
     (root / 'asset-provenance.json').write_text(text, encoding='utf-8')
-    with client.app.state.store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (pid,)).fetchone()['artifacts'])
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (pid,)).fetchone()[0]
         artifacts[0]['sha256'] = hashlib.sha256(text.encode()).hexdigest()
         artifacts.append({'kind': 'font', 'relative_path': font, 'sha256': 'c' * 64})
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), pid))
+        db.execute('UPDATE horus.productions SET artifacts=%s::jsonb WHERE id=%s', (json.dumps(artifacts), pid))
     listing = client.get(f'/v1/productions/{pid}/license-reviews').json()
     assert listing['effective_provenance'] is not None
     assert 'subtitle-font' in [a['asset_id'] for a in listing['effective_provenance']['assets']]
@@ -277,7 +243,7 @@ def _inputs():
 
 @pytest.mark.parametrize('integrity_failure', [False, True])
 @pytest.mark.parametrize('decision,stale,expected', [('verified', False, 'pass'), ('rejected', False, 'warn'), ('verified', True, 'warn')])
-def test_production_qc_uses_effective_license_without_rewriting(production, decision, stale, expected, integrity_failure):
+def test_production_qc_uses_effective_license_without_rewriting(production, pg_app_cluster, pg_app_database, decision, stale, expected, integrity_failure):
     from horus_backend.av_quality import provenance_check
     from horus_backend.media_contracts import validate_quality_report
     client, pid, root = production
@@ -295,12 +261,11 @@ def test_production_qc_uses_effective_license_without_rewriting(production, deci
     assert validate_quality_report(report)['ok']
     raw_report = json.dumps(report).encode()
     (root / 'quality-report.json').write_bytes(raw_report)
-    store = client.app.state.store
-    with store.connect() as db:
-        artifacts = json.loads(db.execute('SELECT artifacts FROM productions WHERE id=?', (pid,)).fetchone()['artifacts'])
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        artifacts = db.execute('SELECT artifacts FROM horus.productions WHERE id=%s', (pid,)).fetchone()[0]
         artifacts += [{'kind': 'video', 'relative_path': 'video.mp4', 'sha256': 'd' * 64},
                       {'kind': 'manifest', 'relative_path': 'quality-report.json', 'sha256': hashlib.sha256(raw_report).hexdigest()}]
-        db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), pid))
+        db.execute('UPDATE horus.productions SET artifacts=%s::jsonb WHERE id=%s', (json.dumps(artifacts), pid))
     assert post(client, pid, body(decision=decision)).status_code == 201
     stock = body(asset_id='stock-1', asset_sha256=STOCK)
     stock['license']['url'] = 'https://www.pexels.com/license/'
@@ -316,8 +281,8 @@ def test_production_qc_uses_effective_license_without_rewriting(production, deci
                 artifact['sha256'] = hashlib.sha256(raw).hexdigest()
             elif artifact['relative_path'] == PREFIX + 'scene-1.png':
                 artifact['sha256'] = 'c' * 64
-        with store.connect() as db:
-            db.execute('UPDATE productions SET artifacts=? WHERE id=?', (json.dumps(artifacts), pid))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('UPDATE horus.productions SET artifacts=%s::jsonb WHERE id=%s', (json.dumps(artifacts), pid))
         original = raw
     result = client.get(f'/v1/productions/{pid}').json()
     qc = result['quality_report']

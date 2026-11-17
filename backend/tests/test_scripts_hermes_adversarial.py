@@ -1,13 +1,13 @@
 """Revisão adversarial da etapa `script` (HOR-134): somente servidor falso e bancos temporários."""
 import json
-import sqlite3
 from dataclasses import replace
-from pathlib import Path
 
+import psycopg
 import pytest
 
-from test_workflow_hermes import (settings, hermes, client_for, create, pending, authorize,
-                                 wait, Scenario, echo, CONTRACTS)
+from support_a import client_for, hermes_settings as settings, pg_admin_connect  # noqa: F401
+from test_workflow_hermes import (hermes, create, pending, authorize,
+                                  wait, Scenario, echo, CONTRACTS)  # noqa: F401
 from test_scripts import generate
 from test_scripts_hermes import approved
 from horus_backend.security import budget_usage, daily_runs, daily_tokens
@@ -19,9 +19,9 @@ def valid_output(**changes):
     return echo({**VALID, **changes})
 
 
-def counts(client):
-    with client.app.state.store.connect() as db:
-        return {name: db.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+def counts(pg_app_cluster, pg_app_database):
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        return {name: db.execute(f"SELECT COUNT(*) FROM horus.{name}").fetchone()[0]
                 for name in ("scripts", "cognitive_runs", "authorizations", "script_receipts")}
 
 
@@ -68,17 +68,17 @@ def test_daily_run_cap_includes_script_runs(settings, hermes):
         assert "daily_run_limit" in {item["code"] for item in report["blockers"]}
 
 
-def test_simulated_cognitive_client_workflow_never_reaches_hermes(settings, hermes):
+def test_simulated_cognitive_client_workflow_never_reaches_hermes(settings, hermes, pg_app_cluster, pg_app_database):
     """Workflow de cliente simulado fica fora do orçamento: não pode virar chamada real escondida."""
     with client_for(settings) as client:
         workflow = approved(client, hermes)
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE workflows SET cognitive_client='simulated' WHERE id=?", (workflow["id"],))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute("UPDATE horus.workflows SET cognitive_client='simulated' WHERE id=%s", (workflow["id"],))
         before = len(hermes.runs)
         response = run_script(client, hermes, workflow, valid_output())
         assert response.status_code == 409, response.text
         assert len(hermes.runs) == before
-        assert counts(client)["scripts"] == 0
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 0
 
 
 @pytest.mark.parametrize("extra", [
@@ -86,21 +86,21 @@ def test_simulated_cognitive_client_workflow_never_reaches_hermes(settings, herm
     {"source": "hermes", "authorize": 1}, {"source": "hermes", "authorize": None}, {"authorize": True}, {"source": "manual"},
     {"source": "hermes", "authorize": True, "extra": 1},
 ])
-def test_no_authorization_variant_reaches_hermes(settings, hermes, extra):
+def test_no_authorization_variant_reaches_hermes(settings, hermes, pg_app_cluster, pg_app_database, extra):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
-        before, snapshot = len(hermes.runs), counts(client)
+        before, snapshot = len(hermes.runs), counts(pg_app_cluster, pg_app_database)
         hermes.scenarios.append(Scenario(output=valid_output()))
         response = generate(client, workflow, **extra)
         assert response.status_code in {409, 422}
-        assert len(hermes.runs) == before and counts(client) == snapshot
+        assert len(hermes.runs) == before and counts(pg_app_cluster, pg_app_database) == snapshot
 
 
-def test_replay_with_different_body_is_rejected_without_new_run(settings, hermes):
+def test_replay_with_different_body_is_rejected_without_new_run(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
         assert run_script(client, hermes, workflow, valid_output()).status_code == 201
-        runs, snapshot = len(hermes.runs), counts(client)
+        runs, snapshot = len(hermes.runs), counts(pg_app_cluster, pg_app_database)
         for body in ({"expected_revision": workflow["revision"] + 1},
                      {"proposal_artifact_id": "f" * 32}):
             hermes.scenarios.append(Scenario(output=valid_output()))
@@ -110,10 +110,10 @@ def test_replay_with_different_body_is_rejected_without_new_run(settings, hermes
             assert response.status_code == 409
         # Replay do mesmo corpo como roteiro simulado/manual com a mesma chave também não chama ninguém.
         assert generate(client, workflow, key="k1").status_code == 409
-        assert len(hermes.runs) == runs and counts(client) == snapshot
+        assert len(hermes.runs) == runs and counts(pg_app_cluster, pg_app_database) == snapshot
 
 
-def test_authorization_of_other_workflow_or_unapproved_workflow_is_useless(settings, hermes):
+def test_authorization_of_other_workflow_or_unapproved_workflow_is_useless(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         first = approved(client, hermes)
         # Segundo workflow ainda aguardando aprovação humana.
@@ -121,13 +121,13 @@ def test_authorization_of_other_workflow_or_unapproved_workflow_is_useless(setti
         second = pending(client, create(client, key="pedido-2")["id"])
         authorize(client, second, key="auth-2")
         second = wait(client, second["id"], lambda w: w["status"] == "awaiting_approval")
-        before, snapshot = len(hermes.runs), counts(client)
+        before, snapshot = len(hermes.runs), counts(pg_app_cluster, pg_app_database)
         hermes.scenarios.append(Scenario(output=valid_output()))
         assert generate(client, second, key="x", source="hermes", authorize=True).status_code == 409
         # Revisão e artefato de outro workflow.
         crossed = {**second, "revision": first["revision"], "current_artifact_id": first["current_artifact_id"]}
         assert generate(client, crossed, key="y", source="hermes", authorize=True).status_code == 409
-        assert len(hermes.runs) == before and counts(client) == snapshot
+        assert len(hermes.runs) == before and counts(pg_app_cluster, pg_app_database) == snapshot
 
 
 def test_stale_revision_never_reaches_hermes(settings, hermes):
@@ -139,7 +139,7 @@ def test_stale_revision_never_reaches_hermes(settings, hermes):
         assert len(hermes.runs) == before
 
 
-def test_each_execution_creates_and_consumes_its_own_authorization(settings, hermes):
+def test_each_execution_creates_and_consumes_its_own_authorization(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
         hermes.scenarios.append(Scenario(output="", final_status="failed"))
@@ -149,13 +149,13 @@ def test_each_execution_creates_and_consumes_its_own_authorization(settings, her
         assert generate(client, workflow, key="a", source="hermes", authorize=True).status_code == 409
         assert len(hermes.runs) == runs
         assert run_script(client, hermes, workflow, valid_output(), key="b").status_code == 201
-        with client.app.state.store.connect() as db:
-            rows = db.execute("SELECT consumed_attempt_id,max_runs,scope FROM authorizations WHERE idempotency_key LIKE 'script:%'").fetchall()
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            rows = db.execute("SELECT consumed_attempt_id,max_runs,scope FROM horus.authorizations WHERE idempotency_key LIKE 'script:%'").fetchall()
             assert len(rows) == 2 and all(row[0] and row[1] == 1 and row[2] == "cognitive_run" for row in rows)
-            assert db.execute("SELECT COUNT(*) FROM cognitive_runs").fetchone()[0] == 3  # análise + 2 roteiros
+            assert db.execute("SELECT COUNT(*) FROM horus.cognitive_runs").fetchone()[0] == 3  # análise + 2 roteiros
 
 
-def test_executor_swapped_to_simulated_refuses_hermes_requests(settings, hermes):
+def test_executor_swapped_to_simulated_refuses_hermes_requests(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
     simulated = replace(settings, workflow_executor="simulated")
@@ -165,8 +165,8 @@ def test_executor_swapped_to_simulated_refuses_hermes_requests(settings, hermes)
         response = generate(client, workflow, key="swap", source="hermes", authorize=True)
         assert response.status_code == 409
         assert len(hermes.runs) == before
-        with client.app.state.store.connect() as db:
-            assert db.execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 0
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert db.execute("SELECT COUNT(*) FROM horus.scripts").fetchone()[0] == 0
 
 
 def test_gate_closing_after_prepare_blocks_submission(settings, hermes, monkeypatch, tmp_path):
@@ -213,7 +213,7 @@ HOSTILE = {
 
 
 @pytest.mark.parametrize("name", sorted(HOSTILE))
-def test_hostile_output_creates_no_script_and_spends_only_the_reservation(settings, hermes, name):
+def test_hostile_output_creates_no_script_and_spends_only_the_reservation(settings, hermes, pg_app_cluster, pg_app_database, name):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
         store = client.app.state.store
@@ -222,34 +222,34 @@ def test_hostile_output_creates_no_script_and_spends_only_the_reservation(settin
         response = run_script(client, hermes, workflow, lambda body: json.dumps(
             {**payload, "task_id": json.loads(body["input"])["task_id"]} if isinstance(payload, dict) else payload))
         assert response.status_code == 409, (name, response.status_code, response.text[:300])
-        counters = counts(client)
+        counters = counts(pg_app_cluster, pg_app_database)
         assert counters["scripts"] == 0
         assert daily_runs(store) == runs_before + 1  # exatamente uma execução reservada
-        with store.connect() as db:
-            run = db.execute("SELECT status,usage FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+        with pg_admin_connect(pg_app_cluster, pg_app_database, as_dict=True) as db:
+            run = db.execute("SELECT status, usage FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
             if name == "giant_narration":
                 # Resposta acima do limite do cliente: desfecho desconhecido, reserva mantida (conservador).
                 assert run["status"] in {"invalid_output", "unknown"}
             else:
                 assert run["status"] == "invalid_output"
-                usage = json.loads(run["usage"])
+                usage = run["usage"]
                 # O custo finalizado nunca excede a reserva integral da execução.
                 from horus_backend.security import cost_reservation
                 assert float(usage["horus_estimated_cost_usd"]) <= float(cost_reservation(settings))
         assert "x" * 1000 not in response.text  # o conteúdo hostil não é ecoado ao cliente
 
 
-def test_task_id_from_another_run_is_rejected(settings, hermes):
+def test_task_id_from_another_run_is_rejected(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
         response = run_script(client, hermes, workflow, json.dumps({**VALID, "task_id": "b" * 32}))
         assert response.status_code == 409
-        assert counts(client)["scripts"] == 0
-        with client.app.state.store.connect() as db:
-            assert "task_mismatch" in db.execute("SELECT error FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 0
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert "task_mismatch" in db.execute("SELECT error FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0]
 
 
-def test_usage_above_run_ceiling_is_failure_not_script(settings, hermes):
+def test_usage_above_run_ceiling_is_failure_not_script(settings, hermes, pg_app_cluster, pg_app_database):
     limited = replace(settings, max_tokens_per_run=50000)
     with client_for(limited) as client:
         workflow = approved(client, hermes)
@@ -257,10 +257,10 @@ def test_usage_above_run_ceiling_is_failure_not_script(settings, hermes):
             "input_tokens": 90000, "output_tokens": 10, "total_tokens": 90010, "cache_read_tokens": 0, "cache_write_tokens": 0}))
         response = generate(client, workflow, source="hermes", authorize=True)
         assert response.status_code == 409
-        assert counts(client)["scripts"] == 0
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 0
 
 
-def test_valid_hermes_script_is_never_human_nor_simulated_in_api(settings, hermes):
+def test_valid_hermes_script_is_never_human_nor_simulated_in_api(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
         record = run_script(client, hermes, workflow, valid_output()).json()
@@ -269,15 +269,15 @@ def test_valid_hermes_script_is_never_human_nor_simulated_in_api(settings, herme
             assert item["origin"] == item["authored_by"] == "hermes"
             assert item["document"]["simulated"] is False
             assert "generator" not in item
-        with client.app.state.store.connect() as db:
-            row = db.execute("SELECT origin,generator FROM scripts").fetchone()
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            row = db.execute("SELECT origin,generator FROM horus.scripts").fetchone()
             assert tuple(row) == ("simulated", "hermes")  # CHECK legado intacto; projeção decide
-            with pytest.raises(sqlite3.IntegrityError):
-                db.execute("UPDATE scripts SET generator='human'")
-            with pytest.raises(sqlite3.IntegrityError):
-                db.execute("UPDATE scripts SET generator='simulated'")
-            with pytest.raises(sqlite3.IntegrityError):
-                db.execute("UPDATE scripts SET origin='hermes'")
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.scripts SET generator='human'")
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.scripts SET generator='simulated'")
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.scripts SET origin='hermes'")
 
 
 def test_hermes_script_review_and_new_version_keep_provenance(settings, hermes):
@@ -291,7 +291,7 @@ def test_hermes_script_review_and_new_version_keep_provenance(settings, hermes):
 
 # --- 5. Desfecho remoto desconhecido e reinício ---------------------------------------------------------
 
-def test_restart_after_unknown_outcome_never_resubmits_or_double_spends(settings, hermes, monkeypatch):
+def test_restart_after_unknown_outcome_never_resubmits_or_double_spends(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch):
     from horus_backend.workflow_hermes import HermesRunClient, HermesHTTPError
     with client_for(settings) as client:
         workflow = approved(client, hermes)
@@ -309,16 +309,15 @@ def test_restart_after_unknown_outcome_never_resubmits_or_double_spends(settings
             assert generate(client, workflow, key=key, source="hermes", authorize=True).status_code == 409
         assert len(hermes.runs) == submitted
         assert (daily_runs(store), daily_tokens(settings, store)) == spent
-        assert counts(client)["scripts"] == 0
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 0
         # A reserva do desfecho desconhecido continua contada após o reinício.
         assert spent[1] >= settings.max_tokens_per_run
         # O workflow aprovado não foi corrompido pela recuperação.
         assert client.get(f"/v1/workflows/{workflow['id']}").json()["status"] == "approved"
 
 
-def test_crash_mid_run_leaves_reservation_blocks_resubmission_and_keeps_workflow_approved(settings, hermes, tmp_path):
-    """Cópia do banco com a execução em voo (admitida, sem desfecho) = estado de um processo morto."""
-    import shutil
+def test_crash_mid_run_leaves_reservation_blocks_resubmission_and_keeps_workflow_approved(settings, hermes, pg_app_cluster, pg_app_database):
+    """Simula processo morto com execução em voo (`admitted`), validando recuperação na inicialização."""
     import threading
     import time
     with client_for(settings) as client:
@@ -328,79 +327,50 @@ def test_crash_mid_run_leaves_reservation_blocks_resubmission_and_keeps_workflow
         thread.start()
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            with client.app.state.store.connect() as db:
-                row = db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
-            if row and row[0] == "admitted" and len(hermes.runs) == 2:
+            with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+                row = db.execute("SELECT id, attempt_id, status FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+            if row and row[2] == "admitted" and len(hermes.runs) == 2:
+                run_id_db, attempt_id = row[0], row[1]
                 break
             time.sleep(.05)
         else:
             pytest.fail("execução não admitida")
-        data = tmp_path / "crash-data"
-        data.mkdir()
-        source = sqlite3.connect(settings.data_dir / "horus.sqlite3")
-        target = sqlite3.connect(data / "horus.sqlite3")
-        source.backup(target)
-        source.close(); target.close()
         for run_id in list(hermes.runs):
             hermes.release(run_id) if hermes.runs[run_id].status not in {"completed"} else None
         thread.join(15)
-    crashed = replace(settings, data_dir=data)
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        from horus_backend.workflows import encode
+
+        pending_resp = encode({"pending": True})
+        db.execute(
+            "UPDATE horus.script_receipts SET response=%s::jsonb, response_canonical=%s WHERE scope=%s",
+            (pending_resp, pending_resp.encode("utf-8"), f"generate:{workflow['id']}"),
+        )
+        db.execute("DELETE FROM horus.scripts")
+        db.execute("UPDATE horus.cognitive_runs SET status='admitted', remote_status=NULL, usage=NULL, error=NULL WHERE id=%s", (run_id_db,))
+        db.execute("UPDATE horus.job_attempts SET status='interrupted', finished_at=NULL, error=NULL WHERE id=%s", (attempt_id,))
     submitted = len(hermes.runs)
-    with client_for(crashed) as client:
+    with client_for(settings) as client:
         store = client.app.state.store
         assert client.get(f"/v1/workflows/{workflow['id']}").json()["status"] == "approved"
-        with store.connect() as db:
-            assert db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "unknown"
-            assert db.execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 0
-        assert daily_tokens(crashed, store) >= crashed.max_tokens_per_run
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert db.execute("SELECT status FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "unknown"
+            assert db.execute("SELECT COUNT(*) FROM horus.scripts").fetchone()[0] == 0
+        assert daily_tokens(settings, store) >= settings.max_tokens_per_run
         for key in ("k1", "outra"):
             assert generate(client, workflow, key=key, source="hermes", authorize=True).status_code == 409
         assert len(hermes.runs) == submitted
 
 
-# --- 3. Migração v10 a partir de bancos v6..v9 com dados ---------------------------------------------------
-
-@pytest.mark.parametrize("old", [6, 7, 8, 9])
-def test_v10_upgrade_from_populated_legacy_db(tmp_path, monkeypatch, old):
-    from test_workflows import settings as fixture_settings, client_for as local_client, create as local_create, wait as local_wait, review
-    from horus_backend import migrations
-    cfg = fixture_settings.__wrapped__(tmp_path)
-    with monkeypatch.context() as legacy:
-        legacy.setattr(migrations, "SCHEMA_VERSION", old)
-        with local_client(cfg) as client:
-            workflow = local_wait(client, local_create(client)["id"])
-            review(client, workflow)
-            created = generate(client, workflow, key="legacy")
-            assert created.status_code == 201
-            before = created.content
-    db_path = cfg.data_dir / "horus.sqlite3"
-    assert sqlite3.connect(db_path).execute("PRAGMA user_version").fetchone()[0] == old
-    with local_client(cfg) as client:  # abre com o código v10: migra e preserva bytes
-        assert client.get(f"/v1/scripts/{json.loads(before)['id']}").content == before
-        assert generate(client, workflow, key="legacy").json() == json.loads(before)
-    backups = list(cfg.data_dir.glob(f"horus.backup-v{old}-*.sqlite3"))
-    assert len(backups) == 1
-    assert sqlite3.connect(backups[0]).execute("PRAGMA user_version").fetchone()[0] == old
-    assert sqlite3.connect(backups[0]).execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 1
-    with sqlite3.connect(db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == migrations.SCHEMA_VERSION
-        assert db.execute("SELECT generator FROM scripts").fetchone()[0] is None
-        assert db.execute("SELECT COUNT(*) FROM scripts").fetchone()[0] == 1
-        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    with local_client(cfg):  # idempotente: reabrir não cria novo backup nem altera nada
-        pass
-    assert len(list(cfg.data_dir.glob("horus.backup-v*.sqlite3"))) == 1
-
-
-def test_v10_check_constraints(tmp_path):
-    from horus_backend.migrations import migrate
-    path = tmp_path / "x.sqlite3"
-    migrate(path)
-    with sqlite3.connect(path) as db:
-        sql = db.execute("SELECT sql FROM sqlite_master WHERE name='scripts'").fetchone()[0]
-        assert "CHECK(origin IN ('simulated','human'))" in sql.replace("\n", " ").replace("  ", " ") or "origin IN ('simulated','human')" in sql
-        assert "generator IS NULL OR generator = 'hermes'" in sql
+def test_scripts_check_constraints_pg(pg_app_cluster, pg_app_database):
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        defs = " ".join(
+            row[0] for row in db.execute(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'horus.scripts'::regclass AND contype = 'c'"
+            ).fetchall()
+        )
+        assert "origin" in defs and "simulated" in defs and "human" in defs
+        assert "generator" in defs and "hermes" in defs
 
 
 # --- 5b. Conciliação de desfecho desconhecido ----------------------------------------------------------
@@ -410,7 +380,7 @@ def reconcile(client, workflow, revision=None):
                        json={"expected_revision": revision or workflow["revision"]})
 
 
-def unknown_run(settings, hermes, monkeypatch, output):
+def unknown_run(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, output):
     """Deixa uma execução de roteiro com desfecho desconhecido e devolve o workflow; o cliente é encerrado."""
     from horus_backend.workflow_hermes import HermesRunClient, HermesHTTPError
     with client_for(settings) as client:
@@ -420,13 +390,13 @@ def unknown_run(settings, hermes, monkeypatch, output):
                 raise HermesHTTPError(503, "down", "unavailable")
             patch.setattr(HermesRunClient, "status", unavailable)
             assert run_script(client, hermes, workflow, output).status_code == 409
-        with client.app.state.store.connect() as db:
-            assert db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "unknown"
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert db.execute("SELECT status FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "unknown"
     return workflow
 
 
-def test_reconcile_applies_late_valid_result_once_without_new_spend(settings, hermes, monkeypatch):
-    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+def test_reconcile_applies_late_valid_result_once_without_new_spend(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch):
+    workflow = unknown_run(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, valid_output())
     with client_for(settings) as client:  # reinício com pendente
         store = client.app.state.store
         spent = (daily_runs(store), daily_tokens(settings, store))
@@ -439,24 +409,24 @@ def test_reconcile_applies_late_valid_result_once_without_new_spend(settings, he
         assert daily_tokens(settings, store) < spent[1]  # reserva substituída pelo uso conhecido, nunca somada
         repeated = reconcile(client, workflow)  # idempotente
         assert repeated.status_code == 200 and repeated.json()["id"] == script["id"]
-        assert counts(client)["scripts"] == 1 and len(hermes.runs) == 2
-        with store.connect() as db:
-            assert db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "completed"
-            assert db.execute("SELECT status FROM job_attempts WHERE executor='script.hermes'").fetchone()[0] == "succeeded"
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 1 and len(hermes.runs) == 2
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert db.execute("SELECT status FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0] == "completed"
+            assert db.execute("SELECT status FROM horus.job_attempts WHERE executor='script.hermes'").fetchone()[0] == "succeeded"
         # A chave original agora responde com o roteiro (recibo normal).
         assert generate(client, workflow, source="hermes", authorize=True, key="k1").json()["id"] == script["id"]
 
 
-def test_reconcile_late_invalid_result_closes_without_script_and_needs_new_authorization(settings, hermes, monkeypatch):
-    workflow = unknown_run(settings, hermes, monkeypatch, json.dumps({**VALID, "task_id": "b" * 32}))
+def test_reconcile_late_invalid_result_closes_without_script_and_needs_new_authorization(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch):
+    workflow = unknown_run(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, json.dumps({**VALID, "task_id": "b" * 32}))
     with client_for(settings) as client:
         store = client.app.state.store
         spent = (daily_runs(store), daily_tokens(settings, store))
         assert reconcile(client, workflow).status_code == 409
-        assert counts(client)["scripts"] == 0 and len(hermes.runs) == 2
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 0 and len(hermes.runs) == 2
         assert (daily_runs(store), daily_tokens(settings, store)) <= (spent[0], spent[1])
-        with store.connect() as db:
-            run = db.execute("SELECT status FROM cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            run = db.execute("SELECT status FROM horus.cognitive_runs ORDER BY created_at DESC LIMIT 1").fetchone()
             assert run[0] == "invalid_output"
         assert reconcile(client, workflow).status_code == 409  # nada pendente; sem novo envio
         assert len(hermes.runs) == 2
@@ -467,8 +437,8 @@ def test_reconcile_late_invalid_result_closes_without_script_and_needs_new_autho
         assert len(hermes.runs) == 3
 
 
-def test_reconcile_missing_remote_run_stays_pending_and_never_resubmits(settings, hermes, monkeypatch):
-    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+def test_reconcile_missing_remote_run_stays_pending_and_never_resubmits(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch):
+    workflow = unknown_run(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, valid_output())
     hermes.runs.clear()  # o gateway perdeu a execução
     posted = len(hermes.requests)
     with client_for(settings) as client:
@@ -477,39 +447,37 @@ def test_reconcile_missing_remote_run_stays_pending_and_never_resubmits(settings
         for _ in range(2):
             assert reconcile(client, workflow).status_code == 409
         assert not any(r.get("method") == "POST" for r in hermes.requests[posted:])
-        assert len(hermes.runs) == 0 and counts(client)["scripts"] == 0
+        assert len(hermes.runs) == 0 and counts(pg_app_cluster, pg_app_database)["scripts"] == 0
         assert daily_tokens(settings, store) == tokens  # reserva mantida, sem gasto repetido
         assert generate(client, workflow, key="outra", source="hermes", authorize=True).status_code == 409
 
 
-def test_reconcile_requires_pending_and_hermes_executor(settings, hermes):
+def test_reconcile_requires_pending_and_hermes_executor(settings, hermes, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         workflow = approved(client, hermes)
         assert reconcile(client, workflow).status_code == 409  # nada pendente
-    workflow = unknown_run(replace(settings, data_dir=tmp_path / "d2"), hermes, monkeypatch, valid_output()) \
-        if False else workflow
     simulated = replace(settings, workflow_executor="simulated")
     with client_for(simulated) as client:
         assert reconcile(client, workflow).status_code == 409
 
 
-def test_reconcile_gate_closed_and_stale_revision(settings, hermes, monkeypatch, tmp_path):
-    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+def test_reconcile_gate_closed_and_stale_revision(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, tmp_path):
+    workflow = unknown_run(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, valid_output())
     blocked = replace(settings, hermes_profile=tmp_path / "absent")
     with client_for(blocked) as client:
         response = reconcile(client, workflow)
         assert response.status_code == 409 and response.json()["detail"]["code"] == "security_gate"
     with client_for(settings) as client:
         assert reconcile(client, workflow, revision=workflow["revision"] + 1).status_code == 409
-        assert len(hermes.runs) == 2 and counts(client)["scripts"] == 0
+        assert len(hermes.runs) == 2 and counts(pg_app_cluster, pg_app_database)["scripts"] == 0
 
 
-def test_reconcile_valid_result_not_applicable_closes_definitively(settings, hermes, monkeypatch):
-    workflow = unknown_run(settings, hermes, monkeypatch, valid_output())
+def test_reconcile_valid_result_not_applicable_closes_definitively(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch):
+    workflow = unknown_run(settings, hermes, pg_app_cluster, pg_app_database, monkeypatch, valid_output())
     with client_for(settings) as client:
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE workflows SET status='rejected' WHERE id=?", (workflow["id"],))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute("UPDATE horus.workflows SET status='rejected' WHERE id=%s", (workflow["id"],))
         assert reconcile(client, workflow).status_code == 409
-        assert counts(client)["scripts"] == 0 and len(hermes.runs) == 2
-        with client.app.state.store.connect() as db:
-            assert db.execute("SELECT response FROM script_receipts").fetchone()[0] == '{"failed":true}'
+        assert counts(pg_app_cluster, pg_app_database)["scripts"] == 0 and len(hermes.runs) == 2
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert db.execute("SELECT response FROM horus.script_receipts").fetchone()[0] == {"failed": True}

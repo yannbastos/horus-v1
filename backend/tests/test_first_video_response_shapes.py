@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from test_workflows import settings, client_for, create, wait, review  # noqa: F401  (fixture)
+from support_a import client_for, create, pg_admin_connect, review, settings, wait  # noqa: F401  (fixture)
 from test_scripts import approved, decide
 from test_scripts_manual import doc, manual, version
 from test_production import start, finished
@@ -140,7 +140,7 @@ class Recorder:
         return self.call("PUT", url, **kwargs)
 
 
-def run_flow(settings):
+def run_flow(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         rc = Recorder(client)
         # 1) proposta aprovada (executor simulado; nada chama o Hermes)
@@ -193,8 +193,8 @@ def run_flow(settings):
             for index, a in enumerate([a for a in artifacts if a["kind"] in {"scene", "audio"}], start=1)]}
         (root / "asset-provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
         artifacts.append(inspect_artifact(root, "asset-provenance.json", "manifest"))
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE productions SET mode='local_pilot', artifacts=? WHERE id=?", (json.dumps(artifacts), record["id"]))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute("UPDATE horus.productions SET mode='local_pilot', artifacts=%s::jsonb WHERE id=%s", (json.dumps(artifacts), record["id"]))
         asset = next(a for a in provenance["assets"] if a["sha256"] == scene["sha256"])
         # 5) licença, revisão humana da produção, exportação
         rc.get(f"/v1/productions/{record['id']}/license-reviews", state="sem decisões")
@@ -314,8 +314,8 @@ def classify(old, new):
 
 # --- testes -----------------------------------------------------------------------------------------------------
 
-def test_first_video_response_shapes_match_the_snapshot(settings):
-    shapes = run_flow(settings)
+def test_first_video_response_shapes_match_the_snapshot(settings, pg_app_cluster, pg_app_database):
+    shapes = run_flow(settings, pg_app_cluster, pg_app_database)
     required = derive_required()
     if os.environ.get("HORUS_UPDATE_API_SNAPSHOT") == "1":
         if required is None:
@@ -379,8 +379,20 @@ def test_comparator_separates_breaking_from_additive_and_detects_optional_drift(
     assert shape([]) == {ARRAY: "unknown"} and merge(shape([]), shape([1])) == {ARRAY: "integer"}
 
 
-def test_flow_is_deterministic(settings, tmp_path):
-    first = run_flow(settings)
+def test_flow_is_deterministic(settings, pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
     from dataclasses import replace
-    other = replace(settings, data_dir=tmp_path / "outra-base")
-    assert run_flow(other) == first
+    from conftest import _patch_pg_transport
+    from keyring_support import MemoryKeyring
+    from schema_support import schema_database
+
+    first = run_flow(settings, pg_app_cluster, pg_app_database)
+    with schema_database(pg_app_cluster) as (admin, pool):
+        with pool.connection() as conn:
+            other_db = conn.info.dbname
+        admin.execute(
+            "INSERT INTO horus.database_identity(singleton, instance_id, created_at) "
+            "VALUES (true, gen_random_uuid(), now()) ON CONFLICT (singleton) DO NOTHING"
+        )
+        _patch_pg_transport(pg_app_cluster, other_db, MemoryKeyring(), monkeypatch)
+        other = replace(settings, data_dir=tmp_path / "outra-base")
+        assert run_flow(other, pg_app_cluster, other_db) == first
