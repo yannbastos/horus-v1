@@ -609,6 +609,12 @@ export type SecurityHermesCostLimits = {
   estimated_spent_today_usd?: string | null;
   reserved_usd?: string | null;
   runs_today?: number | null;
+  reservation_per_run_usd?: string | null;
+};
+
+export type SecurityHermesCheckpointLimits = {
+  default_ttl_seconds?: number | null;
+  max_ttl_seconds?: number | null;
 };
 
 export type SecurityHermes = {
@@ -620,6 +626,7 @@ export type SecurityHermes = {
   provider_configured: boolean | null;
   network_isolation: SecurityHermesNetworkIsolation | null;
   cost_limits: SecurityHermesCostLimits | null;
+  checkpoint_limits?: SecurityHermesCheckpointLimits | null;
 };
 
 export type SecurityRadar = {
