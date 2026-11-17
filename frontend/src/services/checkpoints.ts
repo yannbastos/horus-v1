@@ -1,4 +1,4 @@
-import type { Connection } from './api';
+import type { Connection, SecurityStatusResponse } from './api';
 import { ApiError, api } from './api';
 
 export type CheckpointAction = 'hermes_run' | 'hermes_script' | 'paid_narration' | 'publish';
@@ -61,6 +61,141 @@ export function formatUsdLimit(amount: string | null | undefined, currency: stri
     return `US$ ${numeric.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} (USD)`;
   }
   return `${numeric.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${currency}`;
+}
+
+/**
+ * Formata uma string decimal positiva em USD para pt-BR sem converter para float.
+ */
+export function formatDecimalUsdPtBr(raw: string): string | null {
+  const trimmed = raw.trim();
+  const match = /^[+]?(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (!match) return null;
+
+  const rawInt = match[1].replace(/^0+(?=\d)/, '') || '0';
+  const intFormatted = rawInt.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+  let frac = match[2] ?? '';
+  while (frac.length > 2 && frac.endsWith('0')) {
+    frac = frac.slice(0, -1);
+  }
+  while (frac.length < 2) {
+    frac += '0';
+  }
+
+  return `US$ ${intFormatted},${frac} (USD)`;
+}
+
+function formatSingleDurationPtBr(seconds: number): string {
+  if (seconds >= 60 && seconds % 60 === 0) {
+    const mins = seconds / 60;
+    return `${mins} ${mins === 1 ? 'minuto' : 'minutos'} (${seconds} segundos)`;
+  }
+  if (seconds >= 60) {
+    const mins = Math.floor(seconds / 60);
+    const rem = seconds % 60;
+    return `${mins} ${mins === 1 ? 'minuto' : 'minutos'} e ${rem} ${rem === 1 ? 'segundo' : 'segundos'} (${seconds} segundos)`;
+  }
+  return `${seconds} ${seconds === 1 ? 'segundo' : 'segundos'}`;
+}
+
+export function formatCheckpointValidityPtBr(
+  defaultTtlSeconds: number | null | undefined,
+  maxTtlSeconds?: number | null | undefined
+): string {
+  if (typeof defaultTtlSeconds !== 'number' || !Number.isFinite(defaultTtlSeconds) || defaultTtlSeconds <= 0) {
+    return 'Não informado';
+  }
+  const normalizedDefault = Math.trunc(defaultTtlSeconds);
+  const base = formatSingleDurationPtBr(normalizedDefault);
+  if (
+    typeof maxTtlSeconds === 'number' &&
+    Number.isFinite(maxTtlSeconds) &&
+    maxTtlSeconds > 0 &&
+    Math.trunc(maxTtlSeconds) !== normalizedDefault
+  ) {
+    return `${base} · máximo: ${formatSingleDurationPtBr(Math.trunc(maxTtlSeconds))}`;
+  }
+  return base;
+}
+
+export type ResolvedCheckpointLimits = {
+  status: 'configured' | 'unconfigured' | 'unknown';
+  reservationPerRunUsd: string | null;
+  estimatedCostLabel: string;
+  limitLabel: string;
+  validityLabel: string;
+  defaultTtlSeconds: number | null;
+  maxTtlSeconds: number | null;
+};
+
+/**
+ * Extrai e formata os limites reais de checkpoint informados por GET /v1/security/status,
+ * degradando com segurança quando o backend é antigo e não expõe os campos novos.
+ */
+export function resolveCheckpointLimits(
+  securityStatus: SecurityStatusResponse | null | undefined
+): ResolvedCheckpointLimits {
+  const costLimits = securityStatus?.hermes?.cost_limits;
+  const checkpointLimits = securityStatus?.hermes?.checkpoint_limits;
+
+  const defaultTtlSeconds =
+    typeof checkpointLimits?.default_ttl_seconds === 'number' &&
+    Number.isFinite(checkpointLimits.default_ttl_seconds) &&
+    checkpointLimits.default_ttl_seconds > 0
+      ? Math.trunc(checkpointLimits.default_ttl_seconds)
+      : null;
+
+  const maxTtlSeconds =
+    typeof checkpointLimits?.max_ttl_seconds === 'number' &&
+    Number.isFinite(checkpointLimits.max_ttl_seconds) &&
+    checkpointLimits.max_ttl_seconds > 0
+      ? Math.trunc(checkpointLimits.max_ttl_seconds)
+      : null;
+
+  const validityLabel = formatCheckpointValidityPtBr(defaultTtlSeconds, maxTtlSeconds);
+
+  if (
+    !costLimits ||
+    typeof costLimits !== 'object' ||
+    !('reservation_per_run_usd' in costLimits) ||
+    costLimits.reservation_per_run_usd === undefined
+  ) {
+    return {
+      status: 'unknown',
+      reservationPerRunUsd: null,
+      estimatedCostLabel: 'Não informado',
+      limitLabel: 'Não informado',
+      validityLabel,
+      defaultTtlSeconds,
+      maxTtlSeconds,
+    };
+  }
+
+  const rawUsd = costLimits.reservation_per_run_usd;
+  if (typeof rawUsd === 'string') {
+    const formatted = formatDecimalUsdPtBr(rawUsd);
+    if (formatted) {
+      return {
+        status: 'configured',
+        reservationPerRunUsd: rawUsd.trim(),
+        estimatedCostLabel: `Até ${formatted}`,
+        limitLabel: formatted,
+        validityLabel,
+        defaultTtlSeconds,
+        maxTtlSeconds,
+      };
+    }
+  }
+
+  return {
+    status: 'unconfigured',
+    reservationPerRunUsd: null,
+    estimatedCostLabel: 'Não configurado',
+    limitLabel: 'Não configurado',
+    validityLabel,
+    defaultTtlSeconds,
+    maxTtlSeconds,
+  };
 }
 
 export async function getCheckpoints(

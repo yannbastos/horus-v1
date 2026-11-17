@@ -4,6 +4,7 @@ import type {
   AnalysisArtifactContent,
   Connection,
   ProposalArtifactContent,
+  SecurityStatusResponse,
   WorkflowArtifact,
   WorkflowDetail,
   WorkflowSummary,
@@ -12,6 +13,7 @@ import {
   authorizeWorkflow,
   cancelWorkflow,
   createManualWorkflow,
+  getSecurityStatus,
   getWorkflow,
   getWorkflows,
   reconcileWorkflow,
@@ -25,7 +27,7 @@ import ScriptReview, { type AutoOpenEditorRequest } from './ScriptReview';
 
 
 import { HumanCheckpointDialog } from '../components/HumanCheckpointDialog';
-import { formatSecurityGateError } from '../services/checkpoints';
+import { formatSecurityGateError, resolveCheckpointLimits } from '../services/checkpoints';
 
 const STATUS_LABELS: Record<string, string> = {
   queued: 'Na fila',
@@ -102,6 +104,39 @@ export default function EditorialWorkflows({
 
   const [checkpointDialogOpen, setCheckpointDialogOpen] = useState(false);
   const [dialogError, setDialogError] = useState('');
+  const [securityStatus, setSecurityStatus] = useState<SecurityStatusResponse | null>(null);
+  const [securityStatusLoading, setSecurityStatusLoading] = useState(false);
+
+  const checkpointLimits = resolveCheckpointLimits(securityStatus);
+
+  useEffect(() => {
+    if (!connection) {
+      setSecurityStatus(null);
+      setSecurityStatusLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSecurityStatusLoading(true);
+    void getSecurityStatus(connection, controller.signal)
+      .then(status => {
+        if (!controller.signal.aborted) {
+          setSecurityStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setSecurityStatus(null);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setSecurityStatusLoading(false);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [connection]);
 
   // Initial fetch and when connection changes
   async function refreshList(selectFirst = false) {
@@ -257,6 +292,7 @@ export default function EditorialWorkflows({
 
   async function executeAuthorize(fromDialog = false) {
     if (!connection || !current || !current.pending_authorization) return;
+    if (fromDialog && checkpointLimits.status !== 'configured') return;
     setBusy(true);
     setError('');
     setDialogError('');
@@ -288,6 +324,19 @@ export default function EditorialWorkflows({
     }
     setDialogError('');
     setCheckpointDialogOpen(true);
+    if (connection) {
+      setSecurityStatusLoading(true);
+      void getSecurityStatus(connection)
+        .then(status => {
+          setSecurityStatus(status);
+        })
+        .catch(() => {
+          setSecurityStatus(null);
+        })
+        .finally(() => {
+          setSecurityStatusLoading(false);
+        });
+    }
   }
 
   async function handleCancel() {
@@ -958,15 +1007,17 @@ export default function EditorialWorkflows({
       <HumanCheckpointDialog
         open={checkpointDialogOpen && Boolean(current?.pending_authorization)}
         busy={busy}
+        loadingLimits={securityStatusLoading}
+        limitStatus={checkpointLimits.status}
         error={dialogError}
         what={
           current?.pending_authorization
             ? `Execução cognitiva no Hermes — etapa ${STAGE_LABELS[current.pending_authorization.stage] || current.pending_authorization.stage} (workflow ${current.id})`
             : 'Execução cognitiva no Hermes'
         }
-        estimatedCostUsd="Até US$ 0,20 (USD)"
-        limitUsd="US$ 0,20 (USD)"
-        validityLabel="15 minutos (900 segundos)"
+        estimatedCostUsd={checkpointLimits.estimatedCostLabel}
+        limitUsd={checkpointLimits.limitLabel}
+        validityLabel={checkpointLimits.validityLabel}
         onCancel={() => {
           setCheckpointDialogOpen(false);
           setDialogError('');

@@ -27,7 +27,16 @@ const baseSecurityStatus = {
     memory: { external_enabled: false, isolated: true },
     provider_configured: true,
     network_isolation: { isolated: true },
-    cost_limits: { max_usd_per_run: '0.20' },
+    cost_limits: {
+      configured: true,
+      max_tokens_per_run: 4000,
+      max_tokens_per_day: 20000,
+      reservation_per_run_usd: '0.20',
+    },
+    checkpoint_limits: {
+      default_ttl_seconds: 900,
+      max_ttl_seconds: 900,
+    },
   },
   credentials: { items: [] },
   private_mode: { available: false, enabled: false, reason: 'Indisponível nesta versão.' },
@@ -111,6 +120,10 @@ test.describe('Checkpoints humanos (HOR-107)', () => {
           headers: corsHeaders,
           json: { state: 'ready', connected: true, cli_available: true, configured: true, message: 'OK', checked_at: null, version: '1.0', features: [] },
         });
+        return;
+      }
+      if (path === '/v1/security/status') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: baseSecurityStatus });
         return;
       }
       if (path === '/v1/workflows') {
@@ -224,6 +237,10 @@ test.describe('Checkpoints humanos (HOR-107)', () => {
       }
       if (path === '/v1/hermes') {
         await route.fulfill({ status: 200, headers: corsHeaders, json: { state: 'ready', connected: true, cli_available: true, configured: true, message: 'OK', checked_at: null, version: '1.0', features: [] } });
+        return;
+      }
+      if (path === '/v1/security/status') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: baseSecurityStatus });
         return;
       }
       if (path === '/v1/workflows') {
@@ -413,5 +430,289 @@ test.describe('Checkpoints humanos (HOR-107)', () => {
     await expect(table.getByText('Roteiro via Hermes')).toBeVisible();
 
     await assertNoAxeViolations(page, 'Privacidade e Segurança com Checkpoints Humanos');
+  });
+
+  test('HOR-158 (a/c): exibe limites reais do backend (0.37 USD e 1200 s) sem campo editável e sem ampliar valores na autorização', async ({
+    page,
+  }) => {
+    let workflow = makeWorkflow();
+    const capturedPayloads: Array<Record<string, unknown>> = [];
+
+    const customSecurityStatus = {
+      ...baseSecurityStatus,
+      hermes: {
+        ...baseSecurityStatus.hermes,
+        cost_limits: {
+          ...baseSecurityStatus.hermes.cost_limits,
+          reservation_per_run_usd: '0.37',
+        },
+        checkpoint_limits: {
+          default_ttl_seconds: 1200,
+          max_ttl_seconds: 1200,
+        },
+      },
+    };
+
+    await page.route(`${BACKEND_URL}/**`, async route => {
+      const request = route.request();
+      if (request.method() === 'OPTIONS') {
+        await route.fulfill({ status: 204, headers: corsHeaders });
+        return;
+      }
+      const path = new URL(request.url()).pathname;
+
+      if (path === '/health') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: { status: 'ready', database_id: 'db-1', hermes_connected: true, version: '0.1.0' },
+        });
+        return;
+      }
+      if (path === '/v1/hermes') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: { state: 'ready', connected: true, cli_available: true, configured: true, message: 'OK', checked_at: null, version: '1.0', features: [] },
+        });
+        return;
+      }
+      if (path === '/v1/security/status') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: customSecurityStatus });
+        return;
+      }
+      if (path === '/v1/workflows') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: [workflow] });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}`) {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: workflow });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}/scripts`) {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: [] });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}/authorize` && request.method() === 'POST') {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        capturedPayloads.push(body);
+        workflow = makeWorkflow({
+          revision: 3,
+          status: 'running',
+          pending_authorization: null,
+        });
+        await route.fulfill({ status: 200, headers: corsHeaders, json: workflow });
+        return;
+      }
+      await route.fulfill({ status: 200, headers: corsHeaders, json: {} });
+    });
+
+    await connectSession(page);
+    await page.getByRole('button', { name: 'Produção', exact: true }).click();
+    await page.getByRole('button', { name: 'Autorizar uma execução' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    await expect(dialog.getByText(/US\$ 0,37 \(USD\)/).first()).toBeVisible();
+    await expect(dialog.getByText(/20 minutos \(1200 segundos\)/)).toBeVisible();
+    await expect(dialog.getByText(/0,20/)).toHaveCount(0);
+    await expect(dialog.getByText(/15 minutos|900 segundos/)).toHaveCount(0);
+
+    // Nenhum campo editável de limite ou validade
+    await expect(dialog.locator('input[type="text"], input[type="number"], select, textarea')).toHaveCount(0);
+
+    await dialog.getByRole('checkbox').check();
+    await dialog.getByRole('button', { name: /Confirmar checkpoint e autorizar/i }).click();
+
+    expect(capturedPayloads).toHaveLength(1);
+    expect(capturedPayloads[0]).toEqual({
+      expected_revision: 2,
+      job_id: 'job-cog-1',
+    });
+    expect(capturedPayloads[0]).not.toHaveProperty('limit_amount');
+    expect(capturedPayloads[0]).not.toHaveProperty('reservation_per_run_usd');
+    expect(capturedPayloads[0]).not.toHaveProperty('ttl_seconds');
+  });
+
+  test('HOR-158 (b): reservation_per_run_usd null exibe bloqueio claro e nenhuma ação que contorne + axe', async ({
+    page,
+  }) => {
+    const workflow = makeWorkflow();
+    let authorizeCalls = 0;
+
+    const unconfiguredSecurityStatus = {
+      ...baseSecurityStatus,
+      real_execution_allowed: false,
+      hermes: {
+        ...baseSecurityStatus.hermes,
+        cost_limits: {
+          ...baseSecurityStatus.hermes.cost_limits,
+          configured: false,
+          reservation_per_run_usd: null,
+        },
+        checkpoint_limits: {
+          default_ttl_seconds: 1200,
+          max_ttl_seconds: 1200,
+        },
+      },
+    };
+
+    await page.route(`${BACKEND_URL}/**`, async route => {
+      const request = route.request();
+      if (request.method() === 'OPTIONS') {
+        await route.fulfill({ status: 204, headers: corsHeaders });
+        return;
+      }
+      const path = new URL(request.url()).pathname;
+
+      if (path === '/health') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: { status: 'ready', database_id: 'db-1', hermes_connected: true, version: '0.1.0' },
+        });
+        return;
+      }
+      if (path === '/v1/hermes') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: { state: 'ready', connected: true, cli_available: true, configured: true, message: 'OK', checked_at: null, version: '1.0', features: [] },
+        });
+        return;
+      }
+      if (path === '/v1/security/status') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: unconfiguredSecurityStatus });
+        return;
+      }
+      if (path === '/v1/workflows') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: [workflow] });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}`) {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: workflow });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}/scripts`) {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: [] });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}/authorize` && request.method() === 'POST') {
+        authorizeCalls += 1;
+        await route.fulfill({ status: 409, headers: corsHeaders, json: { detail: 'blocked' } });
+        return;
+      }
+      await route.fulfill({ status: 200, headers: corsHeaders, json: {} });
+    });
+
+    await connectSession(page);
+    await page.getByRole('button', { name: 'Produção', exact: true }).click();
+    await page.getByRole('button', { name: 'Autorizar uma execução' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Não configurado').first()).toBeVisible();
+    await expect(dialog.getByText(/20 minutos \(1200 segundos\)/)).toBeVisible();
+
+    const blockedAlert = dialog.getByTestId('checkpoint-limit-blocked');
+    await expect(blockedAlert).toBeVisible();
+    await expect(blockedAlert).toHaveAttribute('role', 'alert');
+    await expect(blockedAlert).toContainText(/não configurado no backend/i);
+    await expect(blockedAlert).toContainText(/permanece bloqueada pelo backend/i);
+
+    await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: /Confirmar checkpoint/i })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Fechar' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Fechar' })).toBeFocused();
+
+    await assertNoAxeViolations(page, 'diálogo de checkpoint com limite não configurado');
+    expect(authorizeCalls).toBe(0);
+  });
+
+  test('HOR-158 (d): backend antigo sem os campos degrada sem erro para "Não informado" e bloqueia contorno + axe', async ({
+    page,
+  }) => {
+    const workflow = makeWorkflow();
+    const pageErrors: string[] = [];
+    page.on('pageerror', err => pageErrors.push(err.message));
+
+    const legacySecurityStatus = {
+      schema_version: 'security.status.v1',
+      checked_at: '2026-11-14T22:00:00Z',
+      real_execution_allowed: true,
+      blockers: [],
+      processing: { local_only: true, external_connections: [] },
+      hermes: {
+        connection: 'loopback',
+        profile_found: true,
+        profile_label: 'horus',
+        tools: { restricted: true, dangerous: [], effective: [], required_for_editorial: [] },
+        memory: { local_enabled: true, user_profile_enabled: true, write_approval: true, external_provider: null },
+        provider_configured: true,
+        network_isolation: { enforced: true, mechanism: 'loopback', reason: null },
+        cost_limits: { configured: true, max_tokens_per_run: 4000, max_tokens_per_day: 20000 },
+      },
+      credentials: { items: [] },
+      private_mode: { available: false, enabled: false, reason: 'Indisponível nesta versão.' },
+      audit: { available: false, reason: 'Indisponível nesta versão.' },
+    };
+
+    await page.route(`${BACKEND_URL}/**`, async route => {
+      const request = route.request();
+      if (request.method() === 'OPTIONS') {
+        await route.fulfill({ status: 204, headers: corsHeaders });
+        return;
+      }
+      const path = new URL(request.url()).pathname;
+
+      if (path === '/health') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: { status: 'ready', database_id: 'db-1', hermes_connected: true, version: '0.1.0' },
+        });
+        return;
+      }
+      if (path === '/v1/hermes') {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: { state: 'ready', connected: true, cli_available: true, configured: true, message: 'OK', checked_at: null, version: '1.0', features: [] },
+        });
+        return;
+      }
+      if (path === '/v1/security/status') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: legacySecurityStatus });
+        return;
+      }
+      if (path === '/v1/workflows') {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: [workflow] });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}`) {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: workflow });
+        return;
+      }
+      if (path === `/v1/workflows/${workflow.id}/scripts`) {
+        await route.fulfill({ status: 200, headers: corsHeaders, json: [] });
+        return;
+      }
+      await route.fulfill({ status: 200, headers: corsHeaders, json: {} });
+    });
+
+    await connectSession(page);
+    await page.getByRole('button', { name: 'Produção', exact: true }).click();
+    await page.getByRole('button', { name: 'Autorizar uma execução' }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Não informado').first()).toBeVisible();
+    await expect(dialog.getByTestId('checkpoint-limit-blocked')).toContainText(/não informado pelo backend atual/i);
+    await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: /Confirmar checkpoint/i })).toHaveCount(0);
+
+    await assertNoAxeViolations(page, 'diálogo de checkpoint em backend antigo');
+    expect(pageErrors).toEqual([]);
   });
 });

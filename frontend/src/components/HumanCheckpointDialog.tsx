@@ -4,6 +4,8 @@ import { StatusMessage } from './StatusMessage';
 export interface HumanCheckpointDialogProps {
   open: boolean;
   busy?: boolean;
+  loadingLimits?: boolean;
+  limitStatus?: 'configured' | 'unconfigured' | 'unknown';
   error?: string;
   what: string;
   estimatedCostUsd: string;
@@ -35,6 +37,8 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
 export function HumanCheckpointDialog({
   open,
   busy = false,
+  loadingLimits = false,
+  limitStatus = 'configured',
   error,
   what,
   estimatedCostUsd,
@@ -50,6 +54,7 @@ export function HumanCheckpointDialog({
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const checkboxRef = useRef<HTMLInputElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const canConfirm = limitStatus === 'configured' && !loadingLimits;
 
   useEffect(() => {
     if (!open) {
@@ -59,7 +64,12 @@ export function HumanCheckpointDialog({
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const frame = window.requestAnimationFrame(() => {
-      checkboxRef.current?.focus();
+      if (checkboxRef.current) {
+        checkboxRef.current.focus();
+      } else if (dialogRef.current) {
+        const focusable = getFocusableElements(dialogRef.current);
+        (focusable[0] ?? dialogRef.current).focus();
+      }
     });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !busy) {
@@ -156,38 +166,62 @@ export function HumanCheckpointDialog({
           </div>
         </dl>
 
+        {loadingLimits && !canConfirm && (
+          <StatusMessage state="loading" testId="checkpoint-limits-loading">
+            Consultando limites reais configurados no backend…
+          </StatusMessage>
+        )}
+
+        {!loadingLimits && limitStatus === 'unconfigured' && (
+          <StatusMessage state="error" testId="checkpoint-limit-blocked">
+            Limite de reserva por execução não configurado no backend. A execução real permanece bloqueada pelo
+            backend até que um limite em USD seja configurado.
+          </StatusMessage>
+        )}
+
+        {!loadingLimits && limitStatus === 'unknown' && (
+          <StatusMessage state="error" testId="checkpoint-limit-blocked">
+            Limite de reserva por execução não informado pelo backend atual. A execução real permanece bloqueada sem
+            confirmação dos limites do servidor.
+          </StatusMessage>
+        )}
+
         {error && (
           <StatusMessage state="error" testId="checkpoint-dialog-error">
             {error}
           </StatusMessage>
         )}
 
-        <label className="checkpoint-confirm-check">
-          <input
-            ref={checkboxRef}
-            type="checkbox"
-            checked={confirmed}
-            disabled={busy}
-            onChange={event => setConfirmed(event.target.checked)}
-          />
-          <span>
-            Confirmo que revisei o escopo, o custo estimado, o limite em USD, a validade e o uso único deste
-            checkpoint.
-          </span>
-        </label>
+        {canConfirm && (
+          <label className="checkpoint-confirm-check">
+            <input
+              ref={checkboxRef}
+              type="checkbox"
+              checked={confirmed}
+              disabled={busy}
+              onChange={event => setConfirmed(event.target.checked)}
+            />
+            <span>
+              Confirmo que revisei o escopo, o custo estimado, o limite em USD, a validade e o uso único deste
+              checkpoint.
+            </span>
+          </label>
+        )}
 
         <div className="actions">
           <button type="button" className="button" disabled={busy} onClick={onCancel}>
-            Cancelar
+            {canConfirm ? 'Cancelar' : 'Fechar'}
           </button>
-          <button
-            type="button"
-            className="button primary"
-            disabled={!confirmed || busy}
-            onClick={() => void onConfirm()}
-          >
-            {busy ? 'Autorizando…' : confirmLabel}
-          </button>
+          {canConfirm && (
+            <button
+              type="button"
+              className="button primary"
+              disabled={!confirmed || busy}
+              onClick={() => void onConfirm()}
+            >
+              {busy ? 'Autorizando…' : confirmLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>
