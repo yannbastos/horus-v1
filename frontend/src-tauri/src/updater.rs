@@ -288,7 +288,7 @@ pub async fn update_check(app: AppHandle) -> UpdateState {
                 return failure(&app, "downgrade_refused");
             }
             if !local_url(update.download_url.as_str()) {
-                return failure(&app, "network");
+                return failure(&app, "manifest_invalid");
             }
             change(&app, |m| {
                 m.state.phase = "available".into();
@@ -306,7 +306,7 @@ pub async fn update_check(app: AppHandle) -> UpdateState {
             m.update = None;
             m.state.last_check_at = Some(timestamp());
         }),
-        Err(_) => failure(&app, "network"),
+        Err(error) => failure(&app, manifest_error(&error)),
     }
 }
 fn timestamp() -> String {
@@ -582,7 +582,9 @@ impl PayloadBackend for LivePayload<'_> {
         let receipt = directory.join("pending-health.json");
         std::fs::write(
             &receipt,
-            json!({"target_version":self.update.version}).to_string(),
+            json!({"target_version":self.update.version,
+                "backup_path_label":snapshot(self.backend.app).backup_path_label})
+            .to_string(),
         )
         .map_err(|_| "install_failed")?;
         self.update.install(bytes).map_err(|_| {
@@ -598,7 +600,11 @@ fn finish_health(
     health: Option<&Value>,
 ) -> std::io::Result<bool> {
     let healthy = target == current
-        && health.is_some_and(|h| h["ok"] == true && h["integrity_check"] == "ok");
+        && health.is_some_and(|h| {
+            h["ok"] == true
+                && h["integrity_check"] == "ok"
+                && h["schema_version"].as_u64().is_some_and(|v| v > 0)
+        });
     std::fs::write(directory.join("last-update-result.json"),json!({"target_version":target,"current_version":current,"healthy":healthy,"checked_at":timestamp()}).to_string())?;
     if healthy {
         std::fs::remove_file(directory.join("pending-health.json"))?;
@@ -639,12 +645,22 @@ async fn verify_restart(app: AppHandle, pending: Value) {
     )
     .unwrap_or(false);
     managed.verifying.store(false, Ordering::Release);
+    change(&app, |m| {
+        apply_restart_result(&mut m.state, &pending, healthy)
+    });
+}
+fn apply_restart_result(state: &mut UpdateState, pending: &Value, healthy: bool) {
     if healthy {
-        phase(&app, "idle");
+        state.transition("idle");
     } else {
-        failure(&app, "install_failed");
+        state.backup_path_label = pending["backup_path_label"]
+            .as_str()
+            .filter(|label| safe_backup_label(label))
+            .map(str::to_owned);
+        state.fail("startup_failed");
     }
 }
+
 async fn install_reserved(
     app: &AppHandle,
     client: &reqwest::Client,
@@ -666,6 +682,26 @@ async fn install_reserved(
         Err(code) => failure(app, code),
     }
 }
+fn safe_backup_label(label: &str) -> bool {
+    label
+        .strip_prefix("pre-update-")
+        .and_then(|s| s.strip_suffix(".zip"))
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+}
+fn manifest_error(error: &tauri_plugin_updater::Error) -> &'static str {
+    use tauri_plugin_updater::Error;
+    match error {
+        Error::Serialization(_)
+        | Error::Semver(_)
+        | Error::UrlParse(_)
+        | Error::TargetNotFound(_)
+        | Error::TargetsNotFound(_) => "manifest_invalid",
+        Error::Reqwest(e) if e.is_decode() => "manifest_invalid",
+        // ReleaseNotFound also means a non-success HTTP status, not invalid JSON.
+        Error::Reqwest(_) | Error::Network(_) | Error::ReleaseNotFound => "network",
+        _ => download_error(error),
+    }
+}
 fn download_error(error: &tauri_plugin_updater::Error) -> &'static str {
     match error {
         tauri_plugin_updater::Error::Minisign(_)
@@ -673,7 +709,10 @@ fn download_error(error: &tauri_plugin_updater::Error) -> &'static str {
         | tauri_plugin_updater::Error::SignatureUtf8(_)
         | tauri_plugin_updater::Error::SignedVersionMismatch { .. }
         | tauri_plugin_updater::Error::MissingSignedVersion => "signature_invalid",
-        _ => "network",
+        tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_) => {
+            "network"
+        }
+        _ => "install_failed",
     }
 }
 
@@ -686,10 +725,22 @@ mod tests {
             std::env::temp_dir().join(format!("horus-updater-health-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("pending-health.json"), "{}").unwrap();
-        let good = json!({"ok":true,"integrity_check":"ok"});
-        for (current, health) in [("1.0.0", Some(&good)), ("1.1.0", None)] {
+        let good = json!({"ok":true,"integrity_check":"ok","schema_version":9});
+        let corrupt = json!({"ok":true,"integrity_check":"corrupt","schema_version":9});
+        let invalid_schema = json!({"ok":true,"integrity_check":"ok","schema_version":"invalid"});
+        let missing_schema = json!({"ok":true,"integrity_check":"ok"});
+        for (current, health) in [
+            ("1.0.0", Some(&good)),
+            ("1.1.0", None),
+            ("1.1.0", Some(&corrupt)),
+            ("1.1.0", Some(&invalid_schema)),
+            ("1.1.0", Some(&missing_schema)),
+        ] {
             assert!(!finish_health(&root, "1.1.0", current, health).unwrap());
             assert!(root.join("pending-health.json").exists());
+            let mut state = UpdateState::initial(current.into(), true, true);
+            apply_restart_result(&mut state, &json!({"target_version":"1.1.0"}), false);
+            assert_eq!(state.error.unwrap()["code"], "startup_failed");
             let stored: Value = serde_json::from_slice(
                 &std::fs::read(root.join("last-update-result.json")).unwrap(),
             )
@@ -804,6 +855,88 @@ mod tests {
             )),
             "signature_invalid"
         );
+    }
+    #[test]
+    fn malformed_http_json_is_manifest_invalid_not_network() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0; 4096];
+            stream.read(&mut request).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{").unwrap();
+        });
+        let error = tauri::async_runtime::block_on(async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap_err()
+        });
+        server.join().unwrap();
+        assert!(error.is_decode());
+        assert_eq!(manifest_error(&error.into()), "manifest_invalid");
+    }
+    #[test]
+    fn restart_failure_preserves_only_safe_backup_label_and_can_recover() {
+        let mut state = UpdateState::initial("1.1.0".into(), true, true);
+        let label = "pre-update-00000000000040008000000000000001.zip";
+        let pending = json!({"backup_path_label": label});
+        for _ in 0..2 {
+            apply_restart_result(&mut state, &pending, false);
+            assert_eq!(state.error.as_ref().unwrap()["code"], "startup_failed");
+            assert_eq!(state.backup_path_label.as_deref(), Some(label));
+        }
+        apply_restart_result(
+            &mut state,
+            &json!({"backup_path_label":"C:/private/secret"}),
+            false,
+        );
+        assert!(state.backup_path_label.is_none());
+        apply_restart_result(&mut state, &pending, true);
+        assert_eq!(state.phase, "idle");
+        assert!(state.error.is_none());
+    }
+    #[test]
+    fn classifications_preserve_transport_manifest_signature_install_and_startup() {
+        use tauri_plugin_updater::Error;
+        assert_eq!(manifest_error(&Error::Network("offline".into())), "network");
+        assert_eq!(manifest_error(&Error::ReleaseNotFound), "network");
+        let invalid = serde_json::from_str::<Value>("{").unwrap_err();
+        assert_eq!(
+            manifest_error(&Error::Serialization(invalid)),
+            "manifest_invalid"
+        );
+        assert_eq!(
+            manifest_error(&Error::TargetNotFound("windows".into())),
+            "manifest_invalid"
+        );
+        assert_eq!(
+            manifest_error(&Error::MissingSignedVersion),
+            "signature_invalid"
+        );
+        assert_eq!(
+            download_error(&Error::Io(std::io::Error::other("disk"))),
+            "install_failed"
+        );
+        let mut state = UpdateState::initial("1.1.0".into(), true, true);
+        state.fail("startup_failed");
+        assert_eq!(state.error.unwrap()["code"], "startup_failed");
+        assert!(safe_backup_label(
+            "pre-update-00000000-0000-4000-8000-000000000001.zip"
+        ));
+        assert!(!safe_backup_label("C:/Users/private/backup.zip"));
     }
     struct MockBackend {
         calls: Mutex<Vec<&'static str>>,

@@ -27,6 +27,8 @@ export type UpdateProgress = {
 
 export type UpdateErrorCode =
   | 'network'
+  | 'manifest_invalid'
+  | 'startup_failed'
   | 'signature_invalid'
   | 'downgrade_refused'
   | 'backup_failed'
@@ -111,23 +113,35 @@ const ERROR_MESSAGES_BY_CODE: Record<string, string> = {
   network:
     'Não foi possível consultar ou baixar a atualização por erro de rede. Verifique sua conexão e tente novamente.',
   signature_invalid:
-    'A assinatura digital do pacote de atualização é inválida. A instalação foi recusada por segurança.',
+    'A assinatura digital do pacote de atualização é inválida. A instalação foi recusada por segurança. Não execute o pacote; aguarde um pacote corrigido.',
   downgrade_refused:
     'A versão informada pelo canal é igual ou inferior à instalada e foi recusada por segurança.',
   backup_failed:
     'Não foi possível criar o backup dos dados locais antes da atualização. Nenhuma alteração foi feita.',
+  manifest_invalid:
+    'O manifesto da atualização é inválido ou incompatível. Nenhuma instalação foi iniciada. Aguarde a correção do canal antes de verificar novamente.',
+  startup_failed:
+    'A inicialização após a atualização não foi validada: a versão, o backend ou a saúde dos dados não foram confirmados. Preserve os dados e siga a recuperação manual abaixo.',
   install_failed:
-    'A instalação da atualização falhou. Seus dados locais e o backup foram preservados.',
+    'A instalação da atualização falhou. Preserve os dados e consulte a recuperação manual abaixo antes de tentar novamente.',
   not_configured:
     'Este build não possui um canal de atualização configurado.',
 };
 
 export function formatUpdateErrorMessage(error: UpdateError): string {
-  return ERROR_MESSAGES_BY_CODE[error.code] ?? (error.message || 'Erro desconhecido ao atualizar.');
+  const message = ERROR_MESSAGES_BY_CODE[error.code];
+  return typeof message === 'string' ? message : 'Não foi possível concluir a atualização. Preserve os dados e procure suporte.';
+}
+
+// Compatibilidade com recibos antigos: somente versões numéricas, nunca texto bruto.
+export function formatUpdateErrorDetail(error: UpdateError): string | null {
+  if (error.code !== 'downgrade_refused') return null;
+  const versions = /^manifest version ([0-9]+\.[0-9]+\.[0-9]+) <= current ([0-9]+\.[0-9]+\.[0-9]+)$/.exec(error.message);
+  return versions ? `${versions[1]} <= current ${versions[2]}` : null;
 }
 
 export function canRetryUpdateError(code: string): boolean {
-  return code !== 'signature_invalid' && code !== 'downgrade_refused' && code !== 'not_configured';
+  return code === 'network' || code === 'backup_failed' || code === 'install_failed';
 }
 
 export function formatUpdateBytes(bytes: number): string {
