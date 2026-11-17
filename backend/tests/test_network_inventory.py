@@ -127,6 +127,7 @@ ALLOWLIST: dict[str, dict[str, str]] = {
     "radar_youtube/collector.py": {"url:www.youtube.com": "F-03"},  # só monta links de registros públicos
 }
 ALLOWLIST["narration/providers.py"]["call:run_sync"] = "F-08"
+ALLOWLIST["database/transport.py"] = {"import:socket": "F-22", "call:getaddrinfo": "F-22"}
 
 # Frontend: só o cliente HTTP dos serviços fala com a API local (CSP do Tauri limita connect-src a loopback).
 FRONTEND_FETCH_FILES = {"services/api.ts", "services/narration.ts", "services/production.ts", "services/exports.ts", "services/imports.ts"}  # F-14

@@ -25,6 +25,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .narration.service import NarrationService, narration_router
 from .config import Settings
+from .database import install_database
+from .database.router import error_response as database_error_response
 from .diagnostics import diagnose
 from .exports import ExportService
 from .publishing import MetadataRequest, MetadataTextError, PublishingService, ThumbnailRequest
@@ -37,7 +39,7 @@ from .radar_workflow import RadarWorkflowRequest, adapt, demo, eligibility, summ
 from .security import SecurityGate, require_secure, security_status
 from .production import ProductionRequest, ProductionReviewRequest
 from .scripts import HermesScriptRequest, ManualScriptRequest, ScriptRequest, ScriptReviewRequest, ScriptService, ScriptVersionRequest
-from .body_limit import BodyLimitMiddleware
+from .database.body_limit import DatabaseBodyLimitMiddleware
 from .error_center import ErrorCenter
 from .review_comments import CommentRequest, DecisionRequest, ReviewCommentService
 from .data_deletion import DataDeletionService, DeletionExecuteRequest, DeletionPreviewRequest
@@ -147,10 +149,12 @@ def create_app(settings: Settings, shutdown=None, ready=None):
 
     app = FastAPI(title="Hórus local", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(narration_router(narration))
+    install_database(app, settings.data_dir, lambda: update_reserved or mutations > 1 or
+                     manager.active_id is not None or manager.active_process is not None or narration.active_previews > 0)
     app.state.narration = narration
     app.state.radar = radar_state
     app.state.store, app.state.manager = store, manager
-    app.add_middleware(BodyLimitMiddleware)  # interno à autenticação: sem token, o corpo nem é lido
+    app.add_middleware(DatabaseBodyLimitMiddleware, manager=app.state.database)  # interno à autenticação
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.origins), allow_methods=["GET", "POST", "PUT", "DELETE"],
                        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"])
 
@@ -183,7 +187,9 @@ def create_app(settings: Settings, shutdown=None, ready=None):
             "/v1/update/reservation", "/v1/update/backup", "/v1/shutdown"}
         if mutation:
             with update_gate:
-                if update_reserved:
+                if update_reserved or app.state.database.changing:
+                    if request.url.path.startswith("/v1/database/"):
+                        return database_error_response(app.state.database, "database_busy", 409)
                     return JSONResponse({"detail": "Atualização reservada; tente após reiniciar."}, status_code=409)
                 mutations += 1
         try:

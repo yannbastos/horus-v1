@@ -74,3 +74,22 @@ Nenhum fluxo externo **sem** controle algum foi encontrado além dos de S-1 a S-
 `backend/tests/test_network_inventory.py` analisa por AST (sem rede e sem importar os módulos) todos os arquivos de `backend/src/horus_backend/`. Falha se encontrar, fora da `ALLOWLIST`: import de módulo de rede/motor de download (`socket`, `ssl`, `urllib.request`, `http.*`, `httpx`, `requests`, `faster_whisper`, `kokoro`, `yt_dlp`…), chamada de rede ou processo (`urlopen`, `build_opener`, `open_connection`, `subprocess.run`, `create_subprocess_exec`, `OwnedProcess.start`, `from_pretrained`, `WhisperModel`…), importação dinâmica, URL externa em literal (docstrings ignoradas) ou `fetch`/`node:net` em JavaScript embutido. Também falha quando uma entrada da `ALLOWLIST` deixa de existir e quando cita um ID sem linha aqui. Um segundo teste limita o `fetch` do frontend aos quatro clientes de serviço (F-14).
 
 Limites: análise estática; não cobre código de terceiros, binários externos nem a fábrica (F-18), e não prova comportamento em execução. A auditoria de rede do render (F-12) é o controle em tempo de execução.
+
+## F-22 — PostgreSQL operacional (HOR-164 I1)
+
+Transporte TCP libpq/psycopg em `backend/src/horus_backend/database/transport.py`,
+fora do gateway HTTP. Destino permitido neste incremento: um label DNS sob
+`.pooler.supabase.com`, TCP 5432 (sessão Supavisor); hostname real do projeto
+**pendente de confirmação após provisionamento**. Direto/IPv6
+`db.<ref>.supabase.co` não autorizado neste corte. Cada nova conexão resolve
+A/AAAA, rejeita qualquer IP privado/loopback/link-local/metadata/reservado e
+fixa hostaddr validado preservando o hostname TLS; sem opções libpq do cliente.
+TLS verify-full com CA pública Supabase embarcada e fingerprint no README do
+pacote. Gatilho: configuração/teste autenticado local ou startup com cofre
+previamente configurado; GET de status não abre conexões. Dados: autenticação
+horus_app e consultas de diagnóstico (papel/grants/ledger/identidade), depois
+UoWs dos incrementos seguintes; sem mídia, dados reais ou migração neste I1.
+Senha write-only no cofre nativo versionado, sem fallback para arquivo/env;
+falha bloqueia operação. Pool 1–4 + coordenação, timeouts/fila/retry limitados.
+Estado: implementado para testes sintéticos locais; Supabase real não validado.
+Inventário mantido junto à ALLOWLIST de `test_network_inventory.py`.
