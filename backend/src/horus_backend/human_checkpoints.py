@@ -13,17 +13,22 @@ Nada aqui ativa provedor, publica ou acessa rede.
 """
 from __future__ import annotations
 
-import json
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from .security import SecurityGate, cost_reservation
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+
+from .security import SecurityGate, cost_reservation, pg_clock
+from .storage import _iso, canonical_json_bytes
 
 ACTIONS = ("hermes_run", "hermes_script", "paid_narration", "publish")
 MAX_TTL_SECONDS = 3600
 DEFAULT_TTL_SECONDS = 900
+CHECKPOINT_LOCK_NAMESPACE = 16411
 COLUMNS = ("seq", "id", "action", "subject", "description", "approved_by", "operator_id", "approved_at", "expires_at",
            "limit_amount", "currency", "consumed_at", "consumed_ref")
 _SHA = re.compile(r"[a-f0-9]{64}")
@@ -41,10 +46,6 @@ class CheckpointRefused(SecurityGate):
         self.code = code
 
 
-def _iso(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat()
-
-
 def _money(value) -> Decimal | None:
     if value is None:
         return None
@@ -56,11 +57,44 @@ def _money(value) -> Decimal | None:
         raise ValueError("Valor monetário inválido.") from None
 
 
+def _consume_amount(value) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        dec = value
+    elif isinstance(value, (int, str)) and not isinstance(value, bool):
+        try:
+            dec = Decimal(str(value))
+        except InvalidOperation:
+            raise ValueError("Valor monetário inválido.") from None
+    else:
+        raise ValueError("Valor monetário inválido.")
+    if not dec.is_finite() or dec < 0:
+        raise ValueError("Valor monetário inválido.")
+    return dec
+
+
+def _format_row(row: dict) -> dict:
+    item = {c: row[c] for c in COLUMNS}
+    for col in ("approved_at", "expires_at", "consumed_at"):
+        item[col] = _iso(item[col])
+    if item["limit_amount"] is not None:
+        item["limit_amount"] = str(item["limit_amount"])
+    return item
+
+
+def _acquire_checkpoint_lock(conn, action: str, subject: str) -> None:
+    conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))", (CHECKPOINT_LOCK_NAMESPACE, f"{action}:{subject}"))
+
+
 class CheckpointService:
     def __init__(self, store, audit=None, clock=None, *, settings=None):
         self.store, self.audit = store, audit
         self.settings = settings
-        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.clock = clock
+
+    def _now(self, conn) -> datetime:
+        return pg_clock(conn, clock=self.clock)
 
     # --- concessão -----------------------------------------------------------------------------------------------
 
@@ -88,31 +122,58 @@ class CheckpointService:
                 self._refuse(action, "checkpoint_limit_exceeds_backend_ceiling",
                              "O limite solicitado excede o teto em USD definido pelo backend.", deferred=db is not None)
         # Narração/publicação ainda não têm teto monetário configurável; consume mantém a barreira final.
-        moment = self.clock()
-        record = dict(id=uuid.uuid4().hex, action=action, subject=subject, description=description, approved_by="human",
-                      operator_id=operator_id, approved_at=_iso(moment), expires_at=_iso(moment + timedelta(seconds=ttl_seconds)),
-                      limit_amount=limit_amount, currency=currency)
-        encoded = json.dumps({k: record[k] for k in ("action", "subject", "description", "limit_amount", "currency")}
-                             | {"ttl_seconds": ttl_seconds}, sort_keys=True, separators=(",", ":"))
+        request_obj = {
+            "action": action,
+            "subject": subject,
+            "description": description,
+            "limit_amount": limit_amount,
+            "currency": currency,
+            "ttl_seconds": ttl_seconds,
+        }
+        request_canonical = canonical_json_bytes(request_obj)
 
         def insert(conn):
-            if key is not None:
-                found = conn.execute("SELECT * FROM human_checkpoints WHERE idempotency_key=?", (key,)).fetchone()
-                if found:
-                    if found["request"] != encoded:
-                        raise ValueError("Chave de idempotência usada com outro pedido.")
-                    return {c: found[c] for c in COLUMNS}, False
-            conn.execute("""INSERT INTO human_checkpoints(id,action,subject,description,approved_by,operator_id,approved_at,
-                expires_at,limit_amount,currency,idempotency_key,request) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                         (record["id"], action, subject, description, "human", operator_id, record["approved_at"],
-                          record["expires_at"], limit_amount, currency, key, encoded))
-            row = conn.execute("SELECT * FROM human_checkpoints WHERE id=?", (record["id"],)).fetchone()
-            return {c: row[c] for c in COLUMNS}, True
+            _acquire_checkpoint_lock(conn, action, subject)
+            with conn.cursor(row_factory=dict_row) as cur:
+                if key is not None:
+                    found = cur.execute(
+                        "SELECT * FROM horus.human_checkpoints WHERE idempotency_key = %s",
+                        (key,),
+                    ).fetchone()
+                    if found:
+                        if bytes(found["request_canonical"]) != request_canonical:
+                            raise ValueError("Chave de idempotência usada com outro pedido.")
+                        return _format_row(found), False
+                moment = self._now(conn)
+                expires_at = moment + timedelta(seconds=ttl_seconds)
+                row = cur.execute(
+                    """INSERT INTO horus.human_checkpoints(
+                        id, action, subject, description, approved_by, operator_id,
+                        approved_at, expires_at, limit_amount, currency, idempotency_key,
+                        request, request_canonical
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *""",
+                    (
+                        uuid.uuid4().hex,
+                        action,
+                        subject,
+                        description,
+                        "human",
+                        operator_id,
+                        moment,
+                        expires_at,
+                        limit_amount,
+                        currency,
+                        key,
+                        Jsonb(request_obj),
+                        request_canonical,
+                    ),
+                ).fetchone()
+                return _format_row(row), True
 
         if db is not None:
             return insert(db)[0]
-        with self.store.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self.store.uow() as conn:
             return insert(conn)[0]
 
     # --- consumo (a barreira) ------------------------------------------------------------------------------------
@@ -134,39 +195,70 @@ class CheckpointService:
         """Confere e consome UM checkpoint; levanta `CheckpointRefused`. Atômico: duas chamadas nunca consomem o mesmo."""
         if action not in ACTIONS:
             raise ValueError("Ação inválida.")
+        amount_dec = _consume_amount(amount)
+        ref_str = str(ref)[:120]
+        if not ref_str:
+            raise ValueError("Referência de consumo obrigatória.")
+        subject_str = subject if isinstance(subject, str) else ""
         refusal = None
 
         def run(conn):
             nonlocal refusal
-            rows = conn.execute("SELECT * FROM human_checkpoints WHERE action=? AND subject=? ORDER BY seq DESC",
-                                (action, subject if isinstance(subject, str) else "")).fetchall()
-            if not rows:
-                refusal = ("checkpoint_missing", "Ação exige aprovação humana registrada (checkpoint) para este objeto.")
-                return None
-            usable = [r for r in rows if r["consumed_at"] is None]
-            if not usable:
-                refusal = ("checkpoint_consumed", "O checkpoint já foi usado; uma nova aprovação humana é necessária.")
-                return None
-            moment = self.clock()
-            live = [r for r in usable if datetime.fromisoformat(r["expires_at"]) > moment]
-            if not live:
-                refusal = ("checkpoint_expired", "O checkpoint expirou; peça uma nova aprovação humana.")
-                return None
-            row = live[0]
-            if amount is not None:
-                limit = _money(row["limit_amount"])
-                if limit is None or row["currency"] != currency or Decimal(str(amount)) > limit:
-                    refusal = ("checkpoint_limit_exceeded", "O valor da ação excede o limite aprovado pelo humano.")
+            _acquire_checkpoint_lock(conn, action, subject_str)
+            moment = self._now(conn)
+            with conn.cursor(row_factory=dict_row) as cur:
+                row = cur.execute(
+                    """SELECT * FROM horus.human_checkpoints
+                       WHERE action = %s AND subject = %s
+                         AND consumed_at IS NULL AND expires_at > %s
+                       ORDER BY seq DESC LIMIT 1 FOR UPDATE""",
+                    (action, subject_str, moment),
+                ).fetchone()
+                if not row:
+                    counts = cur.execute(
+                        """SELECT
+                             COUNT(*) AS total,
+                             COUNT(*) FILTER (WHERE consumed_at IS NULL) AS unconsumed
+                           FROM horus.human_checkpoints
+                           WHERE action = %s AND subject = %s""",
+                        (action, subject_str),
+                    ).fetchone()
+                    if counts["total"] == 0:
+                        refusal = ("checkpoint_missing", "Ação exige aprovação humana registrada (checkpoint) para este objeto.")
+                    elif counts["unconsumed"] == 0:
+                        refusal = ("checkpoint_consumed", "O checkpoint já foi usado; uma nova aprovação humana é necessária.")
+                    else:
+                        refusal = ("checkpoint_expired", "O checkpoint expirou; peça uma nova aprovação humana.")
                     return None
-            conn.execute("UPDATE human_checkpoints SET consumed_at=?, consumed_ref=? WHERE id=? AND consumed_at IS NULL",
-                         (_iso(moment), str(ref)[:120], row["id"]))
-            return {c: row[c] for c in COLUMNS} | {"consumed_at": _iso(moment), "consumed_ref": str(ref)[:120]}
+                if amount_dec is not None:
+                    limit = row["limit_amount"]
+                    if limit is None or row["currency"] != currency or amount_dec > limit:
+                        refusal = ("checkpoint_limit_exceeded", "O valor da ação excede o limite aprovado pelo humano.")
+                        return None
+                t_final = self._now(conn)
+                try:
+                    updated = cur.execute(
+                        """UPDATE horus.human_checkpoints
+                           SET consumed_at = %s, consumed_ref = %s
+                           WHERE id = %s AND consumed_at IS NULL AND expires_at > %s
+                             AND (%s::numeric IS NULL OR (
+                                 limit_amount IS NOT NULL AND currency = %s AND %s::numeric <= limit_amount
+                             ))
+                           RETURNING *""",
+                        (t_final, ref_str, row["id"], t_final, amount_dec, currency, amount_dec),
+                    ).fetchone()
+                except psycopg.errors.CheckViolation:
+                    refusal = ("checkpoint_expired", "O checkpoint expirou; peça uma nova aprovação humana.")
+                    return None
+                if updated is None:
+                    refusal = ("checkpoint_expired", "O checkpoint expirou; peça uma nova aprovação humana.")
+                    return None
+                return _format_row(updated)
 
         if db is not None:
             result = run(db)
         else:
-            with self.store.connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
+            with self.store.uow() as conn:
                 result = run(conn)
         if refusal:
             self._refuse(action, *refusal, deferred=db is not None)
@@ -176,10 +268,13 @@ class CheckpointService:
 
     def page(self, limit=50, after=0):
         limit = max(1, min(int(limit), 200))
-        with self.store.connect() as db:
-            rows = db.execute(f"SELECT {','.join(COLUMNS)} FROM human_checkpoints WHERE seq>? ORDER BY seq LIMIT ?",
-                              (max(int(after), 0), limit + 1)).fetchall()
-        items = [dict(r) for r in rows[:limit]]
+        with self.store.uow(readonly=True) as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                rows = cur.execute(
+                    f"SELECT {','.join(COLUMNS)} FROM horus.human_checkpoints WHERE seq > %s ORDER BY seq LIMIT %s",
+                    (max(int(after), 0), limit + 1),
+                ).fetchall()
+        items = [_format_row(r) for r in rows[:limit]]
         return {"items": items, "next_after": items[-1]["seq"] if len(rows) > limit else None}
 
 
