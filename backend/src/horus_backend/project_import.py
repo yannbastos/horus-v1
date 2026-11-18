@@ -231,20 +231,27 @@ class ImportService:
             and isinstance(record.get("files"), list)
         )
 
+    def _folder_present(self, import_id: str) -> bool:
+        """A linha em `horus.imports` permanece após a exclusão local (trilha); a importação só existe para leitura
+        enquanto a pasta existir (paridade com o legado, onde o registro vivia na pasta). Link/junção conta como presente
+        para que `_folder_file` recuse como adulterada."""
+        return os.path.lexists(self.root / import_id)
+
     def _records(self) -> list[dict]:
         with self._uow(readonly=True) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     "SELECT manifest FROM horus.imports ORDER BY created_at DESC, id DESC LIMIT 200"
                 )
-                return [row["manifest"] for row in cur.fetchall() if self._valid_record(row["manifest"])]
+                return [row["manifest"] for row in cur.fetchall()
+                        if self._valid_record(row["manifest"]) and self._folder_present(row["manifest"]["id"])]
 
     def _read_record(self, import_id: str) -> dict | None:
         with self._uow(readonly=True) as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute("SELECT manifest FROM horus.imports WHERE id = %s", (import_id,))
                 row = cur.fetchone()
-        if row is None or not self._valid_record(row["manifest"]):
+        if row is None or not self._valid_record(row["manifest"]) or not self._folder_present(import_id):
             return None
         return row["manifest"]
 

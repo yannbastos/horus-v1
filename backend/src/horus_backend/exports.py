@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 
 from .av_quality import provenance_check
 from .local_pilot import confirmed_media, registered_json
+from .license_reviews import LicenseReviewService
 from .media_contracts import PILOT_INPUT_PATH, QualityCheck, apply_license_reviews, derive_report_status, validate_asset_provenance
 from .production import confined, inspect_artifact
 from .publishing import PublishingService, _as_json, _iso, approved_script, failure_message, mark_failed, read_failure
@@ -22,7 +23,7 @@ from .workflows import WorkflowConflict
 
 HORUS_VERSION = '0.1.0'  # mesma versão do backend em /health e pyproject.toml
 SCHEMA_VERSION = 12
-_INPUTS = re.compile(r'^inputs/[A-Za-z0-9_.-]+$')
+_INPUTS = PILOT_INPUT_PATH
 # Raízes POSIX comuns: uma barra seguida de uma delas já é caminho absoluto. Fora delas, exige-se ao menos dois
 # segmentos ('/a/b'): '100 km /h', '/ou/' e 'dia /noite' são texto comum em pt-BR e não são caminhos.
 _ROOTS = r'(?:home|users|etc|var|tmp|usr|opt|root|mnt|srv|dev|proc|sys|bin|sbin|lib|volumes|private|library|applications|system|media|run|boot)'
@@ -230,17 +231,7 @@ class ExportService:
                 prov_data = registered_json(source, artifacts, 'asset-provenance.json')
                 prov_verdict = validate_asset_provenance(prov_data, artifacts=inputs)
                 provenance = prov_verdict['value'] if prov_verdict['ok'] else None
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute(
-                        'SELECT id, production_id, asset_id, asset_sha256, decision, license, evidence, reviewed_by, reviewed_at, supersedes '
-                        'FROM horus.license_reviews WHERE production_id = %s ORDER BY seq ASC',
-                        (production_id,),
-                    )
-                    history = []
-                    for r in cur.fetchall():
-                        item = dict(r)
-                        item['reviewed_at'] = _iso(item['reviewed_at'])
-                        history.append(item)
+                history = LicenseReviewService._history(conn, production_id)
                 if quality is not None and provenance is not None and history:
                     try:
                         effective_for_qc = apply_license_reviews(provenance, history)
