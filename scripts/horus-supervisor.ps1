@@ -4,6 +4,7 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet('Find', 'Start', 'Handoff')]
   [string]$Action,
+  [ValidatePattern('^term_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z')]
   [string]$PreviousTerminal,
   [ValidatePattern('^run_[a-f0-9]+$')]
   [string]$RunId

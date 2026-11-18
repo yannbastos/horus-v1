@@ -101,6 +101,7 @@ Leia e siga $repoRel/.claude/skills/supervisar/SKILL.md, usando $repoRel/ como r
 
   $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
   $desiredBytes = $utf8NoBom.GetBytes($content)
+  $existingBytes = $null
 
   if (Test-Path -LiteralPath $target) {
     if (Test-Path -LiteralPath $target -PathType Container) {
