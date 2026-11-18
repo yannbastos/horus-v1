@@ -381,7 +381,7 @@ def test_exports_create_redaction_idempotency_and_failures(pg_store, tmp_path, m
     lr_req = {"decision": "verified"}
     admin.execute(
         "INSERT INTO horus.license_reviews (id, production_id, asset_id, asset_sha256, decision, license, evidence, reviewed_by, reviewed_at, idempotency_key, request, request_canonical) "
-        "VALUES ('lr1', %s, 'asset-1', %s, 'verified', 'CC-BY-4.0', 'Conferido em C:\\\\Users\\\\local\\\\doc.pdf', 'human', %s, 'lk1', %s, %s)",
+        "VALUES ('lr1', %s, 'asset-1', %s, 'verified', '{\"id\": \"cc-by-4.0\", \"name\": \"CC BY 4.0\", \"url\": \"https://creativecommons.org/licenses/by/4.0/\", \"commercial_use\": \"allowed\", \"attribution_required\": true}', 'Conferido em C:\\\\Users\\\\local\\\\doc.pdf', 'human', %s, 'lk1', %s, %s)",
         (prod_id, video_sha, now_dt, Jsonb(lr_req), canonical_json_bytes(lr_req)),
     )
 
