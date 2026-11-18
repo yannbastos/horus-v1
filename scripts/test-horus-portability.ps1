@@ -183,6 +183,9 @@ try {
   $replyArgs = @{ RunId = 'run_a'; FromRunId = 'run_b'; MessageId = 'msg_b'; Type = 'status'; Subject = $reply.subject; ThreadId = 'msg_a' }
   $verified = & $verify VerifyDelivery @questionArgs | ConvertFrom-Json
   Assert-True ($verified.id -ceq 'msg_a') 'pergunta em caixa e com origem verificadas'
+  $missingThread = $replyArgs.Clone()
+  $missingThread.Remove('ThreadId')
+  Assert-Rejected { & $verify VerifyDelivery @missingThread } 'question thread ID' 'F10: uma resposta sem thread não autoriza ação'
   $verified = & $verify VerifyDelivery @replyArgs | ConvertFrom-Json
   Assert-True ($verified.thread_id -ceq 'msg_a') 'resposta status verifica pergunta e destinatário original'
   $hor166OrcaFixture.truncated = $true
@@ -196,6 +199,14 @@ try {
   $question.subject = $questionArgs.Subject
   $reply.from_handle = $maestroHandle
   Assert-Rejected { & $verify VerifyDelivery @replyArgs } 'Unique delivery' 'remetente incompatível rejeitado'
+  $previousHandle = $env:ORCA_TERMINAL_HANDLE
+  try {
+    $env:ORCA_TERMINAL_HANDLE = $maestroHandle
+    & $verify CheckTerminal
+    Assert-True $true 'preflight aceita terminal conectado na raiz Git'
+    $hor166OrcaFixture.terminals[0].worktreePath = $workspace
+    Assert-Rejected { & $verify CheckTerminal } 'parent workspace' 'preflight rejeita terminal da pasta ancestral'
+  } finally { $env:ORCA_TERMINAL_HANDLE = $previousHandle }
   $hor166OrcaFixture.terminals[0].worktreePath = $workspace
   Assert-Rejected { & $verify VerifyRun -RunId run_a } 'not connected in a worktree' 'terminal de pasta ancestral não prova origem Git'
 } finally {

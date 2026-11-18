@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('Find', 'Start', 'Handoff', 'VerifyRun', 'VerifyDelivery')]
+  [ValidateSet('Find', 'Start', 'Handoff', 'VerifyRun', 'VerifyDelivery', 'CheckTerminal')]
   [string]$Action,
   [ValidatePattern('^term_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z')]
   [string]$PreviousTerminal,
@@ -50,6 +50,23 @@ try {
 }
 $objective = "Horus Supervisor v1 $key"
 
+function Assert-CheckoutTerminal($Terminals) {
+  $handle = $env:ORCA_TERMINAL_HANDLE
+  $callers = @($Terminals | Where-Object { $handle -and $_.handle -ceq $handle -and $_.connected })
+  if ($callers.Count -ne 1 -or -not $callers[0].worktreePath -or
+      (Get-GitPath $callers[0].worktreePath '--show-toplevel') -ne $root -or
+      [IO.Path]::GetFullPath($callers[0].worktreePath).TrimEnd('\', '/').ToUpperInvariant() -ne $root) {
+    throw 'Open a NEW Orca terminal in this Hórus checkout/worktree. A parent workspace or changing directory in its terminal does not bind the terminal to Git.'
+  }
+}
+
+if ($Action -eq 'CheckTerminal') {
+  $catalog = Invoke-Orca terminal list --limit 10000
+  if ($catalog.truncated) { throw 'Incomplete local terminal list.' }
+  Assert-CheckoutTerminal $catalog.terminals
+  return
+}
+
 function Get-VerifiedRun([string]$Id) {
   $current = $env:ORCA_TERMINAL_HANDLE
   if (-not $Id -and -not $current) { throw 'Use a connected Orca terminal or specify a local Run ID.' }
@@ -66,7 +83,9 @@ function Get-VerifiedRun([string]$Id) {
   if ($catalog.truncated) { throw 'Incomplete local terminal list.' }
   $owners = @($catalog.terminals | Where-Object { $_.handle -eq $run.coordinator_handle -and $_.connected })
   if ($owners.Count -ne 1 -or -not $owners[0].worktreePath -or
-      (Get-GitPath $owners[0].worktreePath '--git-common-dir') -ne $common) {
+      (Get-GitPath $owners[0].worktreePath '--git-common-dir') -ne $common -or
+      (Get-GitPath $owners[0].worktreePath '--show-toplevel') -ne
+        [IO.Path]::GetFullPath($owners[0].worktreePath).TrimEnd('\', '/').ToUpperInvariant()) {
     throw 'Run coordinator is not connected in a worktree of this Git repository.'
   }
   [pscustomobject]@{ run = $run.id; coordinator = $run.coordinator_handle; worktree = $owners[0].worktreePath }
@@ -174,10 +193,7 @@ try {
   }
 
   $current = $env:ORCA_TERMINAL_HANDLE
-  $caller = $terminals | Where-Object { $_.handle -eq $current -and $_.connected }
-  if (-not $caller -or (Get-GitPath $caller.worktreePath '--show-toplevel') -ne $root) {
-    throw 'Activate the Supervisor from a connected Orca terminal in this worktree.'
-  }
+  Assert-CheckoutTerminal $terminals
   if ($owner -and $owner.handle -ne $current) { throw 'A Supervisor already owns this Run. Use Handoff.' }
   $bound = (Invoke-Orca orchestration run-current --from $current --full).run
   if ($bound -and $bound.id -ne $registered.id) { throw 'Use a terminal without a Maestro Run.' }

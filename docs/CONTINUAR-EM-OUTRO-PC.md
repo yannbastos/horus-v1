@@ -184,6 +184,8 @@ A orquestração usa Git, Issues e Project. Para preparar somente a coordenaçã
 4. Abra outra sessão e invoque `/horus-maestro` (ou siga o [procedimento manual](RETOMADA-MAESTRO.md)). O Maestro reconcilia as referências publicadas, decisões, pendências e atividade [antes de recriar worktrees e Runs](RETOMADA-MAESTRO.md#e-resumo-e-retomada). Essa etapa também funciona sem Supervisor.
 5. Antes de sair da máquina antiga, publique a branch quando autorizado e registre o que ficou exclusivamente local. Na nova máquina, recrie sessões, terminais e Runs sob demanda. O [handoff de um Run vivo](RETOMADA-MAESTRO.md#supervisor-e-handoff-no-orca) funciona entre sessões da mesma instalação. Modelos e ferramentas locais necessários devem ser obtidos novamente, conferindo os hashes documentados.
 
+Para coordenação local no Orca, execute `& ./scripts/horus-supervisor.ps1 CheckTerminal` no terminal do checkout antes de criar ou vincular um Run. A ponte permite descobrir a skill na pasta ancestral. Se a checagem falhar, abra outro terminal no worktree pelo Orca: mudar apenas o diretório do terminal não muda seu vínculo.
+
 ## Verificar e atualizar CLIs de desenvolvimento
 
 Opcionalmente, registre o comando global de usuário `atualizar-ias` nos perfis do PowerShell 5.1 e 7 (sem admin, sem alterar `PATH` nem `ExecutionPolicy`):
