@@ -9,11 +9,12 @@ from urllib.request import ProxyHandler
 import pytest
 from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.security import (MAX_CONFIG, TOOLSETS, SecurityGate, Unverifiable, audit_profile,
     daily_tokens, harden_profile, minimal_profile, parse_yaml_subset, require_secure, resolve_tools, security_status)
-from horus_backend.storage import Store
+from horus_backend.storage import Store  # noqa: F401
+from support_d import make_pg_store
+from support_e import pg_client_for, pg_create_app, pg_transport, seed_cognitive_run  # noqa: F401
 from horus_backend.workflow_hermes import HermesRunClient, HermesStages, INSTRUCTIONS
 from horus_backend.hermes_contract.models import RunEnvelope
 from horus_backend.hermes_contract.validator import validate_result
@@ -25,7 +26,7 @@ CONTRACT = Path(__file__).resolve().parents[2] / 'contracts/hermes/fixtures'
 
 
 @pytest.fixture
-def secure(tmp_path):
+def secure(tmp_path, pg_transport):
     profile = tmp_path / 'isolated'
     harden_profile(profile)
     (profile / '.env').write_text('API_SERVER_KEY=' + ENV_SECRET, encoding='utf-8')
@@ -295,7 +296,7 @@ def test_authenticated_status_read_only_and_private(secure, monkeypatch):
     import subprocess
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **k: pytest.fail('rede'))
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('processo'))
-    app = create_app(secure)
+    app = pg_create_app(secure)
     client = TestClient(app, base_url='http://127.0.0.1')
     assert client.get('/v1/security/status').status_code == 401
     response = client.get('/v1/security/status', headers={'Authorization': 'Bearer ' + TOKEN})
@@ -306,9 +307,10 @@ def test_authenticated_status_read_only_and_private(secure, monkeypatch):
 
 
 def test_status_reports_real_radar_cleanup_cycle(secure):
-    app = create_app(secure)
+    app = pg_create_app(secure)
     headers = {'Authorization': 'Bearer ' + TOKEN}
-    # Sem o ciclo de vida (JobManager não iniciado), a limpeza existe mas ainda não rodou.
+    # Sem o ciclo de vida (JobManager não iniciado), a limpeza existe mas ainda não rodou; o banco é conectado à parte.
+    assert app.state.database.test().state == 'connected'
     before = TestClient(app, base_url='http://127.0.0.1').get('/v1/security/status', headers=headers).json()
     assert before['radar']['automatic_cleanup'] == {'available': True, 'interval_hours': 6, 'last_run_at': None,
                                                     'last_status': None, 'redacted_workflows': None}
@@ -349,7 +351,7 @@ def test_validator_rejects_injected_evidence(mutation):
 
 
 def test_simulated_analysis_provider_is_explicit(secure):
-    app = create_app(secure)
+    app = pg_create_app(secure)
     stages = app.state.manager.workflows.hermes_simulated
     from horus_backend.hermes_simulator import editorial_result
     envelope = RunEnvelope.model_validate_json((CONTRACT / 'envelope-ficticio.json').read_text(encoding='utf-8'))
@@ -361,18 +363,20 @@ def test_simulated_analysis_provider_is_explicit(secure):
     assert output['provider'] == 'hermes_simulated'
 
 
-def test_daily_accounting_reserves_unknown_and_ignores_simulation(secure):
-    class DB:
-        def __init__(self, rows): self.rows = rows
-        def execute(self, query, args):
-            assert "w.cognitive_client='live'" in query
-            return self
-        def fetchall(self): return self.rows
-    rows = [{'usage': json.dumps({'total_tokens': 2000}), 'request': '{}', 'status': 'completed'},
-            {'usage': None, 'request': json.dumps({'metadata': {'horus_token_reservation': '100000'}}), 'status': 'unknown'}]
-    assert daily_tokens(secure, None, DB(rows)) == 102000
-    with pytest.raises(SecurityGate):
-        daily_tokens(secure, None, DB([{'usage': None, 'request': '{}', 'status': 'unknown'}]))
+def test_daily_accounting_reserves_unknown_and_ignores_simulation(secure, pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
+    """Porte com linhas reais em PostgreSQL (antes: DB falso): consumo conhecido usa `usage`, desconhecido reserva o teto
+    por execução e execuções simuladas (`cognitive_client <> 'live'`) não entram na conta."""
+    manager, store = make_pg_store(pg_app_cluster, pg_app_database, tmp_path / 'acc', monkeypatch)
+    try:
+        seed_cognitive_run(store, 'known', usage={'total_tokens': 2000})
+        seed_cognitive_run(store, 'unknown', status='unknown', request={'metadata': {'horus_token_reservation': '100000'}})
+        seed_cognitive_run(store, 'simulated', live=False, usage={'total_tokens': 999999})
+        assert daily_tokens(secure, store) == 102000
+        seed_cognitive_run(store, 'unverifiable', status='unknown')  # sem reserva verificável: falha fechada
+        with pytest.raises(SecurityGate):
+            daily_tokens(secure, store)
+    finally:
+        manager.close()
 
 
 @pytest.mark.parametrize('mode', ['redirect', 'error', 'reflection', 'ok'])

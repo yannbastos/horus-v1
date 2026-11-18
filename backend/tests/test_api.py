@@ -6,16 +6,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
 from horus_backend.config import Settings
-from horus_backend.storage import Store
+from support_d import make_pg_store
+from support_e import pg_client_for, pg_create_app, pg_transport  # noqa: F401
 
 TOKEN = "test-only-connection-token-0123456789"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 
 @pytest.fixture
-def settings(tmp_path):
+def settings(tmp_path, pg_transport):
     script = tmp_path / "fake_factory.py"
     script.write_text('''
 import json, os, subprocess, sys, time
@@ -44,7 +44,7 @@ else:
 
 @pytest.fixture
 def client(settings):
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
+    with TestClient(pg_create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
         yield client
 
 
@@ -197,32 +197,32 @@ def test_unknown_job(client):
 
 
 def test_history_survives_restart(settings):
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as first:
+    with pg_client_for(settings, headers=HEADERS) as first:
         job = wait_job(first, submit(first)["id"])
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as second:
+    with pg_client_for(settings, headers=HEADERS) as second:
         restored = second.get(f"/v1/jobs/{job['id']}").json()
         assert restored["status"] == "succeeded"
         assert restored["attempt"] == 1
 
 
-def test_interrupted_tasks_are_not_reexecuted(settings):
-    store = Store(settings.data_dir / "horus.sqlite3")
+def test_interrupted_tasks_are_not_reexecuted(settings, pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
+    _, store = make_pg_store(pg_app_cluster, pg_app_database, tmp_path / "seed", monkeypatch)
     job, _ = store.create_job({"operation": "factory.profile", "channel_id": "canal01", "video_id": None}, "interrupted")
     store.update(job["id"], "running", new_attempt=True)
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
+    with TestClient(pg_create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
         restored = client.get(f"/v1/jobs/{job['id']}").json()
         assert restored["status"] == "interrupted"
         assert restored["attempt"] == 1
 
 
-def test_old_queued_job_is_recovered_beyond_recent_history(settings):
-    store = Store(settings.data_dir / 'horus.sqlite3')
+def test_old_queued_job_is_recovered_beyond_recent_history(settings, pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
+    _, store = make_pg_store(pg_app_cluster, pg_app_database, tmp_path / 'seed', monkeypatch)
     payload = {'operation': 'factory.profile', 'channel_id': 'canal01', 'video_id': None}
     pending, _ = store.create_job(payload, 'older-pending')
     for index in range(101):
         historical, _ = store.create_job(payload, f'historical-{index}')
         store.update(historical['id'], 'succeeded')
-    with TestClient(create_app(settings), base_url='http://127.0.0.1', headers=HEADERS) as client:
+    with TestClient(pg_create_app(settings), base_url='http://127.0.0.1', headers=HEADERS) as client:
         assert wait_job(client, pending['id'])['status'] == 'succeeded'
 
 
@@ -257,9 +257,9 @@ def test_media_folder_is_shallow(client, tmp_path):
     assert [item["name"] for item in response.json()] == ["one.mp4"]
 
 
-def test_unavailable_factory_is_blocked(tmp_path, monkeypatch):
+def test_unavailable_factory_is_blocked(tmp_path, monkeypatch, pg_transport):
     monkeypatch.setenv("PATH", "")
     settings = Settings(token=TOKEN, data_dir=tmp_path, factory_root=None)
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
+    with TestClient(pg_create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
         assert client.get("/health").json()["factory_available"] is False
         assert wait_job(client, submit(client)["id"])["status"] == "blocked"

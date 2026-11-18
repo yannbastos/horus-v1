@@ -3,11 +3,9 @@
 Nunca toca a pasta de dados real: o script recusa essa pasta sem --allow-real e os testes só usam diretórios criados aqui.
 Windows apenas (icacls)."""
 import importlib.util
-from contextlib import closing
 import json
 import os
 import shutil
-import sqlite3
 import tempfile
 import time
 import uuid
@@ -108,21 +106,30 @@ def test_apply_twice_is_refused_as_already_customized_and_nothing_breaks(folder)
     assert code == 1 and 'personalizada' in text and len(acl.read_acl(folder)) == 2
 
 
-def test_backups_keep_working_with_the_restricted_acl(folder, tmp_path):
-    """Pacote de pré-exclusão/exportação: lê a pasta restrita e grava na pasta irmã de backups; restauração em pasta nova."""
+def test_backups_keep_working_with_the_restricted_acl(folder, tmp_path, pg_app_cluster, pg_app_database, monkeypatch):
+    """Pacote de pré-exclusão/exportação: lê a pasta restrita e grava na pasta irmã de backups; restauração em pasta nova.
+    O dump agora é lógico PostgreSQL (sem arquivo `.db` na pasta de dados), com um registro sintético semeado."""
+    import zipfile
     from horus_backend.local_data_export import export_local_data, restore_local_data, verify_export
-    with closing(sqlite3.connect(folder / 'horus.sqlite3')) as db, db:
-        db.execute('CREATE TABLE t(v TEXT)')
-        db.execute("INSERT INTO t VALUES('sintetico')")
-        db.execute('PRAGMA user_version=1')
-    assert run(acl.apply, folder, confirm=True, answers=['APLICAR ACL'])[0] == 0
-    backups = tmp_path / 'dados-backups'
-    backups.mkdir()
-    package = backups / 'pre-exclusao-teste.zip'
-    assert export_local_data(folder, package)['ok'] and verify_export(package)['ok']
-    assert restore_local_data(package, tmp_path / 'restaurado')['ok']
-    assert (tmp_path / 'restaurado' / 'horus.sqlite3').is_file()
-    assert len(acl.read_acl(backups)) > 2                                          # a pasta irmã não foi alterada
+    from horus_backend.storage import Store
+    from support_d import make_pg_manager
+    manager = make_pg_manager(pg_app_cluster, pg_app_database, tmp_path / 'vault', monkeypatch)
+    try:
+        store = Store(manager, data_dir=folder)
+        job, _ = store.create_job({'operation': 'transcription.run', 'title': 'sintetico'}, 'acl-sintetico')
+        assert run(acl.apply, folder, confirm=True, answers=['APLICAR ACL'])[0] == 0
+        backups = tmp_path / 'dados-backups'
+        backups.mkdir()
+        package = backups / 'pre-exclusao-teste.zip'
+        assert export_local_data(folder, package, store=store)['ok'] and verify_export(package)['ok']
+        with zipfile.ZipFile(package) as archive:
+            assert 'pg_dump/jobs.jsonl' in archive.namelist() and job['id'] in archive.read('pg_dump/jobs.jsonl').decode()
+            assert not any('.sqlite' in n for n in archive.namelist())
+        assert restore_local_data(package, tmp_path / 'restaurado')['ok']
+        assert (tmp_path / 'restaurado' / 'productions' / 'p1' / 'plan.json').is_file()
+        assert len(acl.read_acl(backups)) > 2                                      # a pasta irmã não foi alterada
+    finally:
+        manager.close()
 
 
 def test_real_data_dir_is_refused_without_allow_real(folder, monkeypatch):
