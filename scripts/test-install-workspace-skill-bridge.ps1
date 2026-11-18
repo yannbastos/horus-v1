@@ -67,6 +67,9 @@ try {
   New-Item -ItemType Directory -Force -Path $repoScripts, $repoSkillDir, $siblingDir, $prefixTrapDir | Out-Null
   Copy-Item -LiteralPath $scriptSource -Destination (Join-Path $repoScripts 'install-workspace-skill-bridge.ps1')
   [System.IO.File]::WriteAllText($repoSkillFile, "# skill original`n", [System.Text.UTF8Encoding]::new($false))
+  $repoSupervisorDir = Join-Path $repoDir '.claude/skills/supervisar'
+  New-Item -ItemType Directory -Path $repoSupervisorDir | Out-Null
+  Set-Content -LiteralPath (Join-Path $repoSupervisorDir 'SKILL.md') -Value '# supervisor original'
 
   $tempScript = Join-Path $repoScripts 'install-workspace-skill-bridge.ps1'
 
@@ -74,12 +77,14 @@ try {
   $dryOut = (& $tempScript -DryRun) -join "`n"
   $parentBridge = Join-Path $wsMid '.claude/skills/horus-maestro/SKILL.md'
   Assert-True ($dryOut -match 'Gravaria a ponte em:') 'DryRun informa destino'
+  Assert-True ($dryOut.Contains((Join-Path $wsMid '.claude/skills/supervisar/SKILL.md'))) 'DryRun informa destino de supervisar'
   Assert-Equal (Test-Path -LiteralPath (Join-Path $wsMid '.claude')) $false 'DryRun não cria diretório'
 
   # 2. WorkspacePath omitido grava na pasta-mãe imediata.
   $outDefault = (& $tempScript) -join "`n"
   Assert-True ($outDefault -match 'Ponte gravada em:') 'omitido grava na pasta-mãe'
   Assert-Equal (Test-Path -LiteralPath $parentBridge -PathType Leaf) $true 'arquivo criado na pasta-mãe'
+  Assert-Equal (Test-Path -LiteralPath (Join-Path $wsMid '.claude/skills/supervisar/SKILL.md') -PathType Leaf) $true 'supervisar criada na pasta-mãe'
   $bytesDefault = [System.IO.File]::ReadAllBytes($parentBridge)
   Assert-True (Test-NoBomUtf8 $bytesDefault) 'omitido grava UTF-8 sem BOM'
   $textDefault = [System.Text.UTF8Encoding]::new($false).GetString($bytesDefault)
@@ -106,6 +111,14 @@ try {
   $textTop = [System.Text.UTF8Encoding]::new($false).GetString($bytesTop1)
   Assert-True ($textTop -match 'HORUS App/horus repo/\.claude/skills/horus-maestro/SKILL\.md') 'dois níveis acima usa caminho relativo com / e espaços'
   Assert-True (-not $textTop.Contains($tempRoot)) 'dois níveis acima não contém caminho absoluto'
+  $topSupervisor = Join-Path $wsTop '.claude/skills/supervisar/SKILL.md'
+  Assert-True (Test-Path -LiteralPath $topSupervisor -PathType Leaf) 'WorkspacePath grava supervisar'
+  $supervisorBytes = [System.IO.File]::ReadAllBytes($topSupervisor)
+  $supervisorText = [System.Text.UTF8Encoding]::new($false).GetString($supervisorBytes)
+  Assert-True (Test-NoBomUtf8 $supervisorBytes) 'supervisar usa UTF-8 sem BOM'
+  Assert-True ($supervisorText -cmatch '(?m)^name: supervisar\r?$') 'supervisar declara o nome da skill'
+  Assert-True ($supervisorText -cmatch '(?m)^disable-model-invocation: true\r?$') 'supervisar exige invocação explícita'
+  Assert-True (-not $supervisorText.Contains($tempRoot)) 'supervisar não contém caminho absoluto'
 
   Push-Location $wsTop
   try {
@@ -121,12 +134,16 @@ try {
   $bytesTop2 = [System.IO.File]::ReadAllBytes($topBridge)
   Assert-True ($outTop2 -match 'sem alterações') 'segunda execução informa sem alterações'
   Assert-BytesEqual $bytesTop1 $bytesTop2 'segunda execução preserva bytes idênticos'
+  Assert-BytesEqual $supervisorBytes ([System.IO.File]::ReadAllBytes($topSupervisor)) 'segunda execução preserva bytes de supervisar'
+  Assert-True ($supervisorText -match 'Leia e siga (.+?/SKILL\.md)') 'supervisar expõe caminho relativo'
+  $relSupervisor = $Matches[1]
+  Assert-Equal (Resolve-Path -LiteralPath (Join-Path $wsTop $relSupervisor)).Path (Join-Path $repoSupervisorDir 'SKILL.md') 'caminho relativo resolve para supervisar original'
 
   $outTopDrySame = (& $tempScript -WorkspacePath $wsTop -DryRun) -join "`n"
   Assert-True ($outTopDrySame -match 'sem alterações') 'DryRun quando igual também informa sem alterações'
 
   # 5. Atualiza ponte antiga que contenha marcador install-workspace-skill-bridge.ps1.
-  $oldBridge = "Gerada por horus/scripts/install-workspace-skill-bridge.ps1.`nConteúdo antigo.`n"
+  $oldBridge = "Gerada por HORUS App/horus repo/scripts/install-workspace-skill-bridge.ps1. Não acrescenta nem altera regras.`nConteúdo antigo.`n"
   [System.IO.File]::WriteAllText($topBridge, $oldBridge, [System.Text.UTF8Encoding]::new($false))
   $outUpdate = (& $tempScript -WorkspacePath $wsTop) -join "`n"
   Assert-True ($outUpdate -match 'Ponte gravada em:') 'sobrescreve ponte antiga com marcador'
@@ -142,6 +159,9 @@ try {
   New-Item -ItemType Directory -Force -Path (Join-Path $unrelatedRepo 'scripts'), (Join-Path $unrelatedRepo '.claude/skills/horus-maestro'), $unrelatedSkillDir | Out-Null
   Copy-Item -LiteralPath $scriptSource -Destination (Join-Path $unrelatedRepo 'scripts/install-workspace-skill-bridge.ps1')
   [System.IO.File]::WriteAllText((Join-Path $unrelatedRepo '.claude/skills/horus-maestro/SKILL.md'), "# original`n", [System.Text.UTF8Encoding]::new($false))
+  $unrelatedRepoSupervisorDir = Join-Path $unrelatedRepo '.claude/skills/supervisar'
+  New-Item -ItemType Directory -Path $unrelatedRepoSupervisorDir | Out-Null
+  Set-Content -LiteralPath (Join-Path $unrelatedRepoSupervisorDir 'SKILL.md') -Value '# supervisor original'
   $unrelatedContent = "# Minha skill manual`nNão apagar.`n"
   [System.IO.File]::WriteAllText($unrelatedSkill, $unrelatedContent, [System.Text.UTF8Encoding]::new($false))
   $unrelatedBytesBefore = [System.IO.File]::ReadAllBytes($unrelatedSkill)
@@ -150,6 +170,16 @@ try {
   Assert-Throws { & $unrelatedScript -WorkspacePath $unrelatedDir } 'não é uma ponte gerada por install-workspace-skill-bridge\.ps1' 'recusa sobrescrever SKILL.md não relacionado'
   $unrelatedBytesAfter = [System.IO.File]::ReadAllBytes($unrelatedSkill)
   Assert-BytesEqual $unrelatedBytesBefore $unrelatedBytesAfter 'arquivo não relacionado permanece intacto'
+  $unrelatedSupervisorDir = Join-Path $unrelatedDir '.claude/skills/supervisar'
+  $unrelatedSupervisor = Join-Path $unrelatedSupervisorDir 'SKILL.md'
+  New-Item -ItemType Directory -Path $unrelatedSupervisorDir | Out-Null
+  [System.IO.File]::WriteAllText($unrelatedSkill, "Gerada por HORUS App/horus/scripts/install-workspace-skill-bridge.ps1.`n")
+  [System.IO.File]::WriteAllText($unrelatedSupervisor, $unrelatedContent)
+  $priorMaestro = [System.IO.File]::ReadAllBytes($unrelatedSkill)
+  $priorSupervisor = [System.IO.File]::ReadAllBytes($unrelatedSupervisor)
+  Assert-Throws { & $unrelatedScript -WorkspacePath $unrelatedDir } 'não é uma ponte gerada por install-workspace-skill-bridge\.ps1' 'recusa sobrescrever supervisar manual'
+  Assert-BytesEqual $priorMaestro ([System.IO.File]::ReadAllBytes($unrelatedSkill)) 'recusa em supervisar impede alteração de horus-maestro'
+  Assert-BytesEqual $priorSupervisor ([System.IO.File]::ReadAllBytes($unrelatedSupervisor)) 'supervisar manual permanece intacta'
 
   # 7. Validações de ancestralidade e existência do workspace.
   Assert-Throws { & $tempScript -WorkspacePath (Join-Path $tempRoot 'nao-existe') } 'não encontrada' 'erro para workspace inexistente'
