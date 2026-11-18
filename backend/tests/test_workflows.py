@@ -358,7 +358,6 @@ def test_competing_reviews_have_one_winner(settings, client_for):
         assert len(client.get(f"/v1/workflows/{workflow['id']}").json()["approvals"]) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Defeito PG: database_router fecha db_manager antes de manager.close() no shutdown da API (api.py/database/router.py)")
 def test_second_backend_cannot_recover_another_workers_running_step(settings, client_for):
     with client_for(settings) as first:
         async def slow(context):

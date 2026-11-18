@@ -412,7 +412,7 @@ def test_local_data_export_refuses_hostile_trees_and_verifies_hostile_zips(setti
 
 @pytest.mark.parametrize("name", [
     "con", "NUL.mp4", "aux.wav", "com1.txt", "lpt9", "a.mp4.", "a.mp4 ", "a:b.mp4", "a<b.mp4", "..", "...",
-    pytest.param("a\x00.mp4", marks=pytest.mark.xfail(strict=True, reason="Defeito PG: POST /v1/jobs não rejeita \\x00 antes de gravar jsonb (UntranslatableCharacter)")),
+    "a\x00.mp4",
     "a\n.mp4",
 ])
 def test_hostile_file_names_are_refused_by_every_client_path_endpoint(settings, client_for, tmp_path, name):

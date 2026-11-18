@@ -29,6 +29,13 @@ RETENTION_INTERVAL_SECONDS = 6 * 3600
 log = logging.getLogger(__name__)
 
 
+def _no_nul(value: str):
+    # jsonb não aceita NUL; recusa na borda, sem ecoar o valor.
+    if chr(0) in value:
+        raise ValueError("Valor contém caractere inválido.")
+    return value
+
+
 class FactoryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["factory.profile", "factory.render.preview"]
@@ -49,12 +56,22 @@ class TranscriptionRequest(BaseModel):
     model: Literal[MODELS] = "small"  # type: ignore[valid-type]
     language: Literal[LANGUAGES] = "auto"  # type: ignore[valid-type]
 
+    @field_validator("path")
+    @classmethod
+    def reject_nul(cls, value: str):
+        return _no_nul(value)
+
 
 class DownloadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["youtube.download"]
     url: str = Field(max_length=2048)
     directory: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("directory")
+    @classmethod
+    def reject_nul(cls, value: str):
+        return _no_nul(value)
 
     @field_validator("url")
     @classmethod

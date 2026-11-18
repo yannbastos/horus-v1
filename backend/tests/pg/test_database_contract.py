@@ -289,7 +289,10 @@ def test_api_concurrent_diagnostic_deduplicates_and_limits_busy(api_diagnostic, 
             assert result.status_code == 409 and result.json()["detail"]["code"] == "database_busy"
         # Alteração local sem relação com conexão não recebe a mensagem de update.
         result = client.post("/v1/notifications/read-state", json={"all": True, "read": True})
-        assert result.status_code == 200
+        # Notificações agora vivem no PG: sem conexão a operação de domínio recusa com 503 estável
+        # (nunca fallback), e a recusa não é a mensagem de reserva de atualização.
+        assert result.status_code == 503
+        assert result.json()["detail"]["code"] == "database_unavailable"
         assert "Atualização reservada" not in result.text
     finally:
         release.set()
@@ -346,3 +349,17 @@ def test_diagnostic_retry_is_bounded(diagnostic, monkeypatch, code, attempts):
     assert len(calls) == attempts and len(sleeps) == attempts-1
     if sleeps:
         assert 1 <= sleeps[0] <= 1.25 and 2 <= sleeps[1] <= 2.25
+
+
+def test_router_lifespan_closes_pool_only_when_it_owns_the_shutdown(tmp_path):
+    # D4: com close_on_shutdown=False (uso por api.py) o pool segue aberto no shutdown do router;
+    # quem fecha é o dono do ciclo de vida, depois dos workers/etapas.
+    for owns, expected in ((True, 1), (False, 0)):
+        manager = DatabaseManager(ConnectionVault(tmp_path, MemoryKeyring()))
+        closed = []
+        manager.close = lambda closed=closed: closed.append(1)
+        app = FastAPI()
+        app.include_router(database_router(manager, close_on_shutdown=owns))
+        with TestClient(app):
+            assert closed == []
+        assert len(closed) == expected

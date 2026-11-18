@@ -34,7 +34,7 @@ async def payload(request, manager):
     return bytes(data)
 
 
-def database_router(manager: DatabaseManager):
+def database_router(manager: DatabaseManager, *, close_on_shutdown: bool = True):
     @asynccontextmanager
     async def lifespan(app):
         # Sem configuração, não faz I/O de rede; o app sobe em diagnóstico.
@@ -43,7 +43,9 @@ def database_router(manager: DatabaseManager):
         try:
             yield
         finally:
-            await asyncio.to_thread(manager.close)
+            # Dono do ciclo de vida (api.py) fecha o pool depois dos workers/etapas.
+            if close_on_shutdown:
+                await asyncio.to_thread(manager.close)
 
     router = APIRouter(prefix="/v1/database", tags=["database"], lifespan=lifespan)
     errors = {code: {"model": DatabaseErrorResponse} for code in (409, 422, 500, 503)}
@@ -102,4 +104,4 @@ def database_router(manager: DatabaseManager):
 def install_database(app, data_dir, busy):
     manager = DatabaseManager(ConnectionVault(data_dir), busy=busy)
     app.state.database = manager
-    app.include_router(database_router(manager))
+    app.include_router(database_router(manager, close_on_shutdown=False))
