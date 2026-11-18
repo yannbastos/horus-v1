@@ -524,7 +524,7 @@ def daily_runs(store, db=None, *, day=None, clock=None):
     return int(row[0] if not isinstance(row, dict) else next(iter(row.values())))
 
 
-def security_status(settings, store=None):
+def security_status(settings, store=None, *, clock=None):
     from .human_checkpoints import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS
     from .hermes import read_connection
     profile = audit_profile(settings.hermes_profile)
@@ -560,7 +560,7 @@ def security_status(settings, store=None):
     runs_configured = type(settings.max_runs_per_day) is int and settings.max_runs_per_day > 0
     budget_valid, pricing_valid = budget_configured(settings), pricing_configured(settings)
     amounts = {name: Decimal(0) for name in ('estimated_spent_total_usd', 'estimated_spent_today_usd', 'reserved_usd')}
-    runs_today = daily_runs(store) if store is not None else 0
+    runs_today = daily_runs(store, clock=clock) if store is not None else 0
     if not runs_configured:
         block('run_limit_missing', 'Configure teto positivo de execuções reais por dia no operador.')
     elif runs_today >= settings.max_runs_per_day:
@@ -569,7 +569,7 @@ def security_status(settings, store=None):
         block('cost_limits_missing', 'Configure tetos positivos de tokens por execução e por dia no operador.')
     elif store is not None:
         try:
-            if daily_tokens(settings, store) + settings.max_tokens_per_run > settings.max_tokens_per_day:
+            if daily_tokens(settings, store, clock=clock) + settings.max_tokens_per_run > settings.max_tokens_per_day:
                 block('daily_token_limit', 'O saldo diário não comporta uma nova execução.')
         except SecurityGate:
             block('usage_unverifiable', 'Consumo diário não verificável.')
@@ -579,7 +579,7 @@ def security_status(settings, store=None):
         block('pricing_missing', 'Configure preços explícitos positivos de entrada e saída em USD por milhão de tokens.')
     if store is not None:
         try:
-            amounts = budget_usage(store)
+            amounts = budget_usage(store, clock=clock)
         except SecurityGate:
             amounts = {name: None for name in amounts}
             block('cost_usage_unverifiable', 'Consumo monetário anterior não verificável; execução real bloqueada.')
@@ -619,8 +619,8 @@ def security_status(settings, store=None):
                       if store is not None else {'available': False, 'reason': 'Registro de transmissões indisponível sem o banco local.'})}
 
 
-def require_secure(settings, store=None):
-    report = security_status(settings, store)
+def require_secure(settings, store=None, *, clock=None):
+    report = security_status(settings, store, clock=clock)
     if not report['real_execution_allowed']:
         raise SecurityGate('security_gate: ' + ' '.join(item['message'] for item in report['blockers']))
 
