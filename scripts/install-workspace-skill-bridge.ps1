@@ -39,12 +39,12 @@ if ($PSBoundParameters.ContainsKey('WorkspacePath')) {
   if (-not (Test-Path -LiteralPath $WorkspacePath -PathType Container)) {
     throw "Pasta de workspace não encontrada: $WorkspacePath"
   }
-  $workspace = (Resolve-Path -LiteralPath $WorkspacePath).ProviderPath.TrimEnd('\', '/')
+  $workspace = (Resolve-Path -LiteralPath $WorkspacePath).ProviderPath
 } else {
-  $workspace = (Split-Path $repo -Parent).TrimEnd('\', '/')
+  $workspace = Split-Path $repo -Parent
 }
 
-$workspacePrefix = "$workspace\"
+$workspacePrefix = $workspace.TrimEnd('\', '/') + '\'
 if (-not $repo.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
   throw "A pasta de workspace informada deve ser ancestral do repositório ($repo): $workspace"
 }

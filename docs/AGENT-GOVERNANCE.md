@@ -67,6 +67,8 @@ Cada incremento tem objetivo específico, escopo limitado, critérios de aceite,
 - Nunca reduzir cobertura, remover testes, ignorar falhas ou mudar critérios de aceite para obter resultado positivo.
 - Contrato da API: `backend/tests/test_api_contract_snapshot.py` compara o OpenAPI com `backend/tests/snapshots/openapi.json` e falha com diff legível (quebra ou mudança aditiva); mudança intencional: `HORUS_UPDATE_API_SNAPSHOT=1` no mesmo teste e commit do snapshot revisado.
 
+Diante de falha relevante, registre a causa raiz, corrija a falha, confira a cobertura existente e acrescente proteção quando faltar, priorizando validação automática. Atualize a documentação quando necessário, valide e registre a evidência na [Issue](RETOMADA-MAESTRO.md#eventos-de-coordenação-nas-issues). Distinga planejado, implementado e validado. Incidentes pontuais de ambiente não criam regra permanente.
+
 Relatório do worker: até 150 palavras com resultado, evidência, commit, testes (comando e contagem) e bloqueios; respeitar o formato do protocolo Orca. Detalhes completos ficam em arquivo citado por caminho.
 
 ## Fluxo Git

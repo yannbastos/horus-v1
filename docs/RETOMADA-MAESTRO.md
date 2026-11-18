@@ -66,6 +66,7 @@ gh pr list -R yannbastos/horus
 - Para cada item, recupere o último [checkpoint](#checkpoints-nas-issues), compare com o estado atual do Project e confira comentários humanos posteriores. Confira o autor do comentário e sua autoridade sobre a frente. Cruze responsável, branch, SHAs publicados e PR com Git, worktrees e Runs locais. Cruze também Issues e PRs relacionados por escopo e arquivos.
 - Um checkpoint ausente, inválido, incompatível com o estado atual, ou com execução `em execução`/`incerta` sem confirmação local exige reconciliação. Confira o responsável anterior, a existência de alterações locais/publicadas e se outro Maestro ou worker ainda atua. Ausência de Run local, inatividade no PR e idade do checkpoint são insuficientes para liberar o escopo. Confirme a liberação com o responsável (ou decisão explícita do usuário após verificar o risco de perda e duplicação) e registre-a na Issue antes de redistribuir. Outras frentes independentes podem avançar.
 - Antes de criar qualquer Issue, procure o ID `HOR-XXX` em Issues abertas e fechadas, para não duplicar.
+- Use `git log --oneline origin/main..main` após `git fetch origin` para detectar integração que só existe nesta máquina. Compare SHAs e PRs com a Issue. Em outro computador, commits exclusivos da máquina anterior são invisíveis: registre como defasagem confirmada ou não verificável conforme a evidência e encaminhe ao Maestro responsável. Workers sem rede passam resultados ao coordenador, que publica o checkpoint.
 - Se o `gh` não estiver autenticado ou não tiver o escopo `project`, registre só o bloqueio e o procedimento: `gh auth login`, ou `gh auth refresh -s project`. Siga com o que não depende do GitHub.
 
 ## D. Ambiente
@@ -112,7 +113,7 @@ Continua exigindo autorização do usuário: inferência real, APIs pagas, crede
 
 ### Checkpoints nas Issues
 
-Em início, entrega para revisão, bloqueio ou decisão que altere a retomada, handoff e encerramento, comente na Issue existente. Consolide operações intermediárias. O Status vigente continua no Project; o checkpoint registra o estado observado naquele momento. Confirme o Status após cada transição. O campo `execution` descreve o escopo no momento do registro: `livre` quando foi explicitamente liberado, `em execução` quando há responsável executando, ou `incerta` quando falta confirmação.
+Em início, entrega para revisão, bloqueio ou decisão que altere a retomada, handoff e encerramento, comente na Issue existente. Consolide operações intermediárias. O Status vigente continua no Project; o checkpoint registra o estado observado naquele momento. Confirme o Status após cada transição. Use `mode` para distinguir `maestro`, `independente` e `supervisor`. O campo `execution` descreve o escopo no momento do registro: `livre` quando foi explicitamente liberado, `em execução` quando há responsável executando, ou `incerta` quando falta confirmação.
 
 Salve temporariamente em UTF-8, preencha as listas com evidências resumidas (`[]` se vazias), use SHAs completos e datas UTC e use `null` para branch/PR ainda inexistentes. Registre decisões humanas com data, autor, escopo e referência verificável. Revise a visibilidade das evidências e mantenha fora do comentário credenciais, IDs de Runs/terminais, dados privados, conversas e bancos locais.
 
@@ -137,7 +138,8 @@ Salve temporariamente em UTF-8, preencha as listas com evidências resumidas (`[
   "blockers": [],
   "decisions": [],
   "next": "Conferir critérios e dependências na Issue",
-  "execution": "incerta"
+  "execution": "incerta",
+  "mode": "maestro"
 }
 ~~~
 ````
@@ -151,6 +153,43 @@ gh issue comment $numero -R yannbastos/horus-management --body-file $arquivo
 ```
 
 A leitura percorre os comentários e valida o mais recente com marcador reservado, incluindo a correspondência do ID com o título da Issue. Se falhar, confira a Issue e registre um checkpoint corretivo após reconstruir o estado. Use a opção `-RequireReleased` para exigir uma liberação registrada antes de redistribuir, além de conferir evidências e atividade conforme a etapa C. A validação de formato detecta padrões comuns de segredos; a revisão do conteúdo continua obrigatória.
+
+### Eventos de coordenação nas Issues
+
+Use um comentário por abertura ou transição relevante de decisão, bloqueio ou falha, na Issue da frente. Preserve os comentários anteriores. A chave é única por Issue. Para uma decisão respondida ou cancelada, copie a abertura e atualize estado, timestamp, resolução e evidência. O leitor reconstrói o estado por chave e sinaliza fechamentos incompatíveis. Confira o autor e a autorização na Issue antes de usar o resultado.
+
+```markdown
+[HORUS-COORDINATION v1]
+
+~~~json
+{
+  "task": "HOR-999",
+  "key": "validar-ambiente",
+  "kind": "decisão",
+  "state": "aberta",
+  "owner": "Maestro da frente de validação",
+  "scope": "Validação da HOR-999",
+  "mode": "maestro",
+  "timestamp": "2026-11-18T15:30:00Z",
+  "details": "Escolher ambiente para validar a entrega.",
+  "options": ["Usar ambiente isolado", "Adiar a validação"],
+  "recommendation": "Usar ambiente isolado.",
+  "resolution": null,
+  "evidence": []
+}
+~~~
+```
+
+O par `owner`/`scope` identifica a coordenação durável do Run. Use `mode: independente` para uma frente iniciada manualmente, incluindo Codex sem Run, e `supervisor` para incidentes da supervisão. IDs locais são conferidos pelo [fluxo de decisões](MAESTRO-OPERATIONS.md#decisões-humanas). Para `bloqueio` e `falha`, use `options: []`, `recommendation: null` e estado `aberta`, `resolvida` ou `cancelada`. Em falhas, descreva a causa raiz e a proteção existente em `details`, ou declare que a causa está em investigação. No encerramento, use `resolution` para correção e prevenção e `evidence` para testes e o estado da validação. Registre material suficiente para retomar e aplique as mesmas regras de privacidade do checkpoint.
+
+```powershell
+& ./scripts/horus-checkpoint.ps1 -Coordination -Path $arquivo
+# Após conferir a Issue, a chave e o estado anterior:
+gh issue comment $numero -R yannbastos/horus-management --body-file $arquivo
+& ./scripts/horus-checkpoint.ps1 -Coordination -Issue $numero
+```
+
+Em sessão nova, consulte os eventos para cada frente ativa do Project e cruze a lista com os checkpoints e o Git. Apresente as decisões em aberto e falhas agrupadas por Issue e chave, e as frentes independentes com responsável, branch e `mode` no checkpoint, inclusive se ainda não houver eventos. Verifique atividade local separadamente. Em caso de erro de leitura, histórico conflitante ou procedência incerta, confira a Issue e suspenda apenas a ação afetada. Para respostas já registradas, faça a ciência pelo GitHub quando o canal local não existir.
 
 ### Supervisor e handoff no Orca
 

@@ -28,7 +28,8 @@ if ($LASTEXITCODE -ne 0 -or -not $repo) { throw 'Execute o bootstrap a partir de
 $repo = (Resolve-Path -LiteralPath $repo).ProviderPath
 $workspace = if ($PSBoundParameters.ContainsKey('WorkspacePath')) {
   if ([string]::IsNullOrWhiteSpace($WorkspacePath)) { throw 'Informe uma pasta de workspace.' }
-  (Resolve-Path -LiteralPath $WorkspacePath).ProviderPath
+  $selected = if ([IO.Path]::IsPathRooted($WorkspacePath)) { $WorkspacePath } else { Join-Path $repo $WorkspacePath }
+  (Resolve-Path -LiteralPath $selected).ProviderPath
 } else { Split-Path $repo -Parent }
 
 Write-Host "Raiz Git: $repo"

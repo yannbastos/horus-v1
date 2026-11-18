@@ -177,10 +177,10 @@ A orquestração usa Git, Issues e Project. Para preparar somente a coordenaçã
    powershell -NoProfile -File ./scripts/bootstrap-horus-orca.ps1 -WorkspacePath '..'
    ```
 
-   Use `-WorkspacePath '.'` para verificar as skills versionadas se abrir na raiz do checkout. Omitir o argumento escolhe a pasta-mãe. O bootstrap verifica ferramentas, acessos e pontes. Se uma skill manual ocupar o destino, preserve-a e abra na raiz ou escolha outro workspace.
+   Use `-WorkspacePath '.'` para verificar as skills versionadas se abrir na raiz do checkout. Omitir o argumento escolhe a pasta-mãe. Caminhos relativos de `-WorkspacePath` partem da raiz Git detectada. O bootstrap verifica ferramentas, acessos e pontes. Se uma skill manual ocupar o destino, preserve-a e abra na raiz ou escolha outro workspace.
 
 2. Abra o Orca, adicione o checkout e faça os logins locais conforme os passos 1 e 10. Rode o bootstrap com `-DryRun` novamente para conferir acessos. Confirme o login do Antigravity na própria CLI.
-3. Abra uma sessão Claude Code dedicada em um terminal do checkout no Orca e invoque `/supervisar`, quando quiser usar o Supervisor. Ele recupera Issues, Project e checkpoints e usa o Run de supervisão desta instalação.
+3. Abra uma sessão Claude Code dedicada em um terminal do checkout no Orca e invoque `/supervisar`, quando quiser usar o Supervisor. Ele recupera Issues, Project, checkpoints e eventos de coordenação e usa o Run de supervisão desta instalação.
 4. Abra outra sessão e invoque `/horus-maestro` (ou siga o [procedimento manual](RETOMADA-MAESTRO.md)). O Maestro reconcilia as referências publicadas, decisões, pendências e atividade [antes de recriar worktrees e Runs](RETOMADA-MAESTRO.md#e-resumo-e-retomada). Essa etapa também funciona sem Supervisor.
 5. Antes de sair da máquina antiga, publique a branch quando autorizado e registre o que ficou exclusivamente local. Na nova máquina, recrie sessões, terminais e Runs sob demanda. O [handoff de um Run vivo](RETOMADA-MAESTRO.md#supervisor-e-handoff-no-orca) funciona entre sessões da mesma instalação. Modelos e ferramentas locais necessários devem ser obtidos novamente, conferindo os hashes documentados.
 
