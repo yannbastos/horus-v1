@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Cria (ou atualiza) a ponte da skill horus-maestro na pasta de trabalho que contém o repositório horus.
+  Cria (ou atualiza) as pontes das skills horus-maestro e supervisar na pasta de trabalho que contém o repositório horus.
 
 .DESCRIPTION
   O Claude Code só descobre .claude/skills/ da pasta em que a sessão é aberta. Quando o Orca ou o Claude
@@ -12,7 +12,7 @@
   Idempotente: só reescreve quando o conteúdo muda e recusa sobrescrever arquivo não gerado por este script.
 
 .PARAMETER WorkspacePath
-  Pasta de trabalho ancestral do repositório onde gravar .claude/skills/horus-maestro/SKILL.md.
+  Pasta de trabalho ancestral do repositório onde gravar as pontes em .claude/skills/.
   Quando omitido, usa a pasta-mãe imediata do repositório.
 
 .PARAMETER DryRun
@@ -32,11 +32,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repo = (Resolve-Path -LiteralPath (Split-Path $PSScriptRoot -Parent)).ProviderPath.TrimEnd('\', '/')
-$source = Join-Path $repo '.claude/skills/horus-maestro/SKILL.md'
-if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-  throw "Skill versionada não encontrada: $source"
-}
-
 if ($PSBoundParameters.ContainsKey('WorkspacePath')) {
   if ([string]::IsNullOrWhiteSpace($WorkspacePath)) {
     throw 'O parâmetro -WorkspacePath não pode ser vazio.'
@@ -59,9 +54,14 @@ if ([string]::IsNullOrWhiteSpace($repoRel)) {
   throw "Não foi possível calcular o caminho relativo entre o workspace ($workspace) e o repositório ($repo)."
 }
 
-$targetDir = Join-Path $workspace '.claude/skills/horus-maestro'
-$target = Join-Path $targetDir 'SKILL.md'
-$content = @"
+$bridges = foreach ($skill in 'horus-maestro', 'supervisar') {
+  $skillPath = ".claude/skills/$skill/SKILL.md"
+  if (-not (Test-Path -LiteralPath (Join-Path $repo $skillPath) -PathType Leaf)) {
+    throw "Skill versionada não encontrada: $skillPath"
+  }
+  $targetDir = Join-Path $workspace ".claude/skills/$skill"
+  $target = Join-Path $targetDir 'SKILL.md'
+  $content = @"
 ---
 name: horus-maestro
 description: Inicializa, retoma, sincroniza ou transfere a coordenação do projeto Hórus (Maestro) quando a sessão é aberta na pasta de trabalho que contém os repositórios. Ponte para a skill versionada em $repoRel/.claude/skills/horus-maestro. Use quando o usuário pedir para iniciar, retomar, continuar, sincronizar ou transferir o contexto do Hórus.
@@ -77,39 +77,60 @@ Gerada por $repoRel/scripts/install-workspace-skill-bridge.ps1. Não acrescenta 
 Nunca, sem autorização específica do usuário: inferência real do Hermes, APIs ou serviços pagos, credenciais, publicação, envio de dados privados, Git destrutivo.
 "@
 
-$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$desiredBytes = $utf8NoBom.GetBytes($content)
+  if ($skill -eq 'supervisar') {
+    $content = @"
+---
+name: supervisar
+description: Ativa ou retoma a supervisão opcional do Hórus no Orca.
+disable-model-invocation: true
+---
 
-if (Test-Path -LiteralPath $target) {
-  if (Test-Path -LiteralPath $target -PathType Container) {
-    throw "O destino já existe como diretório: $target"
-  }
-  $existingBytes = [System.IO.File]::ReadAllBytes($target)
-  $existingText = $utf8NoBom.GetString($existingBytes)
-  if ($existingText -notmatch 'install-workspace-skill-bridge\.ps1') {
-    throw "Arquivo existente não é uma ponte gerada por install-workspace-skill-bridge.ps1; nada alterado: $target"
+# Hórus — ponte para supervisão
+
+Gerada por $repoRel/scripts/install-workspace-skill-bridge.ps1.
+Leia e siga $repoRel/.claude/skills/supervisar/SKILL.md, usando $repoRel/ como raiz Git.
+"@
   }
 
-  $sameBytes = ($existingBytes.Length -eq $desiredBytes.Length)
-  if ($sameBytes) {
-    for ($i = 0; $i -lt $existingBytes.Length; $i++) {
-      if ($existingBytes[$i] -ne $desiredBytes[$i]) {
-        $sameBytes = $false
-        break
-      }
+  foreach ($path in @((Join-Path $workspace '.claude'), (Join-Path $workspace '.claude/skills'), $targetDir, $target)) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "A ponte não pode seguir um link ou junção: $path"
     }
   }
-  if ($sameBytes) {
-    "Ponte já atualizada (sem alterações): $target"
-    return
+
+  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+  $desiredBytes = $utf8NoBom.GetBytes($content)
+
+  if (Test-Path -LiteralPath $target) {
+    if (Test-Path -LiteralPath $target -PathType Container) {
+      throw "O destino já existe como diretório: $target"
+    }
+    $existingBytes = [System.IO.File]::ReadAllBytes($target)
+    $existingText = $utf8NoBom.GetString($existingBytes)
+    $marker = "Gerada por $repoRel/scripts/install-workspace-skill-bridge.ps1."
+    $lines = $existingText -split '\r?\n'
+    if ($marker -cnotin $lines -and "$marker Não acrescenta nem altera regras." -cnotin $lines) {
+      throw "Arquivo existente não é uma ponte gerada por install-workspace-skill-bridge.ps1; nada alterado: $target"
+    }
+  }
+  [pscustomobject]@{
+    Path = $target
+    Directory = $targetDir
+    Bytes = $desiredBytes
+    Unchanged = (Test-Path -LiteralPath $target -PathType Leaf) -and
+      [Convert]::ToBase64String($existingBytes) -ceq [Convert]::ToBase64String($desiredBytes)
   }
 }
 
-if ($DryRun) {
-  "Gravaria a ponte em: $target"
-  return
+foreach ($bridge in $bridges) {
+  if ($bridge.Unchanged) {
+    "Ponte já atualizada (sem alterações): $($bridge.Path)"
+  } elseif ($DryRun) {
+    "Gravaria a ponte em: $($bridge.Path)"
+  } else {
+    New-Item -ItemType Directory -Force -Path $bridge.Directory | Out-Null
+    [IO.File]::WriteAllBytes($bridge.Path, $bridge.Bytes)
+    "Ponte gravada em: $($bridge.Path)"
+  }
 }
-
-New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-[System.IO.File]::WriteAllBytes($target, $desiredBytes)
-"Ponte gravada em: $target"

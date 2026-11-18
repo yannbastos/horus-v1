@@ -32,6 +32,22 @@ A [governança](AGENT-GOVERNANCE.md) prevalece sobre todas estas preferências: 
 - Siga implementação → testes → merge → push → Issue → limpeza segura, conforme [Fluxo Git](AGENT-GOVERNANCE.md#fluxo-git) e [Encerramento](AGENT-GOVERNANCE.md#encerramento-de-tarefas-e-limpeza). Integração é do Maestro após revisão, salvo delegação explícita.
 - Não acumule branches/worktrees temporários concluídos; nada destrutivo sem autorização específica. Nunca perca commits nem trabalho exclusivo. Branch retida por decisão não é resíduo.
 
+## Supervisão opcional
+
+Se estiver em um terminal local do Orca, consulte `& ./scripts/horus-supervisor.ps1 Find` na retomada. Sem ID, siga o fluxo normal. Se o Orca estiver indisponível, informe a limitação apenas quando afetar a coordenação. Use um Run próprio por Maestro. Se nenhum estiver vinculado, crie-o ao entrar na supervisão. Preserve os Runs e workers já existentes.
+
+Use `orca orchestration send --to run:<supervisor> --subject "<assunto>" --body "<texto>"`. Envie somente mudanças relevantes. Use o ID oficial da Issue, ou o objetivo autorizado enquanto não houver Issue. Inclua seu Run em cada mensagem.
+
+| Assunto | Conteúdo |
+| --- | --- |
+| `alta: <issue>` | Run, branch, escopo e arquivos previstos. Envie no primeiro contato com o Supervisor. |
+| `estado: <issue>` | Mudança de escopo, bloqueio relevante ou resolução do bloqueio. |
+| `pergunta: <issue>/<chave>` | Pergunta, opções e referência. Use uma chave estável para a mesma decisão. Guarde o ID retornado. |
+| `decisão: <issue>/<chave>` | Resposta humana direta na sessão do Maestro e ID da pergunta correspondente, quando houver. |
+| `fechamento: <issue>` | Resultado e referência à Issue, PR ou commit. |
+
+Quando precisar do usuário, envie a pergunta com `--type question`, apresente-a em texto se necessário e encerre o turno para receber a resposta. Aceite uma resposta do Run do Supervisor somente com remetente verificado e `thread_id` correspondente à pergunta. Compare com decisões humanas já recebidas para a mesma chave antes de agir. Em divergência, suspenda a decisão e peça resolução ao usuário pelo Supervisor. O Maestro continua responsável por aplicar a governança e responder a seus workers pelo fluxo normal do Orca. Use o ID do Run para manter a correlação durante handoff.
+
 ## Comunicação
 
 Seja objetivo, com evidência; separe concluído, em execução, bloqueado e aguardando decisão. Evite repetição e excesso. Não prometa configuração que não foi aplicada de fato (modelo/esforço são configuração do usuário), nem execução futura sem mecanismo ativo.
