@@ -316,11 +316,16 @@ class ImportService:
     def _find_by_export_id(self, conn, export_id: str) -> dict | None:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                "SELECT manifest FROM horus.imports WHERE manifest->>'export_id' = %s LIMIT 1",
+                "SELECT manifest FROM horus.imports WHERE manifest->>'export_id' = %s ORDER BY created_at DESC, id DESC",
                 (export_id,),
             )
-            row = cur.fetchone()
-        return row["manifest"] if row and self._valid_record(row["manifest"]) else None
+            rows = cur.fetchall()
+        # Legado: importação excluída (pasta ausente/quarentena) deixa de existir; reimportar o pacote é permitido.
+        for row in rows:
+            manifest = row["manifest"]
+            if self._valid_record(manifest) and self._folder_present(manifest["id"]):
+                return manifest
+        return None
 
     def import_package(self, path: Path, key: str) -> tuple[dict, bool]:
         request_hash = hashlib.sha256(f"{key}".encode()).hexdigest()
