@@ -10,7 +10,9 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .guards import MigrationGuardError, validate_target_dsn
+from horus_backend.database.transport import ConnectFailure, connection_type
+
+from .guards import MigrationGuardError, supabase_target, validate_target_dsn
 from .mapping import (
     EXPECTED_PG_SCHEMA_VERSION,
     LOAD_ORDER,
@@ -32,11 +34,39 @@ class MigrationVerificationError(RuntimeError):
         self.inconsistencies = inconsistencies or []
 
 
-def check_migration_run(dsn: str, run_id: str) -> dict[str, Any] | None:
+def _connect_target(dsn: str, *, target_mode: str, user_authorized: bool):
+    if target_mode == "loopback":
+        validate_target_dsn(dsn)
+        return psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
+    if target_mode != "supabase":
+        raise MigrationGuardError("Modo de destino inválido.")
+    config = supabase_target(dsn, user_authorized=user_authorized)
+    try:
+        conn = connection_type(config).connect()
+    except ConnectFailure as exc:
+        raise MigrationGuardError(f"Conexão Supabase recusada ({exc.code}).") from None
+    conn.row_factory = dict_row
+    return conn
+
+
+def _ensure_supabase_role(conn: psycopg.Connection[Any], *, apply: bool = False) -> None:
+    role = conn.execute("SELECT current_user AS role").fetchone()["role"]
+    if role != "horus_app":
+        raise MigrationGuardError("O destino Supabase exige uma sessão como horus_app.")
+    if apply and not conn.execute(
+        "SELECT has_table_privilege('horus.migration_runs', 'INSERT') AS can_record"
+    ).fetchone()["can_record"]:
+        raise MigrationGuardError("Carga Supabase recusada: horus_app não pode gravar migration_runs.")
+
+
+def check_migration_run(
+    dsn: str, run_id: str, *, target_mode: str = "loopback", user_authorized: bool = False
+) -> dict[str, Any] | None:
     """Consulta horus.migration_runs para recuperação após COMMIT ambíguo."""
-    validate_target_dsn(dsn)
     parsed_id = str(uuid.UUID(run_id))
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
+    with _connect_target(dsn, target_mode=target_mode, user_authorized=user_authorized) as conn:
+        if target_mode == "supabase":
+            _ensure_supabase_role(conn)
         row = conn.execute(
             "SELECT run_id::text AS run_id, source_sha256, mapping_version, "
             "source_schema_version, table_checks, applied_at "
@@ -204,12 +234,14 @@ def execute_pg_load(
     run_id: uuid.UUID,
     apply: bool = False,
     inject_failure_after: str | None = None,
+    target_mode: str = "loopback",
+    user_authorized: bool = False,
 ) -> dict[str, Any]:
     """Valida destino e executa dry-run ou carga transacional única no PostgreSQL."""
-    validate_target_dsn(dsn)
-
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
+    with _connect_target(dsn, target_mode=target_mode, user_authorized=user_authorized) as conn:
         with conn.transaction():
+            if target_mode == "supabase":
+                _ensure_supabase_role(conn, apply=apply)
             conn.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s)",
                 (ADVISORY_NS, ADVISORY_KEY),

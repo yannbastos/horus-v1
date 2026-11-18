@@ -1,8 +1,8 @@
 """CLI verificável de migração SQLite (v9-v12) -> PostgreSQL (HOR-164 I-mig).
 
 Dry-run por padrão. Exige cópia fria explícita fora de pastas operacionais e
-destino PostgreSQL descartável em loopback. Nunca executa autorização, produção
-ou inferência e não registra conteúdo privado em logs ou relatórios.
+destino PostgreSQL descartável em loopback ou Supabase autorizado.
+Não registra conteúdo privado em logs ou relatórios.
 """
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 import sys
 
+import psycopg
+
 from migrate_sqlite_pg.guards import MigrationGuardError, validate_report_out
 from migrate_sqlite_pg.pg_loader import check_migration_run
 from migrate_sqlite_pg.runner import run_migration
@@ -18,12 +20,19 @@ from migrate_sqlite_pg.runner import run_migration
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Migração verificável SQLite (v9-v12) -> PostgreSQL (dry-run por padrão)."
+        description="Migração verificável SQLite (v9-v12) -> PostgreSQL (dry-run por padrão).",
+        allow_abbrev=False,
     )
     parser.add_argument("--source-dir", type=Path, help="Cópia explícita completa de data_dir")
     parser.add_argument("--source-db", type=Path, help="Cópia explícita fria de horus.sqlite3")
     parser.add_argument("--radar-db", type=Path, help="Cópia explícita fria de radar-youtube.sqlite3")
-    parser.add_argument("--target-dsn", required=True, help="DSN PostgreSQL loopback descartável (sem senha)")
+    parser.add_argument("--target-dsn", required=True, help="DSN PostgreSQL sem senha")
+    parser.add_argument("--target-mode", choices=("loopback", "supabase"), default="loopback")
+    parser.add_argument(
+        "--i-have-user-authorization",
+        action="store_true",
+        help="Confirma autorização explícita do usuário para acessar o destino Supabase",
+    )
     parser.add_argument("--backup-dir", type=Path, help="Diretório para backup imutável da cópia")
     parser.add_argument("--run-id", help="UUID explícito da execução (para idempotência)")
     parser.add_argument(
@@ -45,9 +54,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check_run_id:
         try:
-            row = check_migration_run(args.target_dsn, args.check_run_id)
+            row = check_migration_run(
+                args.target_dsn, args.check_run_id,
+                target_mode=args.target_mode, user_authorized=args.i_have_user_authorization,
+            )
         except (MigrationGuardError, ValueError) as exc:
             print(json.dumps({"status": "refused", "error": str(exc)}, ensure_ascii=False))
+            return 1
+        except psycopg.Error:
+            if args.target_mode == "loopback":
+                raise
+            print(json.dumps({"status": "failed", "error": "Falha ao consultar a execução no Supabase."}, ensure_ascii=False))
             return 1
         if row is None:
             print(json.dumps({"status": "not_found", "run_id": args.check_run_id}, ensure_ascii=False))
@@ -79,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         backup_dir=args.backup_dir,
         run_id=args.run_id,
         apply=args.apply,
+        target_mode=args.target_mode,
+        user_authorized=args.i_have_user_authorization,
     )
 
     if validated_report_out is not None:

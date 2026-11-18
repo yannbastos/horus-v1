@@ -9,10 +9,13 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from unittest.mock import Mock
 import uuid
 
+import psycopg
 import pytest
 
+from horus_backend.database import transport
 from schema_support import schema_database
 
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
@@ -26,6 +29,7 @@ from migrate_sqlite_pg.guards import (  # noqa: E402
     validate_source_path,
 )
 from migrate_sqlite_pg.mapping import LOAD_ORDER, TABLE_SPECS  # noqa: E402
+from migrate_sqlite_pg import pg_loader  # noqa: E402
 from migrate_sqlite_pg.pg_loader import check_migration_run  # noqa: E402
 from migrate_sqlite_pg.runner import run_migration  # noqa: E402
 from migrate_sqlite_pg.sqlite_reader import compute_table_stats  # noqa: E402
@@ -36,6 +40,103 @@ from migration_fixtures.synthetic_builder import (  # noqa: E402
     build_synthetic_data_dir,
 )
 from migrate_sqlite_pg.legacy_schema import MIGRATIONS  # noqa: E402
+from migrate_sqlite_to_pg import main  # noqa: E402
+
+
+SUPABASE_DSN = (
+    "host=synthetic.pooler.supabase.com port=5432 dbname=postgres "
+    "user=horus_app.abcdefghijklmnopqrst sslmode=verify-full"
+)
+SYNTHETIC_PASSWORD = "senha sintética de teste"
+
+
+@pytest.fixture
+def supabase_transport(monkeypatch):
+    for name in tuple(os.environ):
+        if name.upper().startswith("PG"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("HORUS_MIGRATION_SUPABASE_PASSWORD", SYNTHETIC_PASSWORD)
+    dns = Mock(return_value=[(None, None, None, "", ("8.8.8.8", 5432))])
+    connect = Mock()
+    monkeypatch.setattr(transport.socket, "getaddrinfo", dns)
+    monkeypatch.setattr(psycopg.Connection, "connect", connect)
+    return dns, connect
+
+
+@pytest.mark.parametrize(
+    ("dsn", "authorized", "message"),
+    [
+        (SUPABASE_DSN.replace(".pooler.supabase.com", ".invalid"), True, "host"),
+        (SUPABASE_DSN.replace("verify-full", "require"), True, "sslmode=verify-full"),
+        (SUPABASE_DSN + " hostaddr=10.0.0.1", True, "hostaddr"),
+        (SUPABASE_DSN + " password=nao-ecoar", True, "credenciais"),
+        (SUPABASE_DSN, False, "--i-have-user-authorization"),
+        (SUPABASE_DSN.replace("horus_app.", "postgres."), True, "usuário horus_app"),
+    ],
+)
+def test_supabase_refuses_invalid_destination_before_dns(
+    supabase_transport, capsys, dsn, authorized, message
+):
+    dns, connect = supabase_transport
+    flags = ["--i-have-user-authorization"] if authorized else []
+    args = ["--target-mode", "supabase", "--target-dsn", dsn, *flags]
+    for operation in ([], ["--apply"], ["--check-run-id", str(uuid.uuid4())]):
+        assert main(args + operation) == 1
+        output = capsys.readouterr().out
+        assert json.loads(output)["status"] == "refused"
+        assert message in output
+        assert "nao-ecoar" not in output
+    dns.assert_not_called()
+    connect.assert_not_called()
+
+
+def test_supabase_refuses_mixed_public_and_private_dns(supabase_transport):
+    dns, connect = supabase_transport
+    dns.return_value.append((None, None, None, "", ("10.0.0.1", 5432)))
+    with pytest.raises(MigrationGuardError, match="database_endpoint_not_allowed"):
+        check_migration_run(
+            SUPABASE_DSN, str(uuid.uuid4()), target_mode="supabase", user_authorized=True,
+        )
+    connect.assert_not_called()
+
+
+def test_supabase_pins_dns_and_uses_embedded_ca(supabase_transport, capsys):
+    dns, connect = supabase_transport
+    connect.side_effect = psycopg.OperationalError(SYNTHETIC_PASSWORD)
+    assert main([
+        "--target-mode", "supabase", "--target-dsn", SUPABASE_DSN,
+        "--i-have-user-authorization", "--check-run-id", str(uuid.uuid4()),
+    ]) == 1
+    output = capsys.readouterr().out
+    assert SYNTHETIC_PASSWORD not in output
+    assert "database_unreachable" in output
+    dns.assert_called_once_with("synthetic.pooler.supabase.com", 5432, type=transport.socket.SOCK_STREAM)
+    options = connect.call_args.kwargs
+    assert options["host"] == "synthetic.pooler.supabase.com"
+    assert options["hostaddr"] == "8.8.8.8"
+    assert options["sslmode"] == "verify-full"
+    assert options["sslrootcert"] == str(transport.CA_FILE)
+    assert transport.CA_FILE.is_file()
+    assert options["password"] == SYNTHETIC_PASSWORD
+
+
+def test_supabase_load_refuses_horus_app_without_ledger_insert(
+    pg_cluster, tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("HORUS_MIGRATION_SUPABASE_PASSWORD", SYNTHETIC_PASSWORD)
+    source_dir = build_synthetic_data_dir(tmp_path / "remote_source", target_version=12)
+    with schema_database(pg_cluster) as (admin, _pool):
+        def local_transport(_config):
+            return Mock(connect=lambda: pg_cluster.connect(admin.info.dbname, "horus_app", autocommit=True))
+
+        monkeypatch.setattr(pg_loader, "connection_type", local_transport)
+        report = run_migration(
+            target_dsn=SUPABASE_DSN, target_mode="supabase", user_authorized=True,
+            source_dir=source_dir, backup_dir=tmp_path / "remote_backup", apply=True,
+        )
+        assert report["status"] == "refused"
+        assert "horus_app não pode gravar migration_runs" in report["error"]
+        assert admin.execute("SELECT COUNT(*) FROM horus.migration_runs").fetchone()[0] == 0
 
 
 def _assert_no_private_markers(obj: object) -> None:

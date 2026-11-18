@@ -7,7 +7,7 @@ import tempfile
 from typing import Any
 import uuid
 
-from .guards import MigrationGuardError, validate_output_dir, validate_source_path
+from .guards import MigrationGuardError, supabase_target, validate_output_dir, validate_source_path
 from .mapping import MAPPING_VERSION
 from .pg_loader import MigrationVerificationError, execute_pg_load
 from .sqlite_reader import (
@@ -52,6 +52,8 @@ def run_migration(
     run_id: str | None = None,
     apply: bool = False,
     inject_failure_after: str | None = None,
+    target_mode: str = "loopback",
+    user_authorized: bool = False,
 ) -> dict[str, Any]:
     """Executa prévia (dry-run por padrão) ou migração transacional verificável."""
     parsed_run_id = uuid.UUID(run_id) if run_id else uuid.uuid4()
@@ -67,6 +69,8 @@ def run_migration(
     }
 
     try:
+        if target_mode == "supabase":
+            supabase_target(target_dsn, user_authorized=user_authorized)
         if backup_dir is None:
             resolved_backup_dir = Path(tempfile.mkdtemp(prefix="horus-mig-backup-"))
         else:
@@ -108,6 +112,8 @@ def run_migration(
             run_id=parsed_run_id,
             apply=apply,
             inject_failure_after=inject_failure_after,
+            target_mode=target_mode,
+            user_authorized=user_authorized,
         )
         report.update(result)
         return report
