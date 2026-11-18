@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
+from support_e import pg_client_for, pg_transport  # noqa: F401
 from horus_backend.config import Settings
 from horus_backend.jobs import (DownloadRequest, FactoryRequest, TranscriptionRequest, job_environment)
 
@@ -83,7 +83,7 @@ def test_unrelated_tool_variables_do_not_leak(planted, tmp_path):
         assert 'HORUS_CUDA_RUNTIME_DIR' not in job_environment(REQUESTS[operation], settings(tmp_path))
 
 
-def test_subprocess_really_receives_minimal_environment(planted, tmp_path):
+def test_subprocess_really_receives_minimal_environment(planted, tmp_path, pg_transport):
     out = tmp_path / "env.json"
     worker = tmp_path / "fake_worker.py"
     worker.write_text(f'''
@@ -98,8 +98,7 @@ if args[0] == "download":
     media = tmp_path / "a.mp4"
     media.write_bytes(b"x")
     config = settings(tmp_path, worker_command=(sys.executable, str(worker)))
-    with TestClient(create_app(config), base_url="http://127.0.0.1",
-                    headers={"Authorization": f"Bearer {TOKEN}"}) as client:
+    with pg_client_for(config, headers={"Authorization": f"Bearer {TOKEN}"}) as client:
         job = client.post("/v1/jobs", json={"operation": "transcription.run", "path": str(media)}).json()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and client.get(f"/v1/jobs/{job['id']}").json()["status"] not in {

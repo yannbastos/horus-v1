@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.file_access import PathNotAllowed, client_path
 from horus_backend.jobs import DownloadRequest, TranscriptionRequest
+from support_e import pg_create_app, pg_transport  # noqa: F401
 
 TOKEN = "file-access-tests-token-0123456789"
 GOOD = {"Authorization": f"Bearer {TOKEN}"}
@@ -32,14 +32,15 @@ HOSTILE = [
 
 
 @pytest.fixture
-def settings(tmp_path):
+def settings(tmp_path, pg_transport):
     return Settings(token=TOKEN, data_dir=tmp_path / "data", factory_root=None, hermes_executable=None,
                     hermes_config=tmp_path / "hermes.json")
 
 
 @pytest.fixture
 def client(settings):
-    return TestClient(create_app(settings), base_url="http://127.0.0.1", headers=GOOD)
+    with TestClient(pg_create_app(settings), base_url="http://127.0.0.1", headers=GOOD) as client:
+        yield client
 
 
 # --- helper ---------------------------------------------------------------------------------------------------
