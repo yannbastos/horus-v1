@@ -13,7 +13,7 @@ import pytest
 
 from horus_backend.config import Settings
 from horus_backend.narration.providers import WindowsSapi
-from test_workflows import TOKEN, client_for, settings, review
+from support_a import TOKEN, client_for, settings, review
 from test_scripts import decide
 from test_scripts_manual import manual
 from test_production import start

@@ -5,10 +5,10 @@ import json
 from pathlib import Path
 import pytest
 
-from test_workflows import settings, client_for
+from support_a import client_for, pg_admin_connect, settings
 from test_scripts import approved, generate, decide
 from horus_backend.production import confined, inspect_artifact
-from horus_backend.workflows import WorkflowConflict
+from horus_backend.workflows import WorkflowConflict, encode
 
 
 @pytest.fixture(autouse=True)
@@ -20,13 +20,25 @@ def isolated_production_environment(monkeypatch):
                         lambda self: [{'id':'fixture-pt-br','name':'Fixture','language':'pt-BR'}])
 
 
+def _set_narration_pref(pg_app_cluster, pg_app_database, value: dict) -> None:
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        db.execute(
+            """
+            INSERT INTO horus.preferences(device_id, key, value, updated_at)
+            VALUES ('default', 'narration.preference', %s::jsonb, now())
+            ON CONFLICT (device_id, key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+            """,
+            (json.dumps(value),),
+        )
+
+
 @pytest.mark.parametrize('source', ['default','preference','explicit'])
-def test_production_narration_selection_and_receipt(settings, source):
+def test_production_narration_selection_and_receipt(settings, pg_app_cluster, pg_app_database, source):
     preference = {'provider':'piper','voice_id':'saved.onnx'}
     explicit = {'provider':'windows_sapi','voice_id':'explicit-voice'}
     if source != 'default':
-        settings.data_dir.mkdir(parents=True)
-        (settings.data_dir/'narration-preference.json').write_text(json.dumps(preference),encoding='utf-8')
+        _set_narration_pref(pg_app_cluster, pg_app_database, preference)
     expected = explicit if source == 'explicit' else preference if source == 'preference' else {
         'provider':'windows_sapi','voice_id':'fixture-pt-br'}
     extra = {'narration':explicit} if source == 'explicit' else {}
@@ -34,15 +46,15 @@ def test_production_narration_selection_and_receipt(settings, source):
         script = script_for(client)
         response = start(client,script,mode='local_pilot',**extra)
         assert response.status_code == 201, response.text
-        with client.app.state.store.connect() as db:
-            plan = json.loads(db.execute('SELECT plan FROM productions WHERE id=?',(response.json()['id'],)).fetchone()[0])
-            receipt = json.loads(db.execute('SELECT request FROM production_receipts').fetchone()[0])
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            plan = db.execute('SELECT plan FROM horus.productions WHERE id=%s',(response.json()['id'],)).fetchone()[0]
+            receipt = db.execute('SELECT request FROM horus.production_receipts').fetchone()[0]
         assert {key:plan['audio'][key] for key in expected} == expected
         assert receipt['narration'] == expected
         assert start(client,script,mode='local_pilot',**extra).status_code == 200
         changed = {**expected,'voice_id':'different'}
         assert start(client,script,mode='local_pilot',narration=changed).status_code == 409
-        (settings.data_dir/'narration-preference.json').write_text(json.dumps(changed),encoding='utf-8')
+        _set_narration_pref(pg_app_cluster, pg_app_database, changed)
         assert start(client,script,mode='local_pilot').status_code == 409
 
 
@@ -68,19 +80,17 @@ def test_narration_selection_rejected_for_fixture_modes(settings):
             assert start(client,script,mode=mode,narration={'provider':'piper','voice_id':'v'}).status_code == 422
 
 
-def test_legacy_pilot_receipt_without_selection_remains_recoverable(settings):
+def test_legacy_pilot_receipt_without_selection_remains_recoverable(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         script = script_for(client)
         response = start(client,script,mode='local_pilot')
         item = finished(client,response.json())
-        with client.app.state.store.connect() as db:
-            old_request = {'expected_version':script['version'],'mode':'local_pilot'}
-            from horus_backend.workflows import encode
-            db.execute('UPDATE production_receipts SET request=?',(encode(old_request),))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            old_request = encode({'expected_version':script['version'],'mode':'local_pilot'})
+            db.execute('UPDATE horus.production_receipts SET request=%s::jsonb, request_canonical=%s',(old_request, old_request.encode('utf-8')))
         replay = start(client,script,mode='local_pilot')
         assert replay.status_code==200 and replay.json()['id']==item['id']
-        settings.data_dir.joinpath('narration-preference.json').write_text(
-            json.dumps({'provider':'piper','voice_id':'changed.onnx'}),encoding='utf-8')
+        _set_narration_pref(pg_app_cluster, pg_app_database, {'provider':'piper','voice_id':'changed.onnx'})
         assert start(client,script,mode='local_pilot').status_code==409
 
 
@@ -90,7 +100,7 @@ def script_for(client):
     return script
 
 
-def test_render_quality_is_explicit_validated_and_part_of_plan(settings):
+def test_render_quality_is_explicit_validated_and_part_of_plan(settings, pg_app_cluster, pg_app_database):
     from horus_backend.production import ProductionRequest
     from pydantic import ValidationError
     assert ProductionRequest(expected_version=1,mode='local_pilot').render_quality == 'draft'
@@ -103,9 +113,9 @@ def test_render_quality_is_explicit_validated_and_part_of_plan(settings):
         assert start(client,script,mode='local_pilot',render_quality='other').status_code == 422
         response = start(client,script,mode='local_pilot',render_quality='final')
         assert response.status_code == 201
-        with client.app.state.store.connect() as db:
-            plan = json.loads(db.execute('SELECT plan FROM productions WHERE id=?',
-                (response.json()['id'],)).fetchone()['plan'])
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            plan = db.execute('SELECT plan FROM horus.productions WHERE id=%s',
+                (response.json()['id'],)).fetchone()[0]
         assert plan['render_quality'] == 'final'
         assert start(client,script,mode='local_pilot',render_quality='draft').status_code == 409
 
@@ -133,18 +143,17 @@ def test_record_exposes_persisted_render_selection(settings, quality, narration)
             assert str(settings.data_dir) not in json.dumps(record)
 
 
-@pytest.mark.parametrize('plan', [None, '{}', 'null', '[]', 'invalid',
+@pytest.mark.parametrize('plan', ['{}', '[]', '{"render_quality":123}', '{"audio":"bad"}',
     '{"render_quality":"unknown","audio":{"provider":"kokoro"}}',
     '{"audio":{"provider":"kokoro","voice_id":"C:\\\\private\\\\voice.pt"}}',
     '{"audio":{"provider":"kokoro","voice_id":"/private/voice.pt"}}'])
-def test_legacy_or_invalid_plan_does_not_invent_selection(settings, plan):
+def test_legacy_or_invalid_plan_does_not_invent_selection(settings, pg_app_cluster, pg_app_database, plan):
     with client_for(settings) as client:
         script = script_for(client)
         response = start(client, script)
         item = finished(client, response.json())
-        with client.app.state.store.connect() as db:
-            # A coluna exige texto; vazio representa o plano antigo ausente.
-            db.execute('UPDATE productions SET plan=? WHERE id=?', (plan or '', item['id']))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('UPDATE horus.productions SET plan=%s::jsonb, plan_canonical=%s WHERE id=%s', (plan, plan.encode('utf-8'), item['id']))
         record = client.get('/v1/productions/' + item['id']).json()
         assert record['render_quality'] is None
         assert record['narration'] is None
@@ -186,7 +195,7 @@ def test_simulated_artifacts_idempotency_and_restart(settings):
         assert client.get(f"/v1/scripts/{script['id']}/productions").json()['items'] == [item]
 
 
-def test_human_approval_latest_and_strict_payload(settings):
+def test_human_approval_latest_and_strict_payload(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         script = generate(client, approved(client)).json()
         assert start(client, script).status_code == 409
@@ -194,8 +203,8 @@ def test_human_approval_latest_and_strict_payload(settings):
         assert start(client, script, executable='evil').status_code == 422
         assert decide(client, script).status_code == 200
         assert start(client, script, expected_version=2).status_code == 409
-        with client.app.state.store.connect() as db:
-            db.execute('UPDATE scripts SET review=NULL WHERE id=?',(script['id'],))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('UPDATE horus.scripts SET review=NULL, review_canonical=NULL WHERE id=%s',(script['id'],))
         assert start(client, script).status_code == 409
         assert client.get('/v1/jobs').json()[-1]['payload']['operation'] != 'production.run'
 
@@ -252,13 +261,14 @@ def test_queued_cancellation_and_restart_interrupted(settings):
         assert client.post(f"/v1/jobs/{other['job_id']}/retry").status_code == 409
 
 
-def test_approval_snapshot_hash_is_required(settings):
+def test_approval_snapshot_hash_is_required(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         script = script_for(client)
-        with client.app.state.store.connect() as db:
-            document = json.loads(db.execute('SELECT document FROM scripts WHERE id=?',(script['id'],)).fetchone()[0])
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            document = db.execute('SELECT document FROM horus.scripts WHERE id=%s',(script['id'],)).fetchone()[0]
             document['title'] = 'Alterado depois da aprovação'
-            db.execute('UPDATE scripts SET document=? WHERE id=?',(json.dumps(document),script['id']))
+            encoded = encode(document)
+            db.execute('UPDATE horus.scripts SET document=%s::jsonb, document_canonical=%s WHERE id=%s',(encoded, encoded.encode('utf-8'), script['id']))
         assert start(client, script).status_code == 409
 
 
@@ -303,13 +313,13 @@ def test_running_cancel_owns_tree_and_sanitizes_logs(settings, tmp_path, monkeyp
         assert 'SECRET_PRODUCTION_TEST' not in events
 
 
-def test_queued_snapshot_is_rechecked_before_execution(settings):
+def test_queued_snapshot_is_rechecked_before_execution(settings, pg_app_cluster, pg_app_database):
     with client_for(settings) as client:
         script = script_for(client)
         client.portal.call(client.app.state.manager.worker.cancel)
         item = start(client, script).json()
-        with client.app.state.store.connect() as db:
-            db.execute('DELETE FROM script_receipts WHERE scope=?',(f"review:{script['id']}",))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('DELETE FROM horus.script_receipts WHERE scope=%s',(f"review:{script['id']}",))
     with client_for(settings) as client:
         result = finished(client,item)
         assert result['status'] == 'blocked'
@@ -330,7 +340,7 @@ def test_artifact_links_are_rejected(tmp_path):
 
 
 @pytest.mark.parametrize('notes', [[], [{'at_seconds':0.125,'text':'Rever a legenda deste instante.'}]])
-def test_review_hash_and_idempotency_on_registered_real_fixture(settings, tmp_path, notes):
+def test_review_hash_and_idempotency_on_registered_real_fixture(settings, pg_app_cluster, pg_app_database, tmp_path, notes):
     # Fixture MP4 H264 real de dois frames, criada localmente pelo codec da fábrica se preparado.
     import os
     video=Path(os.environ.get('HORUS_TEST_REAL_VIDEO', 'missing-video'))
@@ -344,8 +354,8 @@ def test_review_hash_and_idempotency_on_registered_real_fixture(settings, tmp_pa
         root.mkdir(parents=True)
         (root/'video.mp4').write_bytes(video.read_bytes())
         a=inspect_artifact(root,'video.mp4','video')
-        with client.app.state.store.connect() as db:
-            db.execute('UPDATE productions SET artifacts=? WHERE id=?',(json.dumps([a]),item['id']))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('UPDATE horus.productions SET artifacts=%s::jsonb WHERE id=%s',(json.dumps([a]),item['id']))
         client.app.state.store.update(item['job_id'],'succeeded',result={'stage':'review'})
         route=f"/v1/productions/{item['id']}/review"
         request={'decision':'reject','artifact_sha256':a['sha256'],'notes':notes}
@@ -357,10 +367,10 @@ def test_review_hash_and_idempotency_on_registered_real_fixture(settings, tmp_pa
         assert client.post(route,json=request,headers=headers).json()==response.json()
         if not notes:
             # Recibos anteriores ao campo opcional não incluíam notes no corpo canônico.
-            with client.app.state.store.connect() as db:
-                receipt=db.execute('SELECT request FROM production_receipts WHERE scope=?',
+            with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+                receipt=db.execute('SELECT request FROM horus.production_receipts WHERE scope=%s',
                                    ('review:'+item['id'],)).fetchone()
-            assert 'notes' not in json.loads(receipt['request'])
+            assert 'notes' not in receipt[0]
             without_notes={k:v for k,v in request.items() if k!='notes'}
             assert client.post(route,json=without_notes,headers=headers).json()==response.json()
         assert client.post(route,json=request|{'decision':'approve'},headers=headers).status_code==409
@@ -393,7 +403,7 @@ def test_review_notes_accept_limits_and_optional_default():
 @pytest.mark.parametrize('quality_state', ['missing','invalid','not_run','fail','warn','pass',
                                         'hash_mismatch','wrong_video','wrong_production'])
 @pytest.mark.parametrize('decision', ['approve','reject'])
-def test_pilot_review_quality_acknowledgement_and_idempotency(settings,quality_state,decision):
+def test_pilot_review_quality_acknowledgement_and_idempotency(settings, pg_app_cluster, pg_app_database, quality_state, decision):
     # Fixture de armazenamento/contrato: não afirma render ou decodificação real.
     from horus_backend.local_pilot import write
     with client_for(settings) as client:
@@ -420,8 +430,8 @@ def test_pilot_review_quality_acknowledgement_and_idempotency(settings,quality_s
             write(root/'quality-report.json',report)
             artifacts.append(inspect_artifact(root,'quality-report.json','manifest'))
             if quality_state=='hash_mismatch': write(root/'quality-report.json',report|{'generated_at':'2026-11-14T12:00:00Z'})
-        with client.app.state.store.connect() as db:
-            db.execute('UPDATE productions SET artifacts=? WHERE id=?',(json.dumps(artifacts),item['id']))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            db.execute('UPDATE horus.productions SET artifacts=%s::jsonb WHERE id=%s',(json.dumps(artifacts),item['id']))
         client.app.state.store.update(item['job_id'],'succeeded',result={'stage':'review'})
         item=client.get('/v1/productions/'+item['id']).json()
         invalid=quality_state in {'missing','invalid','hash_mismatch','wrong_video','wrong_production'}
@@ -531,25 +541,14 @@ def test_deny_proxy_is_local_and_closes_its_listener():
         assert connection.connect_ex(('127.0.0.1',port))!=0
 
 
-def test_v5_to_v6_preserves_approved_scripts(settings, monkeypatch):
-    import sqlite3
-    from horus_backend.migrations import SCHEMA_VERSION
-    with monkeypatch.context() as old:
-        old.setattr('horus_backend.migrations.SCHEMA_VERSION',5)
-        with client_for(settings) as client:
-            script=script_for(client)
-            before=client.get('/v1/scripts/'+script['id']).json()
-            jobs=client.get('/v1/jobs').json()
+def test_approved_script_persists_across_restart_for_production(settings):
+    with client_for(settings) as client:
+        script=script_for(client)
+        before=client.get('/v1/scripts/'+script['id']).json()
+        jobs=client.get('/v1/jobs').json()
     with client_for(settings) as client:
         assert client.get('/v1/scripts/'+script['id']).json()==before
         assert client.get('/v1/jobs').json()==jobs
         assert client.get(f"/v1/scripts/{script['id']}/productions").json()=={'items':[]}
         item=finished(client,start(client,script).json())
         assert item['status']=='succeeded'
-    backups=list(settings.data_dir.glob('horus.backup-v5-*.sqlite3'))
-    assert len(backups)==1
-    with sqlite3.connect(backups[0]) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==5
-        assert db.execute('SELECT status FROM scripts WHERE id=?',(script['id'],)).fetchone()[0]=='approved'
-    with sqlite3.connect(settings.data_dir/'horus.sqlite3') as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION

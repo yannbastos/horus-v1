@@ -1,12 +1,12 @@
 """Roteiro escrito pelo usuário (HOR-133): sem IA, mesmo contrato, revisão e produção."""
 import copy
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
+import psycopg
 import pytest
 
-from test_workflows import settings, client_for
-from test_scripts import approved, generate, decide
+from support_a import client_for, create, pg_admin_connect, settings, wait
+from test_scripts import approved, decide, generate
 from test_production import start, finished, isolated_production_environment  # noqa: F401
 
 
@@ -112,7 +112,6 @@ def test_manual_requires_approved_current_proposal(settings):
 
 
 def wait_unapproved(client):
-    from test_workflows import create, wait
     return wait(client, create(client)["id"])
 
 
@@ -226,26 +225,14 @@ def test_human_script_approval_and_simulated_production(settings):
         assert client.get("/v1/productions/" + item["id"]).json() == item
 
 
-def test_migration_v9_marks_existing_scripts_as_simulated(settings, monkeypatch):
-    from horus_backend.migrations import migrate
-    with monkeypatch.context() as old:
-        old.setattr("horus_backend.migrations.SCHEMA_VERSION", 8)
-        with client_for(settings) as client:
-            workflow = approved(client)
-            # O esquema v8 não tem a coluna; a geração simulada não pode ser exercitada com o código atual.
-            path = client.app.state.store.path
-            with sqlite3.connect(path) as db:
-                assert "origin" not in [row[1] for row in db.execute("PRAGMA table_info(scripts)")]
-                db.execute("""INSERT INTO scripts VALUES('s1',?,?,?,'h',1,'awaiting_review','{}','2026-01-01T00:00:00Z',NULL)""",
-                           (workflow["id"], workflow["revision"], workflow["current_artifact_id"]))
-    migrate(path)
-    migrate(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == __import__("horus_backend.migrations", fromlist=["SCHEMA_VERSION"]).SCHEMA_VERSION
-        assert db.execute("SELECT origin FROM scripts").fetchall() == [("simulated",)]
-        with pytest.raises(sqlite3.IntegrityError):
-            db.execute("UPDATE scripts SET origin='ai'")
-    assert len(list(path.parent.glob("horus.backup-v8-*.sqlite3"))) == 1
+def test_scripts_origin_constraint_rejects_invalid_origin(settings, pg_app_cluster, pg_app_database):
+    with client_for(settings) as client:
+        workflow = approved(client)
+        generate(client, workflow)
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            assert db.execute("SELECT origin FROM horus.scripts").fetchall() == [("simulated",)]
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.scripts SET origin='ai'")
 
 
 def test_simulated_flag_must_match_origin(settings):

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from horus_backend import production_worker as worker
-from test_workflows import settings, TOKEN, client_for
+from support_a import settings, TOKEN, client_for
 from test_production import script_for, start, finished
 
 
