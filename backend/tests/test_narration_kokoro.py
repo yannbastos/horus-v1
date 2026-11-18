@@ -11,6 +11,7 @@ import pytest
 from horus_backend.narration import kokoro
 from horus_backend.narration.providers import NarrationError
 from horus_backend.processes import OwnedProcess
+from support_g import pg_transport  # noqa: F401
 
 
 @pytest.fixture
@@ -125,11 +126,13 @@ def test_real_kokoro_preview(tmp_path):
 @pytest.mark.skipif(not all(os.environ.get(k) for k in (
     'HORUS_KOKORO_PYTHON','HORUS_KOKORO_MODEL_DIR','HORUS_PILOT_FACTORY','HORUS_FFMPEG','HORUS_ALIGNMENT_MODEL')),
     reason='Produção real exige Kokoro, fábrica, FFmpeg e Whisper explícitos.')
-def test_real_kokoro_local_pilot(tmp_path):
+def test_real_kokoro_local_pilot(tmp_path, pg_transport, pg_app_cluster, pg_app_database):
     import time
     from horus_backend.config import Settings
-    from test_workflows import TOKEN, client_for
+    from support_a import TOKEN, client_for
     from test_production import start
+    from support_a import pg_admin_connect
+    from horus_backend.workflows import encode
     from test_scripts import approved, generate, decide
     settings = Settings(token=TOKEN, data_dir=tmp_path/'data',
                         factory_root=Path(os.environ['HORUS_PILOT_FACTORY']), hermes_executable=None,
@@ -142,8 +145,9 @@ def test_real_kokoro_local_pilot(tmp_path):
             'A proposta começa com um reservatório fechado. A água coletada segue para canteiros identificados. Uma rotina de inspeção evita desperdício e mantém o projeto organizado.',
             'O resultado precisa de revisão humana. A narração é sintética, produzida no computador, e sua licença ainda não foi verificada. Este vídeo é somente um piloto de demonstração.']
         for section, text in zip(document['sections'], texts): section['narration'] = text
-        with client.app.state.store.connect() as db:
-            db.execute('UPDATE scripts SET document=? WHERE id=?', (json.dumps(document),script['id']))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            encoded = encode(document)
+            db.execute('UPDATE horus.scripts SET document=%s::jsonb, document_canonical=%s WHERE id=%s', (encoded, encoded.encode('utf-8'), script['id']))
         assert decide(client, script).status_code == 200
         response = start(client, script, mode='local_pilot', narration={'provider':'kokoro','voice_id':'pf_dora'})
         assert response.status_code == 201, response.text
@@ -170,9 +174,9 @@ def test_real_kokoro_local_pilot(tmp_path):
             'interpolated_words':timings['alignment']['interpolated_words'],
             'qc':item['quality_report']['status'], 'video_sha256':video['sha256']}, ensure_ascii=False))
 
-def test_production_passes_only_configured_kokoro_paths(tmp_path, monkeypatch):
+def test_production_passes_only_configured_kokoro_paths(tmp_path, monkeypatch, pg_transport):
     from horus_backend.config import Settings
-    from test_workflows import TOKEN, client_for
+    from support_a import TOKEN, client_for
     from test_production import script_for, start, finished
     settings = Settings(token=TOKEN, data_dir=tmp_path/'data', factory_root=None,
                         hermes_executable=None, hermes_config=tmp_path/'unused.json',

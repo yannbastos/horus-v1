@@ -6,11 +6,10 @@ import threading
 import urllib.request
 
 import pytest
-from fastapi.testclient import TestClient
 
 from horus_backend import whisper_download as download
-from horus_backend.api import create_app
 from horus_backend.config import Settings
+from support_g import client_for, pg_store, pg_transport  # noqa: F401
 from horus_backend.whisper_models import WhisperModels, MIN_WEIGHTS
 
 
@@ -83,7 +82,7 @@ def test_catalog_is_offline_and_pinned():
     assert all(item['destination_label'].startswith('models/') for item in download.catalog()['models'])
 
 
-def test_api_requires_confirmation_and_idempotency(tmp_path, local_model, monkeypatch):
+def test_api_requires_confirmation_and_idempotency(tmp_path, local_model, monkeypatch, client_for):
     # Empilha jobs sem execução para testar a fronteira da API sem rede.
     from horus_backend.jobs import JobManager
     async def no_start(self):
@@ -92,8 +91,7 @@ def test_api_requires_confirmation_and_idempotency(tmp_path, local_model, monkey
     settings = Settings(token='test-token-long-enough-123456', data_dir=tmp_path / 'data',
                         factory_root=None, hermes_executable=None, hermes_config=tmp_path/'hermes.json')
     download.CATALOG['base'] = download.CATALOG['tiny']
-    with TestClient(create_app(settings), base_url="http://127.0.0.1") as client:
-        client.headers['Authorization'] = f'Bearer {settings.token}'
+    with client_for(settings) as client:
         assert client.get('/v1/transcription/models/catalog').status_code == 200
         path = '/v1/transcription/models/tiny/download'
         headers = {'Idempotency-Key': 'synthetic-request'}
@@ -105,12 +103,11 @@ def test_api_requires_confirmation_and_idempotency(tmp_path, local_model, monkey
         assert client.post('/v1/transcription/models/base/download', headers=headers, json={'confirm': True}).status_code == 409
         assert client.get('/v1/jobs/' + first.json()['job_id']).json()['status'] == 'queued'
 
-def test_worker_download_and_sanitized_failure(tmp_path, local_model):
+def test_worker_download_and_sanitized_failure(tmp_path, local_model, client_for):
     import time
     settings = Settings(token='test-token-long-enough-123456', data_dir=tmp_path / 'data',
                         factory_root=None, hermes_executable=None, hermes_config=tmp_path/'hermes.json')
-    with TestClient(create_app(settings), base_url='http://127.0.0.1',
-                    headers={'Authorization': f'Bearer {settings.token}'}) as client:
+    with client_for(settings) as client:
         response = client.post('/v1/transcription/models/tiny/download',
                                headers={'Idempotency-Key': 'run'}, json={'confirm': True})
         assert response.status_code == 202, response.text
@@ -125,16 +122,15 @@ def test_worker_download_and_sanitized_failure(tmp_path, local_model):
         assert client.post('/v1/jobs/' + job_id + '/retry').status_code == 409
 
 
-def test_http_errors_do_not_persist_signed_urls(tmp_path, local_model, monkeypatch):
+def test_http_errors_do_not_persist_signed_urls(tmp_path, local_model, monkeypatch, pg_store):
     import asyncio
     from horus_backend.jobs import JobManager
-    from horus_backend.storage import Store
     def fail(url):
         raise OSError('https://evil.test/path?secret=never-persist-this')
     monkeypatch.setattr(download, 'open_download', fail)
     settings = Settings(token='test-token-long-enough-123456', data_dir=tmp_path,
                         factory_root=None, hermes_executable=None, hermes_config=tmp_path/'hermes.json')
-    store = Store(tmp_path/'state.sqlite3')
+    store = pg_store
     manager = JobManager(store, settings)
     job, _ = store.create_job({'operation': 'whisper.model.download', 'model': 'tiny'}, 'failure')
     asyncio.run(download.run(manager, job))
@@ -157,17 +153,16 @@ def test_explicit_download_cleans_only_owned_stale_partials(tmp_path, local_mode
     assert (unexpected/'operator.txt').read_text() == 'preserve'
 
 
-def test_manager_cancel_reaches_thread(tmp_path, local_model, monkeypatch):
+def test_manager_cancel_reaches_thread(tmp_path, local_model, monkeypatch, pg_store):
     import asyncio
     from horus_backend.jobs import JobManager
-    from horus_backend.storage import Store
     def wait_for_cancel(service, model, cancel, progress):
         assert cancel.wait(timeout=3)
         raise download.DownloadCancelled()
     monkeypatch.setattr(download, 'transfer', wait_for_cancel)
     settings = Settings(token='test-token-long-enough-123456', data_dir=tmp_path,
                         factory_root=None, hermes_executable=None, hermes_config=tmp_path/'hermes.json')
-    store = Store(tmp_path/'state.sqlite3')
+    store = pg_store
     manager = JobManager(store, settings)
     job, _ = store.create_job({'operation': 'whisper.model.download', 'model': 'tiny'}, 'cancel')
     async def scenario():
