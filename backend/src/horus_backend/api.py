@@ -180,6 +180,11 @@ def create_app(settings: Settings, shutdown=None, ready=None):
         code = "database_unavailable" if error.http_status == 503 else error.code
         return database_error_response(app.state.database, code, error.http_status)
 
+    @app.exception_handler(psycopg.DataError)
+    async def invalid_database_value(request: Request, error: psycopg.DataError):
+        # Ex.: NUL (0x00) em id de rota/texto: o PostgreSQL recusa; nunca ecoar o valor nem responder 500.
+        return JSONResponse({"detail": "Valor inválido."}, status_code=422)
+
     @app.exception_handler(RequestValidationError)
     async def invalid_payload(request: Request, error: RequestValidationError):
         # Pydantic inclui input_value: roteiro/feedback privados não devem voltar no erro.
