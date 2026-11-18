@@ -130,7 +130,7 @@ foreach ($bridge in $bridges) {
   } elseif ($DryRun) {
     "Gravaria a ponte em: $($bridge.Path)"
   } else {
-    New-Item -ItemType Directory -Force -Path $bridge.Directory | Out-Null
+    [IO.Directory]::CreateDirectory($bridge.Directory) | Out-Null
     [IO.File]::WriteAllBytes($bridge.Path, $bridge.Bytes)
     "Ponte gravada em: $($bridge.Path)"
   }

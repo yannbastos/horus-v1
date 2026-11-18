@@ -166,14 +166,23 @@ A máquina nova **não** tem perfil `horus`. Recrie-o e endureça-o antes de qua
 
 ## 15. Retomar a coordenação dos agentes
 
-O estado oficial está no Git e no GitHub Projects, não na máquina. Runs, mensagens e worktrees do Orca e memórias dos agentes são locais e não são transferidos.
+A orquestração usa Git, Issues e Project. Para preparar somente a coordenação, instale Git, GitHub CLI, Orca e os agentes escolhidos. As dependências de desenvolvimento do produto podem ser instaladas quando necessárias.
 
-1. Concluir os passos 1–4 e 10; ler [AGENT-GOVERNANCE.md](AGENT-GOVERNANCE.md).
-2. Iniciar a sessão do Maestro (modelo definido pelo usuário; preferências em [MAESTRO-OPERATIONS.md](MAESTRO-OPERATIONS.md), subordinadas à governança) na raiz do clone e invocar `/horus-maestro` (procedimento em [RETOMADA-MAESTRO.md](RETOMADA-MAESTRO.md)).
-3. O Maestro confere `main`/`origin/main`, branches publicadas pendentes e os itens Em andamento, Em revisão e Bloqueado no Project; o último comentário de cada Issue é o ponto de retomada.
-4. Para cada item pendente, recria o worktree a partir da branch publicada (ou de `main`) pelo Orca e delega ao programador indicado no campo Agente, registrando a retomada na Issue.
-5. Trabalho apenas local na máquina antiga (commits não publicados ou alterações não commitadas) não existe na nova: publique a branch antes de trocar de computador ou registre na Issue o que ficou pendente.
-6. Modelos locais (por exemplo, Whisper para alinhamento) e ferramentas de prova ficam em `%LOCALAPPDATA%\Horus\` e precisam ser baixados de novo, conferindo os hashes registrados na documentação correspondente.
+1. Clone o Hórus, entre no checkout e escolha o workspace ancestral onde você abre as sessões do Orca. Exemplo para a pasta-mãe imediata:
+
+   ```powershell
+   git clone https://github.com/yannbastos/horus.git
+   Set-Location horus
+   powershell -NoProfile -File ./scripts/bootstrap-horus-orca.ps1 -WorkspacePath '..' -DryRun
+   powershell -NoProfile -File ./scripts/bootstrap-horus-orca.ps1 -WorkspacePath '..'
+   ```
+
+   Use `-WorkspacePath '.'` para verificar as skills versionadas se abrir na raiz do checkout. Omitir o argumento escolhe a pasta-mãe. O bootstrap verifica ferramentas, acessos e pontes. Se uma skill manual ocupar o destino, preserve-a e abra na raiz ou escolha outro workspace.
+
+2. Abra o Orca, adicione o checkout e faça os logins locais conforme os passos 1 e 10. Rode o bootstrap com `-DryRun` novamente para conferir acessos. Confirme o login do Antigravity na própria CLI.
+3. Abra uma sessão Claude Code dedicada em um terminal do checkout no Orca e invoque `/supervisar`, quando quiser usar o Supervisor. Ele recupera Issues, Project e checkpoints e usa o Run de supervisão desta instalação.
+4. Abra outra sessão e invoque `/horus-maestro` (ou siga o [procedimento manual](RETOMADA-MAESTRO.md)). O Maestro reconcilia as referências publicadas, decisões, pendências e atividade [antes de recriar worktrees e Runs](RETOMADA-MAESTRO.md#e-resumo-e-retomada). Essa etapa também funciona sem Supervisor.
+5. Antes de sair da máquina antiga, publique a branch quando autorizado e registre o que ficou exclusivamente local. Na nova máquina, recrie sessões, terminais e Runs sob demanda. O [handoff de um Run vivo](RETOMADA-MAESTRO.md#supervisor-e-handoff-no-orca) funciona entre sessões da mesma instalação. Modelos e ferramentas locais necessários devem ser obtidos novamente, conferindo os hashes documentados.
 
 ## Verificar e atualizar CLIs de desenvolvimento
 

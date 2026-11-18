@@ -6,7 +6,7 @@ Política vigente desde 13/11/2026, definida pelo usuário (idealizador e respon
 
 ## Papéis
 
-(Maestro)
+O Supervisor é opcional. Ele recebe demandas, cruza prioridades e dependências com o trabalho ativo, recomenda a alocação entre Maestros e encaminha decisões humanas. Implementação e despacho de workers ficam fora do seu papel. O Maestro responde pela execução, revisão, testes, integração e atualizações no GitHub, inclusive quando trabalha sem Supervisor. A autonomia abaixo se aplica dentro de cada papel; decisões sensíveis seguem os limites desta governança.
 
 | Agente | Função | Preferências |
 |---|---|---|
@@ -165,8 +165,8 @@ O estado oficial não fica na máquina: está no Git (`main`, branches `feat/*`/
 1. Preparar o ambiente conforme [CONTINUAR-EM-OUTRO-PC.md](CONTINUAR-EM-OUTRO-PC.md).
 2. Ler este documento e o [AGENTS.md](../AGENTS.md).
 3. Conferir `main` e `origin/main`, branches publicadas e worktrees locais existentes (preservando alterações não commitadas).
-4. Consultar no Project os itens Em andamento, Em revisão e Bloqueado e o último comentário de cada Issue (ponto de retomada).
-5. Recriar worktrees e delegar a partir dessas Issues; registrar a retomada na Issue.
+4. Consultar os itens ativos no Project e os [checkpoints das Issues](RETOMADA-MAESTRO.md#checkpoints-nas-issues).
+5. Reconciliar trabalho ativo e incertezas antes de recriar Runs, worktrees ou despachar workers, conforme o [procedimento de retomada](RETOMADA-MAESTRO.md#e-resumo-e-retomada).
 
 ## Comunicação com o usuário
 

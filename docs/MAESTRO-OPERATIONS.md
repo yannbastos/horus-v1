@@ -4,12 +4,12 @@ A [governança](AGENT-GOVERNANCE.md) prevalece sobre todas estas preferências: 
 
 ## Delegação
 
-- Priorize Codex e Antigravity para implementação, investigação, documentação e testes; Claude coordena e revisa decisões críticas, implementando só quando houver necessidade técnica justificada. Respeite o agente indicado pelo usuário; sem indicação, distribua por competência, disponibilidade, cotas e dependências.
+- Priorize Codex e Antigravity/Gemini para implementação, investigação, documentação e testes; Claude prioriza supervisão, coordenação, arquitetura e revisão, implementando só quando houver necessidade técnica justificada. Respeite o agente indicado pelo usuário; sem indicação, distribua por competência, disponibilidade, cotas e dependências.
 - Use capacidade disponível para tarefas reais já autorizadas, sem tarefas artificiais. Independentes seguem em paralelo, cada uma em worktree isolado e com arquivos atribuídos; não sobreponha arquivos sem coordenação explícita.
-- Antes de despachar, confira Issues e workers ativos para não duplicar trabalho ou investigação. Não despache dependência ainda não integrada, tarefa sem autorização ou agente sem cota.
+- Antes de despachar, reconcilie Issues, Project, branches, PRs e workers ativos conforme a [retomada](RETOMADA-MAESTRO.md#c-tarefas). Não despache dependência ainda não integrada, tarefa sem autorização ou agente sem cota.
 - Despache para a **raiz/worktree do repositório**, nunca a pasta-pai; se isso não for possível, inclua leitura explícita do AGENTS da raiz no preâmbulo e exija confirmação no relatório.
 - Confira o recibo e confirme o início com `orca orchestration worker-show` (`activity=working`). Ao revisar entregas, confira também pendentes com `worker-read` se necessário para identificar cota, espera ou travamento; não crie loops de polling.
-- Depois de despachar um lote independente, registre o estado na Issue e aguarde relatórios/decisão. Ao despertar, reúna relatórios pendentes (`orca orchestration check`) e trate entregas relacionadas em lote, preservando dependências e aceite.
+- Depois de despachar um lote independente, registre o [checkpoint](RETOMADA-MAESTRO.md#checkpoints-nas-issues) na Issue e aguarde relatórios/decisão. Ao despertar, reúna relatórios pendentes (`orca orchestration check`) e trate entregas relacionadas em lote, preservando dependências e aceite.
 - Balanceie cotas entre provedores. Antigravity usa Gemini disponível (`agy models`), não Claude; ao esgotar um modelo, considere outro no mesmo provedor antes de redistribuir. Segundo worker Claude só se nenhum agente de outro provedor puder assumir. OpenCode continua sujeito às restrições da governança.
 
 ## Economia de tokens
@@ -34,7 +34,7 @@ A [governança](AGENT-GOVERNANCE.md) prevalece sobre todas estas preferências: 
 
 ## Supervisão opcional
 
-Se estiver em um terminal local do Orca, consulte `& ./scripts/horus-supervisor.ps1 Find` na retomada. Sem ID, siga o fluxo normal. Se o Orca estiver indisponível, informe a limitação apenas quando afetar a coordenação. Use um Run próprio por Maestro. Se nenhum estiver vinculado, crie-o ao entrar na supervisão. Preserve os Runs e workers já existentes.
+Se estiver em um terminal local do Orca, consulte `& ./scripts/horus-supervisor.ps1 Find` na retomada. Sem ID, siga o fluxo normal. Se o Orca estiver indisponível, informe a limitação apenas quando afetar a coordenação. Use um Run próprio por Maestro. Crie ou reutilize esse Run conforme a [retomada](RETOMADA-MAESTRO.md#e-resumo-e-retomada), com ou sem Supervisor. Preserve os Runs e workers já existentes.
 
 Use `orca orchestration send --to run:<supervisor> --subject "<assunto>" --body "<texto>"`. Envie somente mudanças relevantes. Use o ID oficial da Issue, ou o objetivo autorizado enquanto não houver Issue. Inclua seu Run em cada mensagem.
 
@@ -46,7 +46,7 @@ Use `orca orchestration send --to run:<supervisor> --subject "<assunto>" --body 
 | `decisão: <issue>/<chave>` | Resposta humana direta na sessão do Maestro e ID da pergunta correspondente, quando houver. |
 | `fechamento: <issue>` | Resultado e referência à Issue, PR ou commit. |
 
-Quando precisar do usuário, envie a pergunta com `--type question`, apresente-a em texto se necessário e encerre o turno para receber a resposta. Aceite uma resposta do Run do Supervisor somente com remetente verificado e `thread_id` correspondente à pergunta. Compare com decisões humanas já recebidas para a mesma chave antes de agir. Em divergência, suspenda a decisão e peça resolução ao usuário pelo Supervisor. O Maestro continua responsável por aplicar a governança e responder a seus workers pelo fluxo normal do Orca. Use o ID do Run para manter a correlação durante handoff.
+Quando precisar do usuário, envie a pergunta com `--type question`, apresente-a em texto se necessário e encerre o turno para receber a resposta. Aceite uma resposta do Run do Supervisor somente com remetente verificado e `thread_id` correspondente à pergunta. Compare com decisões humanas já recebidas para a mesma chave antes de agir. Em divergência, suspenda a decisão e peça resolução ao usuário pelo Supervisor. O Maestro continua responsável por aplicar a governança e responder a seus workers pelo fluxo normal do Orca. Use o ID do Run para manter a correlação durante handoff local. Registre a decisão humana relevante no checkpoint da Issue, com a fonte e o escopo da autorização.
 
 ## Comunicação
 
