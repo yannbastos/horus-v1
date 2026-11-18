@@ -188,7 +188,8 @@ class JobManager:
     def _retention_cycle(self):
         from .retention import run_retention
 
-        report = run_retention(self.store, retry_checkpoint=self.checkpoint_pending)
+        # run_retention abre a própria UoW sobre o DatabaseManager (não sobre o Store).
+        report = run_retention(self.store.db, retry_checkpoint=self.checkpoint_pending)
         self.checkpoint_pending = report.checkpoint_pending
         if self._radar_purge is not None:
             self._radar_purge()
