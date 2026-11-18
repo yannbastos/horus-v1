@@ -9,14 +9,13 @@ import time
 from types import SimpleNamespace as NS
 
 import pytest
-from fastapi.testclient import TestClient
 
 from horus_backend import cuda_runtime as cr, speech_alignment as sa, transcriber as tr
 from horus_backend.jobs import JobManager
 from horus_backend.local_diagnostics import safe_error
 from horus_backend.whisper_models import ImportModelRequest, WhisperModels
-from horus_backend.api import create_app
 from horus_backend.config import Settings
+from support_g import client_for, pg_transport  # noqa: F401
 
 
 @pytest.mark.parametrize('path', [r'C:\private\operator\audio.wav', 'C:/private/operator/audio.wav',
@@ -70,6 +69,10 @@ def test_alignment_failure_reason_redacts_subprocess_stderr(tmp_path, monkeypatc
     model.mkdir()
     (model / 'model.bin').touch()
     monkeypatch.setattr(sa, '_wav_facts', lambda path: ('a' * 64, 1.0))
+    # O extra `transcription` não precisa estar instalado: o worker é simulado por OwnedProcess.start.
+    from importlib import util
+    real_find_spec = util.find_spec
+    monkeypatch.setattr(util, 'find_spec', lambda name, *a, **k: NS() if name == 'faster_whisper' else real_find_spec(name, *a, **k))
     from horus_backend.processes import OwnedProcess
     async def communicate(**kwargs):
         return b'', b"RuntimeError: cannot open 'C:/private/operator/audio.wav'"
@@ -127,14 +130,14 @@ def test_required_file_link_never_reaches_is_file(tmp_path, monkeypatch, kind):
     assert sa.resolve_model_path(tmp_path, 'small') is None
 
 
-def test_job_history_sanitizes_os_exception_before_persisting(tmp_path):
+def test_job_history_sanitizes_os_exception_before_persisting(tmp_path, client_for):
     token = 'path-history-fixture-token-0123456789'
-    app = create_app(Settings(token=token, data_dir=tmp_path / 'data', factory_root=None,
-        hermes_executable=None, hermes_config=tmp_path / 'no-hermes.json'))
+    settings = Settings(token=token, data_dir=tmp_path / 'data', factory_root=None,
+        hermes_executable=None, hermes_config=tmp_path / 'no-hermes.json')
     def fail(request):
         raise OSError(13, 'access denied', r'C:\private\operator\audio.wav')
-    app.state.manager.command = fail
-    with TestClient(app, base_url='http://127.0.0.1', headers={'Authorization': f'Bearer {token}'}) as client:
+    with client_for(settings) as client:
+        client.app.state.manager.command = fail
         response = client.post('/v1/jobs', json={'operation': 'transcription.run', 'path': str(tmp_path / 'audio.wav')})
         assert response.status_code == 202
         job_id = response.json()['id']

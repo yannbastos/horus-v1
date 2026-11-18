@@ -17,19 +17,21 @@ from decimal import Decimal
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 from . import egress
 from .hermes import NoRedirect, read_connection, validate_origin
-from .security import (FINAL_RUN_STATUSES, SecurityGate, cost_reservation, daily_runs, daily_tokens,
-                       estimated_cost, require_budget, require_secure)
+from .security import (FINAL_RUN_STATUSES, SecurityGate, acquire_budget_lock, cost_reservation, daily_runs,
+                       daily_tokens, estimated_cost, pg_clock, require_budget, require_secure)
 from .transmissions import TransmissionLog
 from .hermes_contract.script import ScriptRunEnvelope, SCRIPT_INSTRUCTIONS, validate_script_output
 from .hermes_contract.mapping import Observation, decide, idempotency_key
 from .hermes_contract.models import ChannelProfile, Dataset, HermesRunRequest, RunEnvelope
 from .hermes_contract.validator import OutputError, parse_output, validate_result
-from .storage import now
+from .storage import canonical_json_bytes
 
 MAX_RESPONSE = 4 * 1024 * 1024
 INSTRUCTIONS = """Você executa a etapa de análise editorial do Hórus (contrato 1.0).
@@ -125,10 +127,11 @@ def _digest(value) -> str:
 
 
 class HermesStages:
-    def __init__(self, store, settings, client_factory: Callable[[], HermesRunClient] | None = None):
+    def __init__(self, store, settings, client_factory: Callable[[], HermesRunClient] | None = None, *, clock=None):
         self.store, self.settings = store, settings
         self.client_factory = client_factory or (lambda: HermesRunClient(*read_connection(settings)))
         self.audit = TransmissionLog(store)
+        self.clock = clock
         self._audit_context: dict[str, dict] = {}  # run_id -> metadados da transmissão (sem conteúdo)
 
     @staticmethod
@@ -182,27 +185,42 @@ class HermesStages:
                            constraints=CONSTRAINTS, feedback=context.get("feedback") or "")
 
     def _record(self, run_id, **fields):
-        fields["updated_at"] = now()
-        with self.store.connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            if 'usage' in fields or fields.get('status') in FINAL_RUN_STATUSES:
-                row = db.execute('SELECT request,usage FROM cognitive_runs WHERE id=?', (run_id,)).fetchone()
-                metadata = json.loads(row['request']).get('metadata', {}) if row else {}
-                if 'horus_cost_reservation_usd' in metadata:
-                    previous = json.loads(row['usage']) if row['usage'] else None
-                    fields['usage'] = estimated_cost(fields.get('usage', previous), metadata)
-            if "usage" in fields and fields["usage"] is not None:
-                fields["usage"] = json.dumps(fields["usage"])
-            columns = ",".join(f"{name}=?" for name in fields)
-            db.execute(f"UPDATE cognitive_runs SET {columns} WHERE id=?", (*fields.values(), run_id))
+        usage_summary = fields.get("usage") if isinstance(fields.get("usage"), dict) else None
+        with self.store.uow() as conn:
+            acquire_budget_lock(conn)
+            fields["updated_at"] = pg_clock(conn, clock=self.clock)
+            with conn.cursor(row_factory=dict_row) as cur:
+                if "usage" in fields or fields.get("status") in FINAL_RUN_STATUSES:
+                    row = cur.execute(
+                        "SELECT request, usage FROM horus.cognitive_runs WHERE id = %s FOR UPDATE",
+                        (run_id,),
+                    ).fetchone()
+                    request_obj = row["request"] if row and isinstance(row["request"], dict) else (
+                        json.loads(row["request"]) if row else {}
+                    )
+                    metadata = request_obj.get("metadata", {})
+                    if "horus_cost_reservation_usd" in metadata:
+                        previous = row["usage"] if row and isinstance(row["usage"], dict) else (
+                            json.loads(row["usage"]) if row and row["usage"] else None
+                        )
+                        fields["usage"] = estimated_cost(fields.get("usage", previous), metadata)
+                        usage_summary = fields["usage"]
+                if "usage" in fields and fields["usage"] is not None:
+                    usage_summary = fields["usage"]
+                    fields["usage"] = Jsonb(fields["usage"])
+                columns = ", ".join(f"{name} = %s" for name in fields)
+                cur.execute(
+                    f"UPDATE horus.cognitive_runs SET {columns} WHERE id = %s",
+                    (*fields.values(), run_id),
+                )
         status = fields.get("status")
         context = self._audit_context.get(run_id)
         if context and (status in FINAL_RUN_STATUSES or status in {"unknown", "policy_violation"}):
-            usage = json.loads(fields["usage"]) if isinstance(fields.get("usage"), str) else None
             self.audit.best_effort("outcome", context["stage"], status, run_id=run_id, workflow_id=context["workflow_id"],
                                    job_id=context["job_id"], attempt_id=context["attempt_id"], destination=context["destination"],
                                    detail="remote_" + str(fields["remote_status"]).lower()[:30] if fields.get("remote_status") else None,
-                                   tokens_total=(usage or {}).get("total_tokens"), cost_usd=(usage or {}).get("horus_estimated_cost_usd"))
+                                   tokens_total=(usage_summary or {}).get("total_tokens"),
+                                   cost_usd=(usage_summary or {}).get("horus_estimated_cost_usd"))
 
     async def analysis(self, context, attempt_id: str, should_stop: Callable[[], bool]):
         live = context.get("cognitive_client", "live") == "live"
@@ -220,7 +238,7 @@ class HermesStages:
             if live:
                 self._audit_context[run_id] = {"stage": self._stage_of(context), "workflow_id": context.get("workflow_id"),
                     "job_id": context.get("job_id"), "attempt_id": attempt_id, "destination": getattr(client, "base_url", None)}
-            body = json.loads(resume["request"])
+            body = resume["request"] if isinstance(resume["request"], dict) else json.loads(resume["request"])
             envelope = (ScriptRunEnvelope if context.get("script_envelope") else RunEnvelope).model_validate_json(body["input"])
             self._record(run_id, attempt_id=attempt_id, status="admitted" if external_ref else "submitting", error=None)
         else:
@@ -238,24 +256,38 @@ class HermesStages:
                 if live and len((body["input"] + body["instructions"]).encode("utf-8")) >= self.settings.max_tokens_per_run:
                     raise CognitiveFailure("security_gate: Entrada excede o teto de tokens por execução.")
                 run_id, key, external_ref = uuid.uuid4().hex, idempotency_key(attempt_id), None
-                with self.store.connect() as db:  # reserva e intenção atômicas ANTES de enviar
-                    db.execute("BEGIN IMMEDIATE")
-                    timestamp = now()
-                    day = timestamp[:10]  # mesmo dia UTC em todas as verificações e na intenção
-                    if live and daily_runs(self.store, db, day=day) >= self.settings.max_runs_per_day:
+                with self.store.uow() as db:  # reserva e intenção atômicas ANTES de enviar sob lock global
+                    acquire_budget_lock(db)
+                    timestamp = pg_clock(db, clock=self.clock)
+                    if live and daily_runs(self.store, db, day=timestamp, clock=self.clock) >= self.settings.max_runs_per_day:
                         raise CognitiveFailure("security_gate: Teto diário de execuções reais atingido.")
-                    if live and daily_tokens(self.settings, self.store, db, day=day) + self.settings.max_tokens_per_run > self.settings.max_tokens_per_day:
+                    if live and daily_tokens(self.settings, self.store, db, day=timestamp, clock=self.clock) + self.settings.max_tokens_per_run > self.settings.max_tokens_per_day:
                         raise CognitiveFailure("security_gate: Saldo diário de tokens insuficiente.")
                     if live:
                         try:
-                            require_budget(self.settings, self.store, db, day=day)
+                            require_budget(self.settings, self.store, db, day=timestamp, clock=self.clock)
                         except SecurityGate as error:
                             raise CognitiveFailure(str(error)) from None
-                    db.execute("""INSERT INTO cognitive_runs(id,job_id,attempt_id,provider,idempotency_key,request,request_hash,
-                        usage,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'submitting',?,?)""",
-                               (run_id, context["job_id"], attempt_id, "hermes", key, json.dumps(body), _digest(body),
-                                json.dumps(estimated_cost(None, body['metadata'])) if live else None,
-                                timestamp, timestamp))
+                    usage_obj = estimated_cost(None, body["metadata"]) if live else None
+                    db.execute(
+                        """INSERT INTO horus.cognitive_runs(
+                            id, job_id, attempt_id, provider, idempotency_key, request, request_hash,
+                            request_canonical, usage, status, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'submitting', %s, %s)""",
+                        (
+                            run_id,
+                            context["job_id"],
+                            attempt_id,
+                            "hermes",
+                            key,
+                            Jsonb(body),
+                            _digest(body),
+                            canonical_json_bytes(body),
+                            Jsonb(usage_obj) if usage_obj is not None else None,
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
             except CognitiveFailure as refusal:
                 if str(refusal).startswith("security_gate"):
                     self._audit_refusal(context, attempt_id, refusal)

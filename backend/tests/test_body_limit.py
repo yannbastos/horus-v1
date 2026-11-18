@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
+from support_e import pg_create_app, pg_transport  # noqa: F401
 from horus_backend.body_limit import BodyLimitMiddleware, DEFAULT_LIMIT, MIB, limit_for
 from horus_backend.config import Settings
 
@@ -15,16 +15,16 @@ JSON = {"Content-Type": "application/json"}
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, pg_transport):
     settings = Settings(token=TOKEN, data_dir=tmp_path / "data", factory_root=None, hermes_executable=None,
                         hermes_config=tmp_path / "hermes.json")
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=GOOD, raise_server_exceptions=False) as client:
+    with TestClient(pg_create_app(settings), base_url="http://127.0.0.1", headers=GOOD, raise_server_exceptions=False) as client:
         yield client
 
 
 def workflows(client):
-    with client.app.state.store.connect() as db:
-        return db.execute("SELECT COUNT(*) FROM workflows").fetchone()[0]
+    with client.app.state.store.uow(readonly=True) as db:
+        return db.execute("SELECT COUNT(*) FROM horus.workflows").fetchone()[0]
 
 
 def big_json(size):

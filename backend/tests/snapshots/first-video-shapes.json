@@ -728,7 +728,9 @@
           "created_at": "string",
           "depends_on": "null|string",
           "error": "null",
+          "fencing_token": "null",
           "id": "string",
+          "lease_until": "null",
           "payload": {
             "operation": "string",
             "stage": "string"
@@ -742,6 +744,7 @@
           "step_index": "integer",
           "step_key": "string",
           "updated_at": "string",
+          "worker_instance_id": "null",
           "workflow_id": "string",
           "workflow_revision": "integer"
         }
@@ -1092,7 +1095,9 @@
           "created_at": "string",
           "depends_on": "null|string",
           "error": "null",
+          "fencing_token": "null",
           "id": "string",
+          "lease_until": "null",
           "payload": {
             "operation": "string",
             "stage": "string"
@@ -1102,6 +1107,7 @@
           "step_index": "integer",
           "step_key": "string",
           "updated_at": "string",
+          "worker_instance_id": "null",
           "workflow_id": "string",
           "workflow_revision": "integer"
         }
@@ -1205,7 +1211,9 @@
             "created_at": "string",
             "depends_on": "null|string",
             "error": "null",
+            "fencing_token": "null",
             "id": "string",
+            "lease_until": "null",
             "payload": {
               "operation": "string",
               "stage": "string"
@@ -1219,6 +1227,7 @@
             "step_index": "integer",
             "step_key": "string",
             "updated_at": "string",
+            "worker_instance_id": "null",
             "workflow_id": "string",
             "workflow_revision": "integer"
           }

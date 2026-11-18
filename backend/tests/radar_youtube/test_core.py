@@ -3,11 +3,15 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
+import os
+from pathlib import Path
 import socket
-import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError
 
+import psycopg
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +21,9 @@ from horus_backend.radar_youtube.references import video_id, channel_reference
 from horus_backend.radar_youtube.state import RadarState, BudgetExceeded
 from horus_backend.radar_youtube.transport import GoogleTransport, CollectionError, NoRedirect
 from horus_backend.radar_youtube.indicators import opportunity_indicators
+from horus_backend.database.manager import DatabaseManager, DatabaseRefused
+from horus_backend.database.vault import ConnectionVault
+from support_f import pg_manager  # noqa: F401
 
 VIDEO = 'aaaaaaaaaaa'
 CHANNEL = 'UC' + 'a' * 22
@@ -30,9 +37,9 @@ def offline(monkeypatch):
 
 
 @pytest.fixture
-def state(tmp_path):
+def state(pg_manager):
     now = [datetime(2026, 11, 11, tzinfo=timezone.utc)]
-    result = RadarState(tmp_path / 'radar-youtube.sqlite3', clock=lambda: now[0])
+    result = RadarState(pg_manager, clock=lambda: now[0])
     result.advance = lambda **kwargs: now.__setitem__(0, now[0] + timedelta(**kwargs))
     return result
 
@@ -198,20 +205,32 @@ def test_upstream_quota_blocks_later_collections(state):
     assert len(fake.calls) == 1
 
 
-def test_quota_atomic_persistent_and_separate(state):
-    def reserve(_):
-        try:
-            RadarState(state.path, clock=state.clock).reserve('search', 2)
-            return True
-        except BudgetExceeded:
-            return False
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        assert sum(pool.map(reserve, range(8))) == 2
-    state.reserve('details', 1)
-    with pytest.raises(BudgetExceeded):
-        state.reserve('search', 2)
-    state.advance(hours=26)
-    state.reserve('search', 2)
+def test_quota_atomic_persistent_and_separate(pg_app_cluster, pg_app_database):
+    from psycopg_pool import ConnectionPool
+    dsn = pg_app_cluster.dsn(pg_app_database, 'horus_app')
+    now = [datetime(2026, 11, 11, 23, 50, tzinfo=timezone(timedelta(hours=-3)))]
+    # Duas sessões/pools independentes disputando o mesmo limite de cota sem overspend.
+    with ConnectionPool(dsn, min_size=1, max_size=4, open=True, kwargs={'autocommit': True}) as pool_a, \
+         ConnectionPool(dsn, min_size=1, max_size=4, open=True, kwargs={'autocommit': True}) as pool_b:
+        state_a = RadarState(pool_a, clock=lambda: now[0])
+        state_b = RadarState(pool_b, clock=lambda: now[0])
+
+        def reserve(idx):
+            try:
+                (state_a if idx % 2 == 0 else state_b).reserve('search', 2)
+                return True
+            except BudgetExceeded:
+                return False
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            assert sum(pool.map(reserve, range(8))) == 2
+        state_a.reserve('details', 1)
+        with pytest.raises(BudgetExceeded):
+            state_b.reserve('search', 2)
+        now[0] = now[0] + timedelta(hours=2)  # cruza a meia-noite UTC, ainda dentro da janela de 26h
+        with pytest.raises(BudgetExceeded):
+            state_a.reserve('search', 2)
+        now[0] = now[0] + timedelta(hours=24)  # 26h completas: a janela libera
+        state_b.reserve('search', 2)
 
 
 def test_per_collection_budget(state):
@@ -229,9 +248,9 @@ def test_cache_projection_expiry_and_dataset_revisions(state):
     request = CollectionRequest(videos=[VIDEO], enrich_channels=False)
     first = engine.collect(request)
     with state.connect() as db:
-        payload = db.execute('SELECT payload FROM radar_cache').fetchone()[0]
+        payload = json.dumps(db.execute('SELECT payload FROM horus.radar_cache').fetchone()[0], ensure_ascii=False)
         assert 'privateMetric' not in payload and 'description' not in payload
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(psycopg.IntegrityError):
         state.save(first)
     state.advance(hours=7)
     newer = engine.refresh(first.snapshot_id, 1)
@@ -240,19 +259,27 @@ def test_cache_projection_expiry_and_dataset_revisions(state):
     with pytest.raises(KeyError):
         state.load(first.snapshot_id, 2)
     with state.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM radar_cache').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_cache').fetchone()[0] == 0
 
 
 def test_refuses_operational_database(tmp_path):
-    with pytest.raises(ValueError):
+    """Equivalente PG: `RadarState` só aceita o gerenciador PostgreSQL; caminho/SQLite é recusado sem criar arquivo."""
+    with pytest.raises(ValueError, match='DatabaseManager'):
         RadarState(tmp_path / 'operational.sqlite3')
-    path = tmp_path / 'radar-youtube.sqlite3'
-    with sqlite3.connect(path) as db:
-        db.execute('CREATE TABLE jobs(id TEXT)')
-    with pytest.raises(ValueError):
-        RadarState(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [('jobs',)]
+    with pytest.raises(ValueError, match='DatabaseManager'):
+        RadarState(tmp_path / 'radar-youtube.sqlite3')
+    assert not any(tmp_path.iterdir())
+
+    class EmptyKeyring:
+        def get_password(self, *_):
+            return None
+
+    # Sem conexão configurada: erro 503 estável, nunca fallback local.
+    state = RadarState(DatabaseManager(ConnectionVault(tmp_path, EmptyKeyring())))
+    with pytest.raises(DatabaseRefused) as caught:
+        state.purge()
+    assert caught.value.http_status == 503
+    assert not any(tmp_path.iterdir())
 
 
 def test_indicators_require_permission_and_exclude_self(state):
@@ -396,7 +423,7 @@ def test_concurrent_collectors_share_uncached_query(state, search):
     fake = Fake(handler)
     request = (CollectionRequest(search=SearchRequest(query='teste'), enrich_channels=False) if search
                else CollectionRequest(videos=[VIDEO], enrich_channels=False))
-    other = RadarState(state.path, clock=state.clock)
+    other = RadarState(state.db, clock=state.clock)
 
     def second():
         second_started.set()
@@ -426,7 +453,7 @@ def test_concurrent_refresh_returns_one_successor(state):
         return {'items': [video(views='20')]}
 
     fake.handler = handler
-    other = RadarState(state.path, clock=state.clock)
+    other = RadarState(state.db, clock=state.clock)
 
     def second():
         second_started.set()
@@ -473,8 +500,8 @@ def test_cooperative_cancellation_keeps_reservations_without_dataset(state, wher
     expected = 0 if where == 'before' else 1
     assert len(fake.calls) == expected
     with state.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == expected
-        assert db.execute('SELECT COUNT(*) FROM radar_datasets').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_usage').fetchone()[0] == expected
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_datasets').fetchone()[0] == 0
     # Trava foi liberada e a coleta seguinte pode usar respostas já cacheadas.
     cancelled.clear()
     fake.handler = lambda resource, params: {'items': [video()] if resource == 'videos' else [channel()]}
@@ -499,7 +526,7 @@ def test_cancelled_refresh_preserves_previous_revision(state):
     with pytest.raises(KeyError):
         state.load(original.snapshot_id, 2)
     with state.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == 2
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_usage').fetchone()[0] == 2
 
 
 def test_cancel_while_waiting_for_collection_lock(state):
@@ -526,7 +553,7 @@ def test_cancel_while_waiting_for_collection_lock(state):
 def test_stuck_collection_lock_times_out_without_quota_or_partial_revision(state, timeout):
     from time import monotonic
     from horus_backend.radar_youtube import CollectionLockTimeout
-    contender = RadarState(state.path, clock=state.clock, lock_timeout=timeout)
+    contender = RadarState(state.db, clock=state.clock, lock_timeout=timeout)
     engine, fake = collector(contender, [video()])
     with state.collection_lock():
         started = monotonic()
@@ -535,17 +562,17 @@ def test_stuck_collection_lock_times_out_without_quota_or_partial_revision(state
         assert monotonic() - started < 1
     assert not fake.calls
     with state.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == 0
-        assert db.execute('SELECT COUNT(*) FROM radar_datasets').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_usage').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_datasets').fetchone()[0] == 0
     # O handle do concorrente foi fechado; não há trava órfã nem retry automático.
     assert engine.collect(CollectionRequest(videos=[VIDEO])).status == 'complete'
 
 
 @pytest.mark.parametrize('timeout', [-1, float('inf'), float('nan')])
-def test_collection_lock_rejects_unbounded_or_negative_timeout(tmp_path, timeout):
+def test_collection_lock_rejects_unbounded_or_negative_timeout(pg_manager, tmp_path, timeout):
     with pytest.raises(ValueError, match='Timeout da trava'):
-        RadarState(tmp_path / 'radar-youtube.sqlite3', lock_timeout=timeout)
-    assert not (tmp_path / 'radar-youtube.sqlite3').exists()
+        RadarState(pg_manager, lock_timeout=timeout)
+    assert not any(tmp_path.glob('*.sqlite3'))
 
 
 @pytest.mark.parametrize('during', ['open', 'read'])
@@ -599,8 +626,8 @@ def test_interrupted_http_body_is_sanitized_and_never_cached(state, monkeypatch)
     assert 'mock-sensitive' not in dataset.model_dump_json()
     assert len(responses) == 2 and all(response.closed for response in responses)
     with state.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM radar_cache').fetchone()[0] == 0
-        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == 2
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_cache').fetchone()[0] == 0
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_usage').fetchone()[0] == 2
     with state.collection_lock():
         pass
 
@@ -641,26 +668,25 @@ def test_cleanup_exact_expiry_preserves_live_revisions_and_quota_window(state):
     assert state.load(successor.snapshot_id, 2) == successor
     assert state.cached('live') is not None
     with state.connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM radar_datasets').fetchone()[0] == 1
-        assert db.execute('SELECT COUNT(*) FROM radar_cache').fetchone()[0] == 1
-        assert db.execute('SELECT COUNT(*) FROM radar_usage').fetchone()[0] == 1
-        assert db.execute('SELECT COUNT(*) FROM radar_blocks').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_datasets').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_cache').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_usage').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM horus.radar_blocks').fetchone()[0] == 1
     state.advance(days=1, hours=2)
     state.purge()
     with state.connect() as db:
-        for table in ['radar_datasets', 'radar_cache', 'radar_usage', 'radar_blocks']:
+        for table in ['horus.radar_datasets', 'horus.radar_cache', 'horus.radar_usage', 'horus.radar_blocks']:
             assert db.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0] == 0
 
 
-def test_collection_lock_excludes_other_process_and_releases(state):
-    import os
-    import subprocess
-    import sys
+def test_collection_lock_excludes_other_process_and_releases(pg_app_cluster, pg_app_database, state):
+    dsn = pg_app_cluster.dsn(pg_app_database, 'horus_app')
     code = '''
 import sys
-from pathlib import Path
+from psycopg_pool import ConnectionPool
 from horus_backend.radar_youtube.state import RadarState, CollectionCancelled
-state = RadarState(Path(sys.argv[1]))
+pool = ConnectionPool(sys.argv[1], min_size=1, max_size=2, kwargs={"autocommit": True})
+state = RadarState(pool)
 checks = 0
 def cancel():
     global checks
@@ -668,14 +694,16 @@ def cancel():
     return checks > 2
 try:
     with state.collection_lock(cancel):
-        print('acquired')
+        print("acquired")
 except CollectionCancelled:
-    print('blocked')
+    print("blocked")
+finally:
+    pool.close()
 '''
-    env = {**os.environ, 'PYTHONPATH': str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src')}
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'src')}
 
     def run():
-        return subprocess.run([sys.executable, '-c', code, str(state.path)],
+        return subprocess.run([sys.executable, '-c', code, dsn],
                               env=env, capture_output=True, text=True, timeout=10, check=True).stdout.strip()
 
     with state.collection_lock():

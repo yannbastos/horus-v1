@@ -9,10 +9,12 @@ import os
 import re
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from psycopg.rows import dict_row
 
 MAX_CONFIG = 256 * 1024
 MAX_MANIFEST = 16 * 1024 * 1024
@@ -353,31 +355,96 @@ def estimated_cost(usage, metadata):
 
 
 FINAL_RUN_STATUSES = {'completed', 'failed', 'cancelled', 'invalid_output', 'interrupted'}
+BUDGET_LOCK_NAMESPACE = 16412
+BUDGET_LOCK_KEY = 1
 
 
-def budget_usage(store, db=None, *, day=None):
+def acquire_budget_lock(conn) -> None:
+    """Lock global de orçamento Hermes (A3): compartilhado por todos workflows, dias e dispositivos."""
+    conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (BUDGET_LOCK_NAMESPACE, BUDGET_LOCK_KEY))
+
+
+def pg_clock(conn, clock=None) -> datetime:
+    """Relógio único em UTC: usa `clock_timestamp()` do servidor PG ou provedor injetado no harness."""
+    if clock is not None:
+        moment = clock()
+    else:
+        row = conn.execute("SELECT clock_timestamp()").fetchone()
+        moment = row[0] if not isinstance(row, dict) else next(iter(row.values()))
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _utc_day_bounds(conn, day=None, clock=None) -> tuple[datetime, datetime]:
+    if day is None:
+        target = pg_clock(conn, clock=clock).date()
+    elif isinstance(day, datetime):
+        target = (day.replace(tzinfo=timezone.utc) if day.tzinfo is None else day.astimezone(timezone.utc)).date()
+    elif isinstance(day, date):
+        target = day
+    elif isinstance(day, str):
+        if len(day) == 10:
+            target = date.fromisoformat(day)
+        else:
+            parsed = datetime.fromisoformat(day.replace("Z", "+00:00"))
+            target = (parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)).date()
+    else:
+        raise ValueError("Data UTC inválida para orçamento.")
+    day_start = datetime(target.year, target.month, target.day, tzinfo=timezone.utc)
+    return day_start, day_start + timedelta(days=1)
+
+
+def _as_json_obj(value) -> dict:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, bytes, bytearray)):
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("Objeto JSON inválido.")
+
+
+def _as_utc_dt(value) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    raise ValueError("Timestamp inválido.")
+
+
+def budget_usage(store, db=None, *, day=None, clock=None):
     """Reservas abertas (inclusive usage desconhecido) atravessam a meia-noite UTC."""
     if db is None:
-        with store.connect() as connection:
-            return budget_usage(store, connection, day=day)
-    today = day or datetime.now(timezone.utc).date().isoformat()
-    rows = db.execute("""SELECT r.usage,r.request,r.status,r.created_at FROM cognitive_runs r
-                      JOIN jobs j ON j.id=r.job_id JOIN workflows w ON w.id=j.workflow_id
-                      WHERE r.provider='hermes' AND w.cognitive_client='live'""").fetchall()
+        with store.uow(readonly=True) as connection:
+            return budget_usage(store, connection, day=day, clock=clock)
+    day_start, day_end = _utc_day_bounds(db, day=day, clock=clock)
+    with db.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute(
+            """SELECT r.usage, r.request, r.status, r.created_at
+               FROM horus.cognitive_runs r
+               JOIN horus.jobs j ON j.id = r.job_id
+               JOIN horus.workflows w ON w.id = j.workflow_id
+               WHERE r.provider = 'hermes' AND w.cognitive_client = 'live'"""
+        ).fetchall()
     total, daily, reserved = Decimal(0), Decimal(0), Decimal(0)
     with localcontext() as ctx:
         ctx.prec = 80
         for row in rows:
             try:
-                metadata = json.loads(row['request']).get('metadata', {})
+                metadata = _as_json_obj(row['request']).get('metadata', {})
                 reservation = _stored_usd(metadata.get('horus_cost_reservation_usd'))
                 if reservation <= 0:
                     raise SecurityGate('security_gate: Reserva de custo anterior não verificável.')
-                usage = json.loads(row['usage']) if row['usage'] else {}
+                usage = _as_json_obj(row['usage']) if row['usage'] else {}
                 if row['status'] in FINAL_RUN_STATUSES and usage.get('horus_cost_finalized') is True:
                     amount = _stored_usd(usage.get('horus_estimated_cost_usd'))
                     total += amount
-                    if row['created_at'][:10] == today:
+                    created_utc = _as_utc_dt(row['created_at'])
+                    if day_start <= created_utc < day_end:
                         daily += amount
                 else:
                     reserved += reservation
@@ -397,29 +464,38 @@ def _budget_blocker(settings, usage):
     return None
 
 
-def require_budget(settings, store, db, *, day=None):
-    """Repetir dentro de BEGIN IMMEDIATE, antes de inserir/enviar qualquer intenção."""
-    blocker = _budget_blocker(settings, budget_usage(store, db, day=day))
+def require_budget(settings, store, db, *, day=None, clock=None):
+    """Repetir sob lock global de orçamento, antes de inserir/enviar qualquer intenção."""
+    acquire_budget_lock(db)
+    blocker = _budget_blocker(settings, budget_usage(store, db, day=day, clock=clock))
     if blocker:
         raise SecurityGate('security_gate: ' + blocker[1])
 
 
-def daily_tokens(settings, store, db=None, *, day=None):
+def daily_tokens(settings, store, db=None, *, day=None, clock=None):
     """Reserva integral para consumo desconhecido; resultados conhecidos usam usage validado."""
     if db is None:
-        with store.connect() as connection:
-            return daily_tokens(settings, store, connection, day=day)
-    rows = db.execute("""SELECT r.usage,r.request,r.status FROM cognitive_runs r JOIN jobs j ON j.id=r.job_id JOIN workflows w ON w.id=j.workflow_id
-                      WHERE r.provider='hermes' AND w.cognitive_client='live' AND
-                      (r.created_at>=? OR r.status IN ('submitting','admitted','unknown','policy_violation'))""",
-                      (day or datetime.now(timezone.utc).date().isoformat(),)).fetchall()
+        with store.uow(readonly=True) as connection:
+            return daily_tokens(settings, store, connection, day=day, clock=clock)
+    day_start, day_end = _utc_day_bounds(db, day=day, clock=clock)
+    with db.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute(
+            """SELECT r.usage, r.request, r.status
+               FROM horus.cognitive_runs r
+               JOIN horus.jobs j ON j.id = r.job_id
+               JOIN horus.workflows w ON w.id = j.workflow_id
+               WHERE r.provider = 'hermes' AND w.cognitive_client = 'live'
+                 AND ((r.created_at >= %s AND r.created_at < %s)
+                      OR r.status IN ('submitting', 'admitted', 'unknown', 'policy_violation'))""",
+            (day_start, day_end),
+        ).fetchall()
     total = 0
     for row in rows:
         try:
-            usage = json.loads(row['usage']) if row['usage'] else {}
+            usage = _as_json_obj(row['usage']) if row['usage'] else {}
             used = usage.get('total_tokens')
             if type(used) is not int or used < 0 or row['status'] not in FINAL_RUN_STATUSES:
-                request = json.loads(row['request'])
+                request = _as_json_obj(row['request'])
                 reservation = request.get('metadata', {}).get('horus_token_reservation')
                 if not isinstance(reservation, str) or not reservation.isdigit() or int(reservation) <= 0:
                     raise SecurityGate('security_gate: Reserva anterior não verificável.')
@@ -430,18 +506,25 @@ def daily_tokens(settings, store, db=None, *, day=None):
     return total
 
 
-def daily_runs(store, db=None, *, day=None):
+def daily_runs(store, db=None, *, day=None, clock=None):
     """Cada intenção real conta uma vez, inclusive recusada/sem consumo ou ainda desconhecida."""
     if db is None:
-        with store.connect() as connection:
-            return daily_runs(store, connection, day=day)
-    return db.execute("""SELECT COUNT(*) FROM cognitive_runs r JOIN jobs j ON j.id=r.job_id
-                      JOIN workflows w ON w.id=j.workflow_id
-                      WHERE r.provider='hermes' AND w.cognitive_client='live' AND r.created_at>=?""",
-                      (day or datetime.now(timezone.utc).date().isoformat(),)).fetchone()[0]
+        with store.uow(readonly=True) as connection:
+            return daily_runs(store, connection, day=day, clock=clock)
+    day_start, day_end = _utc_day_bounds(db, day=day, clock=clock)
+    row = db.execute(
+        """SELECT COUNT(*)
+           FROM horus.cognitive_runs r
+           JOIN horus.jobs j ON j.id = r.job_id
+           JOIN horus.workflows w ON w.id = j.workflow_id
+           WHERE r.provider = 'hermes' AND w.cognitive_client = 'live'
+             AND r.created_at >= %s AND r.created_at < %s""",
+        (day_start, day_end),
+    ).fetchone()
+    return int(row[0] if not isinstance(row, dict) else next(iter(row.values())))
 
 
-def security_status(settings, store=None):
+def security_status(settings, store=None, *, clock=None):
     from .human_checkpoints import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS
     from .hermes import read_connection
     profile = audit_profile(settings.hermes_profile)
@@ -477,7 +560,7 @@ def security_status(settings, store=None):
     runs_configured = type(settings.max_runs_per_day) is int and settings.max_runs_per_day > 0
     budget_valid, pricing_valid = budget_configured(settings), pricing_configured(settings)
     amounts = {name: Decimal(0) for name in ('estimated_spent_total_usd', 'estimated_spent_today_usd', 'reserved_usd')}
-    runs_today = daily_runs(store) if store is not None else 0
+    runs_today = daily_runs(store, clock=clock) if store is not None else 0
     if not runs_configured:
         block('run_limit_missing', 'Configure teto positivo de execuções reais por dia no operador.')
     elif runs_today >= settings.max_runs_per_day:
@@ -486,7 +569,7 @@ def security_status(settings, store=None):
         block('cost_limits_missing', 'Configure tetos positivos de tokens por execução e por dia no operador.')
     elif store is not None:
         try:
-            if daily_tokens(settings, store) + settings.max_tokens_per_run > settings.max_tokens_per_day:
+            if daily_tokens(settings, store, clock=clock) + settings.max_tokens_per_run > settings.max_tokens_per_day:
                 block('daily_token_limit', 'O saldo diário não comporta uma nova execução.')
         except SecurityGate:
             block('usage_unverifiable', 'Consumo diário não verificável.')
@@ -496,7 +579,7 @@ def security_status(settings, store=None):
         block('pricing_missing', 'Configure preços explícitos positivos de entrada e saída em USD por milhão de tokens.')
     if store is not None:
         try:
-            amounts = budget_usage(store)
+            amounts = budget_usage(store, clock=clock)
         except SecurityGate:
             amounts = {name: None for name in amounts}
             block('cost_usage_unverifiable', 'Consumo monetário anterior não verificável; execução real bloqueada.')
@@ -536,8 +619,8 @@ def security_status(settings, store=None):
                       if store is not None else {'available': False, 'reason': 'Registro de transmissões indisponível sem o banco local.'})}
 
 
-def require_secure(settings, store=None):
-    report = security_status(settings, store)
+def require_secure(settings, store=None, *, clock=None):
+    report = security_status(settings, store, clock=clock)
     if not report['real_execution_allowed']:
         raise SecurityGate('security_gate: ' + ' '.join(item['message'] for item in report['blockers']))
 

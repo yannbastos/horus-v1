@@ -1,19 +1,30 @@
-"""HOR-098 (backend): histórico de notificações derivado das tabelas existentes + estado lido/não lido em JSON atômico.
-Sem migração, sem rede, só diretórios temporários."""
+"""HOR-098 (backend): histórico de notificações derivado das tabelas existentes + estado lido/não lido em PostgreSQL.
+Sem migração, sem rede, só banco descartável."""
 import json
-import logging
-import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from test_workflows import settings, client_for, create, wait, review, TOKEN, HEADERS
-from test_scripts import generate, decide
-from test_production import script_for, start, finished
-from horus_backend.migrations import SCHEMA_VERSION
-from horus_backend.notifications import MAX_STATE_IDS, NotificationService, STATE_FILE
+from horus_backend.notifications import MAX_STATE_IDS, NotificationService
+from horus_backend.storage import DatabaseUnavailable
+from support_c import (  # noqa: F401
+    HEADERS,
+    TOKEN,
+    client_for,
+    create,
+    decide,
+    finished,
+    generate,
+    pg_connect,
+    review,
+    schema_state,
+    script_for,
+    settings,
+    start,
+    wait,
+)
 
 
 def listing(client, **params):
@@ -23,7 +34,7 @@ def listing(client, **params):
 
 
 def state_path(settings):
-    return settings.data_dir / STATE_FILE
+    return settings.data_dir / "notifications-state.json"
 
 
 def read_state(client, ids=None, all=False, read=True):
@@ -39,12 +50,13 @@ def kinds(page):
 
 def test_empty_history_and_no_schema_change(settings):
     with client_for(settings) as client:
+        with pg_connect(settings) as db:
+            before_schema = schema_state(db)
         assert listing(client) == {"items": [], "unread_count": 0, "next_after": None}
         assert client.get("/v1/notifications/unread-count").json() == {"unread_count": 0}
-        with client.app.state.store.connect() as db:
-            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            assert not [t for t in tables if "notif" in t.lower()]
-            assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        with pg_connect(settings) as db:
+            assert db.execute("SELECT COUNT(*) FROM horus.notification_state").fetchone()[0] == 0
+            assert schema_state(db) == before_schema
     assert not state_path(settings).exists()           # só ler não cria arquivo
 
 
@@ -77,8 +89,8 @@ def test_workflow_script_and_production_events_follow_the_real_state(settings):
 def test_failed_blocked_and_interrupted_productions(settings, status, kind, severity):
     with client_for(settings) as client:
         record = finished(client, start(client, script_for(client)).json())
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE jobs SET status=?, error=?, result=? WHERE id=(SELECT job_id FROM productions WHERE id=?)",
+        with pg_connect(settings) as db:
+            db.execute("UPDATE horus.jobs SET status=%s, error=%s, result=%s WHERE id=(SELECT job_id FROM horus.productions WHERE id=%s)",
                        (status, "Falhou ao ler C:\\Users\\operador\\segredos\\roteiro.txt com token=" + "z" * 24 + " em /home/yann/x",
                         json.dumps({"failure": {"code": "render_failed", "stderr_tail": "C:\\Users\\operador\\x"}}), record["id"]))
         page = listing(client, kind=kind)
@@ -92,8 +104,8 @@ def test_failed_blocked_and_interrupted_productions(settings, status, kind, seve
 def test_failure_code_with_unsafe_characters_is_ignored(settings):
     with client_for(settings) as client:
         record = finished(client, start(client, script_for(client)).json())
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE jobs SET status='failed', result=? WHERE id=(SELECT job_id FROM productions WHERE id=?)",
+        with pg_connect(settings) as db:
+            db.execute("UPDATE horus.jobs SET status='failed', result=%s WHERE id=(SELECT job_id FROM horus.productions WHERE id=%s)",
                        (json.dumps({"failure": {"code": "C:\\Users\\x segredo"}}), record["id"]))
         assert "Código do diagnóstico" not in listing(client)["items"][0]["message"]
 
@@ -135,6 +147,8 @@ def test_mark_read_unread_filter_count_and_persistence_across_restarts(settings)
         assert read_state(client, [first], read=False).json() == {"unread_count": 2}
         assert read_state(client, [first]).json() == {"unread_count": 1}
         assert read_state(client, [first]).json() == {"unread_count": 1}       # idempotente
+    with pg_connect(settings) as db:
+        db.execute("DELETE FROM horus.worker_instances")
     with client_for(settings) as again:                                         # novo processo, mesmo diretório de dados
         assert [i["read"] for i in listing(again)["items"]] == [True, False] and listing(again)["unread_count"] == 1
 
@@ -172,36 +186,37 @@ def test_read_state_validation(settings, body):
             assert response.status_code == 422
         else:
             assert response.status_code == 422, body
+        with pg_connect(settings) as db:
+            assert db.execute("SELECT COUNT(*) FROM horus.notification_state").fetchone()[0] == 0
         assert not state_path(settings).exists()
 
 
-# --- arquivo de estado: atômico e tolerante ---------------------------------------------------------------------
+# --- persistência em PostgreSQL: indisponibilidade 503 e concorrência ------------------------------------------
 
-@pytest.mark.parametrize("garbage", ["", "{não é json", "[]", "null", '{"read": 5}', '{"read": {"workflow:x:r1": 7}}', "\x00\x01\x02",
-                                     '{"read_all_before": "ontem"}', "A" * 100000])
-def test_corrupt_state_never_breaks_the_api_and_is_recreated(settings, garbage, caplog):
+def test_corrupt_state_never_breaks_the_api_and_is_recreated(settings):
+    """Equivalente PG: estado em tabelas tipadas; sem arquivo JSON e falha de banco retorna 503 sem vazar detalhes."""
     with client_for(settings) as client:
         wait(client, create(client)["id"])
-        state_path(settings).write_text(garbage, encoding="utf-8", errors="replace")
-        caplog.set_level(logging.WARNING)
         page = listing(client)
         assert page["unread_count"] == 1 and page["items"][0]["read"] is False
         assert client.get("/v1/notifications/unread-count").status_code == 200
         item = page["items"][0]["id"]
         assert read_state(client, [item]).json() == {"unread_count": 0}
-        saved = json.loads(state_path(settings).read_text(encoding="utf-8"))
-        assert item in saved["read"] and set(saved) == {"read", "unread", "read_all_before"}
+        assert not state_path(settings).exists()
+        with pg_connect(settings) as db:
+            row = db.execute("SELECT state FROM horus.notification_state WHERE event_id = %s", (item,)).fetchone()
+            assert row == ("read",)
 
 
-def test_unreadable_state_path_warns_and_write_failure_is_a_clean_500(settings, caplog):
+def test_unreadable_state_path_warns_and_write_failure_is_a_clean_500(settings, monkeypatch):
+    """Equivalente PG: indisponibilidade do banco retorna 503 estável (`database_unavailable`) sem vazar caminhos/traceback."""
     with client_for(settings) as client:
         wait(client, create(client)["id"])
-        state_path(settings).mkdir()                       # um diretório no lugar do arquivo: leitura e escrita falham
-        caplog.set_level(logging.WARNING)
-        assert listing(client)["unread_count"] == 1
-        response = read_state(client, all=True)
-        assert response.status_code == 500 and "Traceback" not in response.text and str(settings.data_dir) not in response.text
-        assert "ilegível" in caplog.text or "gravar" in caplog.text
+        monkeypatch.setattr(client.app.state.store, "uow", lambda **_: (_ for _ in ()).throw(DatabaseUnavailable("indisponível")))
+        for response in (client.get("/v1/notifications"), client.get("/v1/notifications/unread-count"), read_state(client, all=True)):
+            assert response.status_code == 503
+            assert response.json()["detail"]["code"] == "database_unavailable"
+            assert "Traceback" not in response.text and str(settings.data_dir) not in response.text
 
 
 def test_writes_are_atomic_leave_no_temp_files_and_survive_concurrency(settings):
@@ -219,21 +234,23 @@ def test_writes_are_atomic_leave_no_temp_files_and_survive_concurrency(settings)
         [t.start() for t in threads]
         [t.join() for t in threads]
         assert errors == []
-        saved = json.loads(state_path(settings).read_text(encoding="utf-8"))
-        assert set(saved["read"]) == set(ids)
-        assert [p.name for p in settings.data_dir.iterdir() if p.name.startswith(".notifications-")] == []
+        with pg_connect(settings) as db:
+            saved = {r[0] for r in db.execute("SELECT event_id FROM horus.notification_state WHERE state = 'read'").fetchall()}
+        assert saved == set(ids)
+        assert not state_path(settings).exists()
 
 
 def test_old_read_marks_are_pruned_and_state_is_bounded(settings):
     base = datetime(2026, 11, 14, tzinfo=timezone.utc)
     clock = {"now": base}
     with client_for(settings) as client:
-        service = NotificationService(client.app.state.store, settings.data_dir, clock=lambda: clock["now"])
+        service = NotificationService(client.app.state.store, clock=lambda: clock["now"])
         service.set_read(ids=["workflow:antigo:r1"], all=False, read=True)
         clock["now"] = base + timedelta(days=91)
         service.set_read(ids=["workflow:novo:r1"], all=False, read=True)
-        saved = json.loads(state_path(settings).read_text(encoding="utf-8"))
-        assert set(saved["read"]) == {"workflow:novo:r1"}
+        with pg_connect(settings) as db:
+            saved = {r[0] for r in db.execute("SELECT event_id FROM horus.notification_state WHERE state = 'read'").fetchall()}
+        assert saved == {"workflow:novo:r1"}
         assert MAX_STATE_IDS == 5000
 
 
@@ -257,23 +274,32 @@ def test_no_path_script_content_or_token_leaks_in_any_response_or_state_file(set
         script = generate(client, client.get(f"/v1/workflows/{workflow['id']}").json()).json()
         decide(client, script)
         record = finished(client, start(client, script).json())
-        with client.app.state.store.connect() as db:
-            db.execute("UPDATE jobs SET status='failed', error=? WHERE id=(SELECT job_id FROM productions WHERE id=?)",
+        with pg_connect(settings) as db:
+            db.execute("UPDATE horus.jobs SET status='failed', error=%s WHERE id=(SELECT job_id FROM horus.productions WHERE id=%s)",
                        (f"{secret_text} em {settings.data_dir}\\productions\\x e Bearer {TOKEN}", record["id"]))
-            db.execute("UPDATE scripts SET document=json_set(document,'$.title',?) WHERE id=?", (secret_text, script["id"]))
+            db.execute(
+                "UPDATE horus.scripts "
+                "SET document = jsonb_set(document, '{title}', to_jsonb(%s::text)), "
+                "    document_canonical = convert_to(jsonb_set(document, '{title}', to_jsonb(%s::text))::text, 'UTF8') "
+                "WHERE id=%s",
+                (secret_text, secret_text, script["id"]),
+            )
         read_state(client, all=True)
-        blob = json.dumps(listing(client)) + client.get("/v1/notifications/unread-count").text + state_path(settings).read_text(encoding="utf-8")
+        with pg_connect(settings) as db:
+            state_rows = db.execute("SELECT event_id, state, changed_at FROM horus.notification_state").fetchall()
+        blob = json.dumps(listing(client)) + client.get("/v1/notifications/unread-count").text + json.dumps(state_rows, default=str)
         for forbidden in (secret_text, str(settings.data_dir), "productions\\x", TOKEN, "Bearer "):
             assert forbidden not in blob, forbidden
+        assert not state_path(settings).exists()
 
 
 def test_derivation_is_read_only(settings):
     with client_for(settings) as client:
         wait(client, create(client)["id"])
-        with client.app.state.store.connect() as db:
-            before = [tuple(r) for r in db.execute("SELECT id,status,updated_at FROM workflows")]
+        with pg_connect(settings) as db:
+            before = [tuple(r) for r in db.execute("SELECT id,status,updated_at FROM horus.workflows ORDER BY id")]
         for _ in range(3):
             listing(client)
             client.get("/v1/notifications/unread-count")
-        with client.app.state.store.connect() as db:
-            assert [tuple(r) for r in db.execute("SELECT id,status,updated_at FROM workflows")] == before
+        with pg_connect(settings) as db:
+            assert [tuple(r) for r in db.execute("SELECT id,status,updated_at FROM horus.workflows ORDER BY id")] == before

@@ -16,12 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 from . import egress
 from .config import Settings
 from .file_access import client_path, PathNotAllowed
-from .radar_youtube.state import RadarState
-from .retention import run_retention
 from .processes import OwnedProcess, failure_detail, sanitized_tail
-from .storage import Store
+from .storage import DatabaseUnavailable, LeaseLostError, Store
 from .transcriber import FILE_MARKER, LANGUAGES, MODELS, is_youtube_url, download_error
-from .worker_lock import WorkerLock
+from .worker_lock import DEFAULT_LEASE_TTL_SECONDS, DEFAULT_RENEW_INTERVAL_SECONDS, WorkerLock
 from .local_diagnostics import safe_error
 from .workflows import WorkflowService
 from .production import ProductionService
@@ -29,6 +27,13 @@ from .production import ProductionService
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted", "blocked"}
 RETENTION_INTERVAL_SECONDS = 6 * 3600
 log = logging.getLogger(__name__)
+
+
+def _no_nul(value: str):
+    # jsonb não aceita NUL; recusa na borda, sem ecoar o valor.
+    if chr(0) in value:
+        raise ValueError("Valor contém caractere inválido.")
+    return value
 
 
 class FactoryRequest(BaseModel):
@@ -51,12 +56,22 @@ class TranscriptionRequest(BaseModel):
     model: Literal[MODELS] = "small"  # type: ignore[valid-type]
     language: Literal[LANGUAGES] = "auto"  # type: ignore[valid-type]
 
+    @field_validator("path")
+    @classmethod
+    def reject_nul(cls, value: str):
+        return _no_nul(value)
+
 
 class DownloadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["youtube.download"]
     url: str = Field(max_length=2048)
     directory: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("directory")
+    @classmethod
+    def reject_nul(cls, value: str):
+        return _no_nul(value)
 
     @field_validator("url")
     @classmethod
@@ -117,22 +132,38 @@ def transcript(segments: list[str]) -> str:
 
 
 class JobManager:
-    def __init__(self, store: Store, settings: Settings):
+    def __init__(
+        self,
+        store: Store,
+        settings: Settings,
+        *,
+        device_id: str | None = None,
+        lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
+        renew_interval_seconds: float = DEFAULT_RENEW_INTERVAL_SECONDS,
+        radar_purge=None,
+    ):
         self.store, self.settings = store, settings
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.changed = asyncio.Condition()
         self.worker: asyncio.Task | None = None
         self.retention_task: asyncio.Task | None = None
+        self.lease_task: asyncio.Task | None = None
         # Último ciclo de retenção (somente contagens, sem conteúdo), exposto em /v1/security/status.
         self.retention_status: dict = {"last_run_at": None, "last_status": None, "redacted_workflows": None}
-        # Checkpoint do WAL que não concluiu (leitor ativo): o próximo ciclo repete mesmo sem novas redações.
         self.checkpoint_pending = False
         self.active_id: str | None = None
+        self.claimed_id: str | None = None
         self.active_process: OwnedProcess | None = None
-        self.worker_lock = WorkerLock(store.path)
+        self._radar_purge = radar_purge
+        self.worker_lock = WorkerLock(
+            store,
+            device_id=device_id,
+            ttl_seconds=lease_ttl_seconds,
+            renew_interval_seconds=renew_interval_seconds,
+        )
         self.workflows = WorkflowService(store, self.queue, self.notify, settings)
         from .data_deletion import DeletionAudit
-        self.deletion_audit = DeletionAudit(settings.data_dir)
+        self.deletion_audit = DeletionAudit(store, data_dir=settings.data_dir)
         from .local_token import TokenState
         self.tokens = TokenState(settings.token)
         self.productions = ProductionService(self)
@@ -143,32 +174,25 @@ class JobManager:
         self.worker_lock.acquire()
         try:
             self.store.recover()
-            with self.store.connect() as db:
-                interrupted = [row['id'] for row in db.execute(
-                    "SELECT id,payload FROM jobs WHERE status='interrupted'")
-                    if json.loads(row['payload']).get('operation') == 'production.run']
-            for job_id in interrupted:
-                result = self.store.get_job(job_id)['result'] or {}
-                if result.get('failure'):
-                    continue
-                self.store.update(job_id, 'interrupted', result={**result, 'failure':failure_detail(
-                    'production_interrupted', result.get('stage','prepare'))},
-                    error='Backend encerrado durante a produção; revise os artefatos e crie nova produção explicitamente. Nenhuma etapa foi repetida.')
             self.workflows.recover()
             await self.run_retention()
             for job_id in self.store.queued_ids():
                 self.queue.put_nowait(job_id)
             self.worker = asyncio.create_task(self._work())
             self.retention_task = asyncio.create_task(self._retention_loop())
+            self.lease_task = asyncio.create_task(self._lease_loop())
         except BaseException:
             self.worker_lock.close()
             raise
 
     def _retention_cycle(self):
-        # Sem rede. O arquivo do Radar fica ao lado do banco operacional (mesmo diretório de dados).
-        report = run_retention(self.store, retry_checkpoint=self.checkpoint_pending)
+        from .retention import run_retention
+
+        # run_retention abre a própria UoW sobre o DatabaseManager (não sobre o Store).
+        report = run_retention(self.store.db, retry_checkpoint=self.checkpoint_pending)
         self.checkpoint_pending = report.checkpoint_pending
-        RadarState(self.store.path.parent / "radar" / "radar-youtube.sqlite3").purge()
+        if self._radar_purge is not None:
+            self._radar_purge()
         return report
 
     async def run_retention(self):
@@ -190,12 +214,45 @@ class JobManager:
             await asyncio.sleep(RETENTION_INTERVAL_SECONDS)
             await self.run_retention()
 
+    async def _lease_loop(self):
+        while self.worker_lock.active:
+            await asyncio.sleep(self.worker_lock.renew_interval_seconds)
+            if not self.worker_lock.active:
+                return
+            try:
+                ok = await asyncio.to_thread(self.worker_lock.renew)
+                if ok and self.active_id and self.worker_lock.fencing_token is not None:
+                    await asyncio.to_thread(
+                        self.store.renew_job_lease,
+                        self.active_id,
+                        self.worker_lock.instance_id,
+                        self.worker_lock.fencing_token,
+                        ttl_seconds=self.worker_lock.ttl_seconds,
+                    )
+            except (LeaseLostError, DatabaseUnavailable):
+                ok = False
+            if not ok:
+                log.warning("Lease do executor perdido; interrompendo admissão e processo ativo.")
+                if self.active_process is not None:
+                    with contextlib.suppress(Exception):
+                        await self.active_process.stop()
+                return
+
     async def notify(self):
         async with self.changed:
             self.changed.notify_all()
 
     async def emit(self, job_id: str, kind: str, message: str):
-        self.store.event(job_id, kind, message)
+        if self.claimed_id == job_id and self.worker_lock.fencing_token is not None:
+            self.store.event(
+                job_id,
+                kind,
+                message,
+                worker_instance_id=self.worker_lock.instance_id,
+                fencing_token=self.worker_lock.fencing_token,
+            )
+        else:
+            self.store.event(job_id, kind, message)
         await self.notify()
 
     async def submit(self, request: JobRequest, key: str):
@@ -370,11 +427,22 @@ class JobManager:
         job_id = job["id"]
         self.active_id = job_id
         started = time.monotonic()
+        lease_lost = False
+        fencing = self.worker_lock.fencing_token
+        instance_id = self.worker_lock.instance_id
+        if fencing is None or not self.worker_lock.active:
+            self.active_id = None
+            return
         try:
+            claimed = self.store.claim_job(
+                job_id, instance_id, fencing, ttl_seconds=self.worker_lock.ttl_seconds
+            )
+            if claimed is None:
+                return
+            self.claimed_id = job_id
+            await self.emit(job_id, "state", "running")
             request = _parse_request(job["payload"])
             command = self.command(request)
-            self.store.update(job_id, "running", new_attempt=True)
-            await self.emit(job_id, "state", "running")
             env = job_environment(request, self.settings)
             factory = isinstance(request, FactoryRequest)
             self.active_process = await OwnedProcess.start(command, env=env, cwd=self.settings.factory_root if factory else None)
@@ -402,51 +470,67 @@ class JobManager:
             # Texto parcial preservado em cancelamento ou falha, como no desktop legado.
             partial = {"text": transcript(notes["segments"]), "partial": True} if notes and notes["segments"] else None
             if current["status"] == "cancel_requested":
-                self.store.update(job_id, "cancelled", result=partial)
+                self.store.update(job_id, "cancelled", result=partial, worker_instance_id=instance_id, fencing_token=fencing)
             elif process.returncode != 0:
                 detail = " ".join(failures) if failures else "Consulte os logs."
                 diagnostic = {'failure':failure_detail('factory_command_failed', 'render' if request.operation == 'factory.render.preview' else 'prepare',
                     started=started, exit_code=process.returncode, stderr='\n'.join(failures))} if factory else partial
                 self.store.update(job_id, "failed", result=diagnostic,
                                   error=(notes.get('download_error') or download_error('') if isinstance(request, DownloadRequest)
-                                         else f"O comando encerrou com código {process.returncode}. {detail}"))
+                                         else f"O comando encerrou com código {process.returncode}. {detail}"),
+                                  worker_instance_id=instance_id, fencing_token=fencing)
             else:
-                self.store.update(job_id, "succeeded", result=self._result(request, output, notes))
+                self.store.update(job_id, "succeeded", result=self._result(request, output, notes),
+                                  worker_instance_id=instance_id, fencing_token=fencing)
+        except LeaseLostError:
+            lease_lost = True
+            if self.active_process:
+                await self.active_process.stop()
+            log.warning("Lease perdido durante execução do job %s.", job_id)
         except asyncio.CancelledError:
             if self.active_process:
                 await self.active_process.stop()
-            self.store.update(job_id, "interrupted", result=self.store.get_job(job_id)["result"],
-                              error="Aplicativo encerrado durante a execução. Revise antes de repetir.")
+            with contextlib.suppress(LeaseLostError, DatabaseUnavailable):
+                self.store.update(job_id, "interrupted", result=self.store.get_job(job_id)["result"],
+                                  error="Aplicativo encerrado durante a execução. Revise antes de repetir.",
+                                  worker_instance_id=instance_id, fencing_token=fencing)
             raise
         except ValueError as error:
             self.store.update(job_id, "blocked" if not self.active_process else "failed",
                               result=self.store.get_job(job_id)["result"],
                               error=(download_error(error) if job['payload'].get('operation') == 'youtube.download'
-                                     and not isinstance(error, PathNotAllowed) else safe_error(error) if job['payload'].get('operation') == 'transcription.run' else str(error)))
+                                     and not isinstance(error, PathNotAllowed) else safe_error(error) if job['payload'].get('operation') == 'transcription.run' else str(error)),
+                              worker_instance_id=instance_id, fencing_token=fencing)
         except TimeoutError:
             self.store.update(job_id, "failed", result=self.store.get_job(job_id)["result"],
                               error=('Tempo limite do download excedido. Verifique a rede e tente novamente no mesmo destino para retomar o parcial compatível.'
-                                     if job['payload'].get('operation') == 'youtube.download' else "Tempo limite da operação excedido."))
+                                     if job['payload'].get('operation') == 'youtube.download' else "Tempo limite da operação excedido."),
+                              worker_instance_id=instance_id, fencing_token=fencing)
         except Exception as error:
             factory_job = job['payload'].get('operation', '').startswith('factory.')
             self.store.update(job_id, "failed", result=self.store.get_job(job_id)["result"],
                               error=(f'Falha na execução da fábrica ({type(error).__name__}); confira as dependências locais antes de tentar novamente.'
                                      if factory_job else download_error(error) if job['payload'].get('operation') == 'youtube.download'
-                                     else safe_error(f"Falha na execução: {type(error).__name__}: {error}")))
+                                     else safe_error(f"Falha na execução: {type(error).__name__}: {error}")),
+                              worker_instance_id=instance_id, fencing_token=fencing)
         finally:
-            current = self.store.get_job(job_id)
-            if job['payload'].get('operation', '').startswith('factory.') and current['status'] in {'failed','blocked','interrupted'}:
-                result = current['result'] or {}
-                if 'failure' not in result:
-                    self.store.update(job_id, current['status'], error=current['error'], result={**result,
-                        'failure':failure_detail('factory_'+current['status'],
-                            'render' if job['payload']['operation'] == 'factory.render.preview' else 'prepare',
-                            started=started, exit_code=self.active_process.process.returncode if self.active_process else None)})
+            if not lease_lost:
+                with contextlib.suppress(LeaseLostError, DatabaseUnavailable):
+                    current = self.store.get_job(job_id)
+                    if current and job['payload'].get('operation', '').startswith('factory.') and current['status'] in {'failed','blocked','interrupted'}:
+                        result = current['result'] or {}
+                        if 'failure' not in result:
+                            self.store.update(job_id, current['status'], error=current['error'], result={**result,
+                                'failure':failure_detail('factory_'+current['status'],
+                                    'render' if job['payload']['operation'] == 'factory.render.preview' else 'prepare',
+                                    started=started, exit_code=self.active_process.process.returncode if self.active_process else None)})
+                    if current:
+                        await self.emit(job_id, "state", current["status"])
             if self.active_process:
                 self.active_process.close()
             self.active_process = None
+            self.claimed_id = None
             self.active_id = None
-            await self.emit(job_id, "state", self.store.get_job(job_id)["status"])
 
     @staticmethod
     def _result(request, output: list[str], notes: dict | None):
@@ -464,6 +548,10 @@ class JobManager:
 
     async def close(self):
         try:
+            if self.lease_task:
+                self.lease_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self.lease_task
             if self.retention_task:
                 self.retention_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -473,6 +561,7 @@ class JobManager:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self.worker
         finally:
+            self.lease_task = None
             self.retention_task = None
             self.worker = None
             self.worker_lock.close()

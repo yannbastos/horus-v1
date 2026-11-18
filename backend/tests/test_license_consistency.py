@@ -1,11 +1,11 @@
 """Consistência e segurança dos registros de licença (HOR-118 / HOR-097 / HOR-055). Sem rede."""
 import copy
-import sqlite3
 from datetime import datetime, timezone
 
+import psycopg
 import pytest
 
-from test_workflows import settings, client_for  # noqa: F401  (fixture `settings` usada por `production`)
+from support_a import client_for, pg_admin_connect, settings  # noqa: F401  (fixture `settings` usada por `production`)
 from test_license_reviews import LOCAL, PREFIX, STOCK, body, post, production, provenance, review  # noqa: F401
 from horus_backend.asset_sources import (AssetSourceError, LocalLicensedSource, PexelsSource, to_provenance_asset,
                                          with_obtained_file)
@@ -121,13 +121,15 @@ def test_missing_idempotency_key_is_refused(production):
     assert client.post(f"/v1/productions/{pid}/license-reviews", json=body()).status_code in (400, 422)
 
 
-def test_database_triggers_block_tampering_with_any_column(production):
+def test_database_triggers_block_tampering_with_any_column(production, pg_app_cluster, pg_app_database):
     client, pid, _ = production
     post(client, pid, body(), key="1")
-    with client.app.state.store.connect() as db:
-        for statement in ("UPDATE license_reviews SET evidence='x'", "UPDATE license_reviews SET reviewed_by='machine'",
-                          "UPDATE license_reviews SET supersedes=NULL", "DELETE FROM license_reviews WHERE 1=1"):
-            with pytest.raises(sqlite3.IntegrityError):
+    with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+        for statement in ("UPDATE horus.license_reviews SET evidence='x'",
+                          "UPDATE horus.license_reviews SET reviewed_by='machine'",
+                          "UPDATE horus.license_reviews SET supersedes=NULL",
+                          "DELETE FROM horus.license_reviews WHERE 1=1"):
+            with pytest.raises((psycopg.IntegrityError, psycopg.errors.InsufficientPrivilege, psycopg.errors.RaiseException)):
                 db.execute(statement)
     assert len(effective(client, pid)["history"]) == 1
 

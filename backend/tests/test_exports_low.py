@@ -1,12 +1,12 @@
 """HOR-099/HOR-056: pendências baixas — chave que falha fica registrada, texto do usuário não some, hash fora da transação."""
 import hashlib
 import json
-import sqlite3
 from pathlib import Path
 
+import psycopg
 import pytest
 
-from test_workflows import settings  # noqa: F401  (fixture)
+from support_c import pg_connect, settings  # noqa: F401  (fixture)
 from test_exports import production, approve, export  # noqa: F401
 from test_publishing import tools, thumbnail  # noqa: F401
 from test_publishing_adversarial import fake_run, put_metadata, registered_artifacts
@@ -159,25 +159,27 @@ def test_marker_without_extra_text_and_text_before_the_marker_are_preserved(prod
 
 # --- (3) hash fora da transação ---------------------------------------------------------------------------------
 
-def write_lock_is_free(settings):
-    connection = sqlite3.connect(settings.data_dir / "horus.sqlite3", timeout=0.3)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        connection.rollback()
-        return True
-    except sqlite3.OperationalError:
-        return False
-    finally:
-        connection.close()
+def write_lock_is_free(settings, production_id):
+    with pg_connect(settings, autocommit=False) as connection:
+        try:
+            connection.execute(
+                "SELECT id FROM horus.productions WHERE id = %s FOR UPDATE NOWAIT",
+                (production_id,),
+            ).fetchone()
+            connection.rollback()
+            return True
+        except psycopg.errors.LockNotAvailable:
+            connection.rollback()
+            return False
 
 
-def spy_video_hash(monkeypatch, module, settings):
+def spy_video_hash(monkeypatch, module, settings, production_id):
     seen = []
     real = module.inspect_artifact
 
     def spy(source, relative, kind):
         if kind == "video":
-            seen.append(write_lock_is_free(settings))  # durante o hash do vídeo, ninguém pode estar segurando o lock de escrita
+            seen.append(write_lock_is_free(settings, production_id))  # durante o hash do vídeo, ninguém pode estar segurando o lock de escrita
         return real(source, relative, kind)
     monkeypatch.setattr(module, "inspect_artifact", spy)
     return seen
@@ -186,7 +188,7 @@ def spy_video_hash(monkeypatch, module, settings):
 def test_video_hash_never_runs_inside_a_write_transaction(production, monkeypatch, tools):
     client, record, root, settings = production
     approve(client, record)
-    seen = spy_video_hash(monkeypatch, publishing_module, settings)
+    seen = spy_video_hash(monkeypatch, publishing_module, settings, record["id"])
     fake_run(monkeypatch)
     assert thumbnail(client, record["id"]).status_code == 201
     assert put_metadata(client, record["id"], title="t", description="d").status_code == 200
@@ -197,7 +199,7 @@ def test_video_hash_never_runs_inside_a_write_transaction(production, monkeypatc
 def test_export_hashes_artifacts_outside_the_database_transaction(production, monkeypatch):
     client, record, root, settings = production
     approve(client, record)
-    seen = spy_video_hash(monkeypatch, exports_module, settings)
+    seen = spy_video_hash(monkeypatch, exports_module, settings, record["id"])
     assert export(client, record["id"]).status_code == 201
     assert seen and all(seen)
 

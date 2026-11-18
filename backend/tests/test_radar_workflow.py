@@ -7,8 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 from horus_backend.api import create_app
 from horus_backend.config import Settings
-from horus_backend.storage import Store
 from horus_backend.radar_workflow import adapt, demo, eligibility, RadarWorkflowRequest
+from keyring_support import MemoryKeyring
+from pg_app_support import _patch_pg_transport
+from support_a import configure_pg_vault
+from support_f import loopback_only, rows
 
 TOKEN = 'radar-workflow-test-token-local-123456'
 
@@ -46,19 +49,38 @@ def test_adapter():
     assert adapt(dataset, request(dataset))[0].origin=='youtube_data_api'
 
 
+def make_settings(data_dir, tmp_path, poll=.03, **extra):
+    return Settings(token=TOKEN, data_dir=data_dir, factory_root=None, hermes_executable=None,
+                    hermes_config=tmp_path/'never-read.json', hermes_poll_seconds=poll, **extra)
+
+
+def release(application):
+    """Libera o lease do executor (encerrar o processo de verdade o liberaria)."""
+    manager = getattr(application.state, 'manager', None)
+    if manager is not None and getattr(manager, 'worker_lock', None) is not None:
+        manager.worker_lock.close()
+
+
 @pytest.fixture
-def app(tmp_path, monkeypatch):
+def pg_env(pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs): raise AssertionError('Rede/conexão privada proibida')
     monkeypatch.setattr('horus_backend.workflow_hermes.read_connection',forbidden)
-    application = create_app(Settings(token=TOKEN, data_dir=tmp_path, factory_root=None, hermes_executable=None,
-        hermes_config=tmp_path/'never-read.json', hermes_poll_seconds=.03))
+    _patch_pg_transport(pg_app_cluster, pg_app_database, MemoryKeyring(), monkeypatch)
+    data_dir = tmp_path / 'data'
+    configure_pg_vault(data_dir)
+    return data_dir
+
+
+@pytest.fixture
+def app(pg_env, tmp_path, monkeypatch):
+    application = create_app(make_settings(pg_env, tmp_path))
     application.state.monkeypatch = monkeypatch
-    return application
+    yield application
+    release(application)
 
 
 def start(client, key='demo'):
-    def forbidden(*args, **kwargs): raise AssertionError('Socket proibido durante execução')
-    client.app.state.monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    loopback_only(client.app.state.monkeypatch)  # só o PostgreSQL descartável em loopback; qualquer outro socket é proibido
     response=client.post('/v1/radar/datasets/demo',headers={'Idempotency-Key':key})
     assert response.status_code==201, response.text
     info=response.json()
@@ -93,10 +115,9 @@ def test_review_persistence(app,decision,status):
         response=client.post(f"/v1/workflows/{w['id']}/review",json=dict(expected_revision=1,artifact_id=w['current_artifact_id'],decision=decision),headers={'Idempotency-Key':'review'})
         assert response.status_code==200,response.text
         assert client.get('/v1/workflows/'+w['id']).json()['status']==status
-    reopened=Store(app.state.store.path)
-    with reopened.connect() as db:
-        assert db.execute('SELECT decision FROM approvals WHERE workflow_id=?',(w['id'],)).fetchone()['decision']==decision
-        assert db.execute('SELECT status FROM workflows WHERE id=?',(w['id'],)).fetchone()['status']==status
+        # Persistência verificada por consulta direta ao banco, não pela resposta da API.
+        assert rows(app.state.store,'SELECT decision FROM horus.approvals WHERE workflow_id=%s',(w['id'],))[0][0]==decision
+        assert rows(app.state.store,'SELECT status FROM horus.workflows WHERE id=%s',(w['id'],))[0][0]==status
 
 
 def test_cancel(app):
@@ -120,11 +141,7 @@ def test_expiration(app,monkeypatch):
     with TestClient(app,base_url='http://127.0.0.1',headers={'Authorization':f'Bearer {TOKEN}'}) as client:
         w=start(client)
         future=datetime.now(timezone.utc)+timedelta(days=29)
-        class FutureDateTime:
-            @staticmethod
-            def now(tz): return future
-            fromisoformat=datetime.fromisoformat
-        monkeypatch.setattr('horus_backend.workflows.datetime',FutureDateTime)
+        app.state.manager.workflows.clock=lambda:future  # relógio injetável do serviço (PostgreSQL: `pg_clock`)
         response=client.post(f"/v1/workflows/{w['id']}/authorize",json=dict(expected_revision=1,job_id=w['pending_authorization']['job_id']),headers={'Idempotency-Key':'expired'})
         assert response.status_code==409 and 'expirado' in response.text
         app.state.radar.clock=lambda:future
@@ -133,83 +150,50 @@ def test_expiration(app,monkeypatch):
         response=client.post('/v1/workflows/radar',json=dict(snapshot_id=w['radar']['snapshot_id'],revision=1,objective='teste',channel=dict(channel_id='a',summary='teste')),headers={'Idempotency-Key':'expired'})
         assert response.status_code==404
 
-def test_migration_v4(tmp_path, monkeypatch):
-    monkeypatch.setattr('horus_backend.migrations.SCHEMA_VERSION', 4)  # Isola a migração v3→v4.
-    import sqlite3
-    from horus_backend.migrations import MIGRATIONS
-    path=tmp_path/'old.sqlite3'
-    with sqlite3.connect(path) as db:
-        for version in (1,2,3):
-            for statement in MIGRATIONS[version]: db.execute(statement)
-        db.execute('PRAGMA user_version=3')
+def test_cognitive_client_column_contract_pg(pg_app_cluster, pg_app_database):
+    """Equivalente PG da migração v3→v4: `cognitive_client` existe, assume 'live' e recusa valores fora do contrato.
+
+    A mecânica da migração SQLite (user_version, rootpage, rollback) é obsoleta; o rollback atômico de migrações
+    é provado em `pg/test_schema_contract.py::test_schema_migration_failure_atomic`."""
+    import psycopg
+    with pg_app_cluster.connect(pg_app_database, autocommit=True) as admin:
         for executor in ('simulated','hermes'):
-            db.execute("INSERT INTO workflows(id,idempotency_key,payload,revision,status,created_at,updated_at,executor) VALUES(?,?,?,1,'queued','now','now',?)",(executor,executor,'{}',executor))
-        original_tables=db.execute("SELECT name,rootpage FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
-        original_indexes=db.execute("SELECT name,sql FROM sqlite_master WHERE type='index' ORDER BY name").fetchall()
-    store=Store(path)
-    Store(path)
-    with store.connect() as db:
-        assert [(r['executor'],r['cognitive_client']) for r in db.execute('SELECT * FROM workflows ORDER BY executor')]==[('hermes','live'),('simulated','live')]
-        assert [tuple(r) for r in db.execute("SELECT name,rootpage FROM sqlite_master WHERE type='table' ORDER BY name")]==original_tables
-        assert [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_master WHERE type='index' ORDER BY name")]==original_indexes
-        assert not db.execute('PRAGMA foreign_key_check').fetchall()
-        assert db.execute('PRAGMA user_version').fetchone()[0]==4
-    monkeypatch.setattr('horus_backend.migrations.SCHEMA_VERSION',3)
-    with pytest.raises(RuntimeError): Store(path)
+            admin.execute("INSERT INTO horus.workflows(id,idempotency_key,payload,payload_canonical,revision,status,created_at,updated_at,executor) VALUES(%s,%s,'{}'::jsonb,%s,1,'queued',now(),now(),%s)",
+                          (executor,executor,b'{}',executor))
+        assert admin.execute('SELECT executor,cognitive_client FROM horus.workflows ORDER BY executor').fetchall()==[('hermes','live'),('simulated','live')]
+        with pytest.raises(psycopg.errors.CheckViolation):
+            admin.execute("INSERT INTO horus.workflows(id,idempotency_key,payload,payload_canonical,revision,status,created_at,updated_at,cognitive_client) VALUES('x','x','{}'::jsonb,%s,1,'queued',now(),now(),'real')",(b'{}',))
 
 
-def test_migration_v4_rollback(tmp_path,monkeypatch):
-    import sqlite3
-    from horus_backend.migrations import MIGRATIONS
-    path=tmp_path/'rollback.sqlite3'
-    with sqlite3.connect(path) as db:
-        for version in (1,2,3):
-            for statement in MIGRATIONS[version]: db.execute(statement)
-        db.execute('PRAGMA user_version=3')
-    monkeypatch.setitem(MIGRATIONS,4,(*MIGRATIONS[4],'INVALID SQL'))
-    with pytest.raises(sqlite3.OperationalError): Store(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0]==3
-        assert 'cognitive_client' not in [r[1] for r in db.execute('PRAGMA table_info(workflows)')]
-
-
-def test_restart_keeps_simulated_client(app):
+def test_restart_keeps_simulated_client(app, pg_env, tmp_path):
     with TestClient(app,base_url='http://127.0.0.1',headers={'Authorization':f'Bearer {TOKEN}'}) as client:
         w=start(client)
+        release(app)
     # Trocar a configuração dos NOVOS workflows não altera a coluna do workflow existente.
-    restarted=create_app(Settings(token=TOKEN,data_dir=app.state.store.path.parent,factory_root=None,hermes_executable=None,
-        radar_executor='hermes',workflow_executor='hermes',hermes_poll_seconds=.01))
-    app.state.monkeypatch.undo()  # permite somente a criação do self-pipe asyncio no Windows
+    restarted=create_app(make_settings(pg_env,tmp_path,.01,radar_executor='hermes',workflow_executor='hermes'))
     with TestClient(restarted,base_url='http://127.0.0.1',headers={'Authorization':f'Bearer {TOKEN}'}) as client:
         def forbidden(*args,**kwargs): raise AssertionError('Cliente real/rede proibido')
-        app.state.monkeypatch.setattr(socket.socket,'connect',forbidden)
         app.state.monkeypatch.setattr('horus_backend.workflow_hermes.read_connection',forbidden)
         w=client.get('/v1/workflows/'+w['id']).json()
         assert w['executor']=='hermes_simulated'
         authorize(client,w)
         w=wait(client,w['id'],lambda w:w['status']=='awaiting_approval')
         assert w['simulated'] and w['cognitive_runs'][0]['status']=='completed'
-        with Store(app.state.store.path).connect() as db:
-            row=db.execute('SELECT executor,cognitive_client FROM workflows WHERE id=?',(w['id'],)).fetchone()
-            assert tuple(row)==('hermes','simulated')
+        row=rows(restarted.state.store,'SELECT executor,cognitive_client FROM horus.workflows WHERE id=%s',(w['id'],))[0]
+        assert tuple(row)==('hermes','simulated')
+        release(restarted)
 
-def test_restart_during_simulated_analysis_recovers(tmp_path, monkeypatch):
+
+def test_restart_during_simulated_analysis_recovers(pg_env, tmp_path, monkeypatch):
     """Reinício no meio da análise simulada: conciliação termina como interrompida, retry exige nova autorização."""
-    def forbidden(*args, **kwargs): raise AssertionError('Rede/conexão privada proibida')
-    monkeypatch.setattr('horus_backend.workflow_hermes.read_connection', forbidden)
-    def settings(poll):
-        return Settings(token=TOKEN, data_dir=tmp_path, factory_root=None, hermes_executable=None,
-                        hermes_config=tmp_path/'never-read.json', hermes_poll_seconds=poll)
-    first = create_app(settings(5.0))  # consulta lenta: o encerramento ocorre com a execução em andamento
+    first = create_app(make_settings(pg_env, tmp_path, 5.0))  # consulta lenta: o encerramento ocorre com a execução em andamento
     first.state.monkeypatch = monkeypatch
     with TestClient(first, base_url='http://127.0.0.1', headers={'Authorization': f'Bearer {TOKEN}'}) as client:
         w = start(client); authorize(client, w)
         wait(client, w['id'], lambda w: any(r['status'] == 'admitted' for r in w['cognitive_runs']))
-    monkeypatch.undo()
-    monkeypatch.setattr('horus_backend.workflow_hermes.read_connection', forbidden)
-    restarted = create_app(settings(.03))
+    release(first)
+    restarted = create_app(make_settings(pg_env, tmp_path, .03))
     with TestClient(restarted, base_url='http://127.0.0.1', headers={'Authorization': f'Bearer {TOKEN}'}) as client:
-        monkeypatch.setattr(socket.socket, 'connect', forbidden)
         w = client.get('/v1/workflows/' + w['id']).json()
         assert w['executor'] == 'hermes_simulated' and w['cognitive_runs'][0]['status'] == 'unknown'
         assert client.post(f"/v1/workflows/{w['id']}/retry", json=dict(expected_revision=1)).status_code == 409
@@ -226,6 +210,7 @@ def test_restart_during_simulated_analysis_recovers(tmp_path, monkeypatch):
         response = client.post(f"/v1/workflows/{w['id']}/review", json=dict(expected_revision=1,
             artifact_id=w['current_artifact_id'], decision='approve'), headers={'Idempotency-Key': 'review'})
         assert response.status_code == 200 and client.get('/v1/workflows/' + w['id']).json()['status'] == 'approved'
+        release(restarted)
 
 
 def test_simulator_unknown_run_after_restart():
@@ -265,11 +250,11 @@ def test_radar_validation_and_latest_revision(app):
     from pydantic import ValidationError
     dataset=demo('rad_list',datetime.now(timezone.utc))
     with pytest.raises(ValidationError): request(dataset,source_ids=['a']*51)
-    state=app.state.radar
-    state.save(dataset)
-    state.save(dataset.model_copy(update={'revision':2}))
-    assert [(d.snapshot_id,d.revision) for d in state.list_datasets()]==[('rad_list',2)]
     with TestClient(app,base_url='http://127.0.0.1',headers={'Authorization':f'Bearer {TOKEN}'}) as client:
+        state=app.state.radar
+        state.save(dataset)
+        state.save(dataset.model_copy(update={'revision':2}))
+        assert [(d.snapshot_id,d.revision) for d in state.list_datasets()]==[('rad_list',2)]
         assert client.post('/v1/radar/datasets/demo').status_code==422
         assert client.post('/v1/workflows/radar',json={}).status_code==422
         assert client.get('/v1/radar/datasets',headers={'Authorization':'bad'}).status_code==401

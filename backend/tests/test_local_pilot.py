@@ -2,18 +2,18 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
 import math
 import struct
 import time
 import wave
 
+import psycopg
 import pytest
 
-from test_workflows import settings, client_for
+from support_a import client_for, pg_admin_connect, settings
 from test_production import script_for, start, finished
 from horus_backend.local_pilot import subtitle_sections, wav_info, signal_measurements
-from horus_backend.migrations import migrate, MIGRATIONS
+from horus_backend.workflows import encode
 
 
 # Preserve explicit native rehearsals; unit tests never inherit operator modes.
@@ -246,65 +246,26 @@ def test_real_sapi_owned_process_cancels_without_finishing(tmp_path):
     assert before == [(p.name,p.stat().st_size) for p in tmp_path.glob('*.wav')]
 
 
-def seed_v6(settings, monkeypatch):
-    with monkeypatch.context() as old:
-        old.setattr('horus_backend.migrations.SCHEMA_VERSION',6)
-        with client_for(settings) as client:
-            script = script_for(client)
-            record = finished(client,start(client,script).json())
-            assert record['status'] == 'succeeded'
-            with client.app.state.store.connect() as db:
-                # Inclui uma produção/revisão local_demo já persistida e seu recibo.
-                db.execute("UPDATE productions SET mode='local_demo',review=? WHERE id=?",
-                           (json.dumps({'decision':'reject','artifact_sha256':'a'*64}),record['id']))
-                db.execute('INSERT INTO production_receipts VALUES(?,?,?,?)',
-                           ('review:'+record['id'],'review-key','{}',record['id']))
-                productions = [tuple(row) for row in db.execute('SELECT * FROM productions')]
-                receipts = [tuple(row) for row in db.execute('SELECT * FROM production_receipts ORDER BY scope')]
-                path = Path(db.execute('PRAGMA database_list').fetchone()[2])
-    return path,productions,receipts,script
-
-
-def test_migration_v7_preserves_v6_productions_receipts_ids_and_fks(settings,monkeypatch):
-    path,productions,receipts,script = seed_v6(settings,monkeypatch)
-    for _ in range(2):
-        migrate(path)
-        with sqlite3.connect(path) as db:
-            db.execute('PRAGMA foreign_keys=ON')
-            assert db.execute('PRAGMA user_version').fetchone()[0] == __import__("horus_backend.migrations", fromlist=["SCHEMA_VERSION"]).SCHEMA_VERSION
-            assert db.execute('SELECT * FROM productions').fetchall() == productions
-            assert db.execute('SELECT * FROM production_receipts ORDER BY scope').fetchall() == receipts
-            assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-            assert len(db.execute('PRAGMA index_list(productions)').fetchall()) == 2
-            assert len(db.execute('PRAGMA index_list(production_receipts)').fetchall()) == 1
-            with pytest.raises(sqlite3.IntegrityError):
-                db.execute("UPDATE productions SET job_id='missing'")
-            with pytest.raises(sqlite3.IntegrityError):
-                db.execute("UPDATE production_receipts SET production_id='missing'")
-            db.execute("UPDATE productions SET mode='local_pilot'")
-            db.rollback()
-    assert len(list(path.parent.glob(path.stem+'.backup-v6-*.sqlite3'))) == 1
+def test_productions_and_receipts_enforce_fks_mode_and_restart_idempotency(settings, pg_app_cluster, pg_app_database):
+    with client_for(settings) as client:
+        script = script_for(client)
+        record = finished(client, start(client, script).json())
+        assert record['status'] == 'succeeded'
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.productions SET job_id='missing'")
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.production_receipts SET production_id='missing'")
+            with pytest.raises(psycopg.IntegrityError):
+                db.execute("UPDATE horus.productions SET mode='invalid_mode'")
     with client_for(settings) as client:
         # Mesmo recibo retorna o ID anterior, sem criar outro job.
-        response = start(client,script)
-        assert response.status_code == 200 and response.json()['id'] == productions[0][0]
-
-
-def test_migration_v7_failure_rolls_back_after_table_replacement(settings,monkeypatch):
-    path,productions,receipts,_ = seed_v6(settings,monkeypatch)
-    monkeypatch.setitem(MIGRATIONS,7,(*MIGRATIONS[7], 'INSERT INTO missing_table VALUES(1)'))
-    with pytest.raises(sqlite3.OperationalError): migrate(path)
-    with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 6
-        assert db.execute('SELECT * FROM productions').fetchall() == productions
-        assert db.execute('SELECT * FROM production_receipts ORDER BY scope').fetchall() == receipts
-        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-        assert not db.execute("SELECT name FROM sqlite_master WHERE name LIKE '%_v7'").fetchall()
-        with pytest.raises(sqlite3.IntegrityError): db.execute("UPDATE productions SET mode='local_pilot'")
+        response = start(client, script)
+        assert response.status_code == 200 and response.json()['id'] == record['id']
 
 
 @pytest.mark.skipif(not os.environ.get('HORUS_PILOT_FACTORY'),reason='Ensaio real explícito requer sandbox fábrica preparada.')
-def test_real_local_pilot_render_review_and_restart(settings):
+def test_real_local_pilot_render_review_and_restart(settings, pg_app_cluster, pg_app_database):
     from dataclasses import replace
     from test_scripts import approved, generate, decide
     settings = replace(settings,factory_root=Path(os.environ['HORUS_PILOT_FACTORY']))
@@ -321,8 +282,9 @@ def test_real_local_pilot_render_review_and_restart(settings):
             ('Revisar antes de publicar', 'O resultado precisa de revisão humana. A narração é sintética, produzida no computador, e sua licença ainda não foi verificada. Este vídeo é somente um piloto de demonstração.')]
         for section,(heading,narration) in zip(document['sections'],content):
             section.update(heading=heading,narration=narration)
-        with client.app.state.store.connect() as db:
-            db.execute('UPDATE scripts SET document=? WHERE id=?',(json.dumps(document,ensure_ascii=False),script['id']))
+        with pg_admin_connect(pg_app_cluster, pg_app_database) as db:
+            encoded = encode(document)
+            db.execute('UPDATE horus.scripts SET document=%s::jsonb, document_canonical=%s WHERE id=%s',(encoded, encoded.encode('utf-8'), script['id']))
         assert decide(client,script).status_code == 200
         cancelled = start(client,script,key='cancel-real-pilot',mode='local_pilot').json()
         cancel_root = settings.data_dir/'productions'/cancelled['id']

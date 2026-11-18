@@ -8,7 +8,7 @@ import pytest
 
 from horus_backend import hermes_credential as hc
 from horus_backend.hermes import read_connection
-from test_workflows import settings  # noqa: F401
+from support_b import settings  # noqa: F401
 
 FILE_TOKEN = 'arquivo-' + secrets.token_hex(12)
 VAULT_TOKEN = 'cofre-' + secrets.token_hex(12)

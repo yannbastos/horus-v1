@@ -7,13 +7,22 @@ from starlette.requests import ClientDisconnect, Request
 
 from horus_backend.api import create_app
 from horus_backend.worker_lock import WorkerLock
-from test_api import settings  # noqa: F401
+from support_a import settings  # noqa: F401
+from support_f import pg_manager, pg_store  # noqa: F401
+
+
+async def connected_app(settings):
+    """`create_app` em modo conectado: o lifespan não roda aqui, então abre a conexão PostgreSQL como ele faz."""
+    app = create_app(settings)
+    await asyncio.to_thread(app.state.database.test)
+    assert app.state.database.snapshot.state == 'connected'
+    return app
 
 
 @pytest.mark.parametrize('waiting', [False, True])
 def test_disconnect_releases_progress_stream_and_preserves_job(settings, waiting):
     async def run():
-        app = create_app(settings)
+        app = await connected_app(settings)
         store, manager = app.state.store, app.state.manager
         job, _ = store.create_job({'operation': 'factory.profile', 'channel_id': 'fixture'}, 'disconnect')
         store.update(job['id'], 'running')
@@ -77,7 +86,7 @@ def test_disconnect_releases_progress_stream_and_preserves_job(settings, waiting
 
 def test_progress_send_failure_closes_generator(settings):
     async def run():
-        app = create_app(settings)
+        app = await connected_app(settings)
         store = app.state.store
         job, _ = store.create_job({'operation': 'factory.profile', 'channel_id': 'fixture'}, 'broken-send')
         store.update(job['id'], 'running')
@@ -100,7 +109,7 @@ def test_progress_send_failure_closes_generator(settings):
 @pytest.mark.parametrize('during', ['send', 'idle'])
 def test_client_timeout_closes_progress_generator_and_releases_condition(settings, during):
     async def run():
-        app = create_app(settings)
+        app = await connected_app(settings)
         store, manager = app.state.store, app.state.manager
         job, _ = store.create_job({'operation': 'factory.profile', 'channel_id': 'fixture'}, 'client-timeout')
         store.update(job['id'], 'running')
@@ -132,15 +141,17 @@ def test_client_timeout_closes_progress_generator_and_releases_condition(setting
     asyncio.run(run())
 
 
-def test_worker_lock_contender_fails_immediately_and_can_retry(tmp_path):
-    owner, contender = WorkerLock(tmp_path / 'state.sqlite3'), WorkerLock(tmp_path / 'state.sqlite3')
+def test_worker_lock_contender_fails_immediately_and_can_retry(pg_store):
+    # Mesmo banco PostgreSQL e mesmo dispositivo: a trava de lease/fencing recusa o segundo executor sem esperar.
+    owner, contender = WorkerLock(pg_store), WorkerLock(pg_store)
     owner.acquire()
     try:
         for _ in range(3):
             with pytest.raises(RuntimeError, match='Outro backend'):
                 contender.acquire()
-            assert contender.handle is None
+            assert not contender.active and contender.fencing_token is None
     finally:
         owner.close()
     contender.acquire()
+    assert contender.active
     contender.close()

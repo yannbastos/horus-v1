@@ -1,4 +1,4 @@
-param([switch]$SkipInstall, [switch]$IncludeTranscription, [switch]$IncludeFirstVideo)
+﻿param([switch]$SkipInstall, [switch]$IncludeTranscription, [switch]$IncludeFirstVideo)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $backend = Join-Path $root 'backend'
@@ -26,9 +26,9 @@ try {
         foreach ($name in @('faster_whisper', 'ctranslate2', 'av', 'tokenizers')) { $modules += @('--exclude-module', $name) }
     }
     # O Python externo do Kokoro precisa do script real, não do módulo no PYZ.
-    # Fontes necessárias ao bridge no Python da fábrica; pesos continuam externos.
+    # Fontes necessárias ao bridge no Python da fábrica (inclui database/supabase-ca.crt); pesos continuam externos.
     $workerSources = (Join-Path $backend 'src/horus_backend') + ';horus_backend'
-    & $python -m PyInstaller --noconfirm --clean --onedir --name horus-backend --distpath dist --workpath build/work --specpath build --paths src --collect-submodules uvicorn --collect-submodules horus_backend --hidden-import keyring.backends.Windows --add-data $workerSources @modules launcher.py
+    & $python -m PyInstaller --noconfirm --clean --onedir --name horus-backend --distpath dist --workpath build/work --specpath build --paths src --collect-submodules uvicorn --collect-submodules horus_backend --collect-submodules psycopg --collect-submodules psycopg_pool --collect-all psycopg_binary --hidden-import keyring.backends.Windows --add-data $workerSources @modules launcher.py
     if ($LASTEXITCODE) { throw 'PyInstaller falhou.' }
 } finally { Pop-Location }
 if ($IncludeFirstVideo) {

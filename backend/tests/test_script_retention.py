@@ -2,7 +2,8 @@
 import json
 
 import pytest
-from test_retention import app, client, create, future, review
+from test_retention import create, future, review
+from support_f import app, client, retention_env, rows  # noqa: F401
 from horus_backend import hermes_simulator
 from horus_backend.retention import run_retention
 from horus_backend.workflows import encode
@@ -44,43 +45,43 @@ def test_editorial_copies_preserved_and_raw_sources_redacted(client, app, monkey
     review_path = f"/v1/scripts/{script['id']}/review"
     decision = {'expected_version': 1, 'decision': 'approve'}
     assert client.post(review_path, json=decision, headers={'Idempotency-Key': 'approve'}).status_code == 200
-    report = run_retention(app.state.store, clock=future)
+    report = run_retention(app.state.database, clock=future)
     assert report.redacted == 1 and report.failed == 0
     assert client.get(f"/v1/workflows/{workflow['id']}").json()['radar']['redacted_at']
     responses = [client.get(f"/v1/scripts/{script['id']}"), client.get(path),
                  client.post(path, json=payload, headers={'Idempotency-Key': 'generate'}),
                  client.post(review_path, json=decision, headers={'Idempotency-Key': 'approve'})]
     assert all(response.status_code == 200 and SENTINEL in response.text for response in responses)
-    with app.state.store.connect() as db:
-        assert SENTINEL in db.execute('SELECT document FROM scripts').fetchone()[0]
-        assert all(SENTINEL in row[0] for row in db.execute('SELECT response FROM script_receipts'))
-        sources = [json.loads(row[0]) for row in db.execute("SELECT content FROM artifacts WHERE stage IN ('research','analysis')")]
-        assert next(item for item in sources if item['stage'] == 'research')['dataset']['redacted']
-        assert next(item for item in sources if item['stage'] == 'analysis')['result']['sources']['redacted']
-        assert next(item for item in sources if item['stage'] == 'analysis')['result']['facts']['redacted']
-        event = json.loads(db.execute("SELECT data FROM workflow_events WHERE kind='workflow.radar_redacted'").fetchone()[0])
-        assert event['script_editorial_literal_matches'] == 3
-        assert event['script_receipt_editorial_literal_matches'] == 6
-        assert event['editorial_literal_matches'] > 0  # Métrica anterior continua separada.
-        assert SENTINEL not in encode(event)
-        assert not db.execute('PRAGMA foreign_key_check').fetchall()
+    store = app.state.store
+    assert SENTINEL in encode(rows(store, 'SELECT document FROM horus.scripts')[0][0])
+    assert all(SENTINEL in encode(row[0]) for row in rows(store, 'SELECT response FROM horus.script_receipts'))
+    sources = [row[0] for row in rows(store, "SELECT content FROM horus.artifacts WHERE stage IN ('research','analysis')")]
+    assert next(item for item in sources if item['stage'] == 'research')['dataset']['redacted']
+    assert next(item for item in sources if item['stage'] == 'analysis')['result']['sources']['redacted']
+    assert next(item for item in sources if item['stage'] == 'analysis')['result']['facts']['redacted']
+    event = rows(store, "SELECT data FROM horus.workflow_events WHERE kind='workflow.radar_redacted'")[0][0]
+    assert event['script_editorial_literal_matches'] == 3
+    assert event['script_receipt_editorial_literal_matches'] == 6
+    assert event['editorial_literal_matches'] > 0  # Métrica anterior continua separada.
+    assert SENTINEL not in encode(event)
+    # Integridade referencial em PostgreSQL (substitui `PRAGMA foreign_key_check`): nenhum roteiro órfão.
+    assert not rows(store, 'SELECT 1 FROM horus.scripts s LEFT JOIN horus.workflows w ON w.id=s.workflow_id WHERE w.id IS NULL')
     assert client.get(f"/v1/scripts/{script['id']}").json()['status'] == 'approved'
     assert client.post(path, json=payload, headers={'Idempotency-Key': 'new-generation'}).status_code == 409
     assert client.post(path, json={**payload, 'expected_revision': 2}, headers={'Idempotency-Key': 'generate'}).status_code == 409
-    assert run_retention(app.state.store, clock=future).already_redacted == 1
+    assert run_retention(app.state.database, clock=future).already_redacted == 1
 
 
 @pytest.mark.parametrize('decision', ['approve', 'reject'])
 def test_redacted_radar_blocks_new_changes_atomically_but_allows_final_review(client, app, monkeypatch, decision):
     workflow, script, path, payload = seed_script(client, monkeypatch)
-    report = run_retention(app.state.store, clock=future)
+    report = run_retention(app.state.database, clock=future)
     assert report.redacted == 1 and report.failed == 0
     review_path = f"/v1/scripts/{script['id']}/review"
 
     def snapshot():
-        with app.state.store.connect() as db:
-            return [tuple(row) for table in ('scripts', 'script_receipts', 'workflow_events')
-                    for row in db.execute(f'SELECT * FROM {table} ORDER BY 1')]
+        return [tuple(row) for table in ('scripts', 'script_receipts', 'workflow_events')
+                for row in rows(app.state.store, f'SELECT * FROM horus.{table} ORDER BY 1')]
 
     before = snapshot()
     response = client.post(review_path, json={'expected_version': 1, 'decision': 'request_changes', 'feedback': 'Rever abertura'},
@@ -104,7 +105,7 @@ def test_changes_replay_preserved_but_regeneration_blocked_after_retention(clien
     headers = {'Idempotency-Key': 'changes-before-retention'}
     previous = client.post(review_path, json=decision, headers=headers)
     assert previous.status_code == 200
-    assert run_retention(app.state.store, clock=future).redacted == 1
+    assert run_retention(app.state.database, clock=future).redacted == 1
     assert client.post(review_path, json=decision, headers=headers).json() == previous.json()
     assert client.post(review_path, json={**decision, 'feedback': 'Outro pedido'}, headers=headers).status_code == 409
     assert client.post(path, json=payload, headers={'Idempotency-Key': 'new-generation'}).status_code == 409

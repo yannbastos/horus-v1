@@ -14,16 +14,13 @@ from pydantic import ValidationError
 from horus_backend import egress, whisper_download as download, transcriber, speech_alignment
 from horus_backend.config import Settings
 from horus_backend.jobs import TranscriptionRequest, job_environment
-from horus_backend.migrations import migrate
-from horus_backend.storage import Store
 from horus_backend.transmissions import TransmissionLog
+from support_b import pg_store, query_rows  # noqa: F401
 
 
 @pytest.fixture
-def gate(tmp_path, monkeypatch):
-    path = tmp_path / 'audit.sqlite3'
-    migrate(path)
-    audit = TransmissionLog(Store(path))
+def gate(pg_store, monkeypatch):
+    audit = TransmissionLog(pg_store)
     gateway = egress.EgressGateway(audit=audit, resolver=lambda h, p: ['93.184.216.34'])
     monkeypatch.setattr(egress, '_gateway', gateway)
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **k: pytest.fail('Rede real proibida'))
@@ -31,8 +28,7 @@ def gate(tmp_path, monkeypatch):
 
 
 def rows(audit):
-    with audit.store.connect() as db:
-        return [dict(r) for r in db.execute('SELECT * FROM transmissions ORDER BY seq')]
+    return query_rows(audit.store, 'SELECT * FROM horus.transmissions ORDER BY seq')
 
 
 def fake_http(monkeypatch, responses):

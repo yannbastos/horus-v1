@@ -5,10 +5,10 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend import diagnostics as d
 from horus_backend.narration import kokoro
+from support_e import pg_client_for, pg_transport  # noqa: F401
 
 
 def test_slow_diagnostics_does_not_block_other_routes(prepared, monkeypatch):
@@ -24,8 +24,7 @@ def test_slow_diagnostics_does_not_block_other_routes(prepared, monkeypatch):
         return {'checks': [], 'production': {'ready': True, 'missing': []}}
 
     monkeypatch.setattr(api, 'diagnose', slow_diagnose)
-    with TestClient(create_app(prepared), base_url='http://127.0.0.1',
-                    headers={'Authorization': 'Bearer ' + prepared.token}) as client:
+    with pg_client_for(prepared, headers={'Authorization': 'Bearer ' + prepared.token}) as client:
         with ThreadPoolExecutor(max_workers=2) as executor:
             diagnostic = executor.submit(client.get, '/v1/diagnostics')
             try:
@@ -40,7 +39,7 @@ def test_slow_diagnostics_does_not_block_other_routes(prepared, monkeypatch):
 
 
 @pytest.fixture
-def prepared(tmp_path, monkeypatch):
+def prepared(tmp_path, monkeypatch, pg_transport):
     files = ['scripts/.venv/' + ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'),
              'remotion/package.json', 'remotion/package-lock.json', 'remotion/tsconfig.json',
              'remotion/node_modules/.bin/remotion', 'browser.exe', 'ffmpeg.exe', 'ffprobe.exe',
@@ -66,8 +65,7 @@ def prepared(tmp_path, monkeypatch):
 
 
 def test_route_ready_and_private(prepared):
-    with TestClient(create_app(prepared), base_url='http://127.0.0.1',
-                    headers={'Authorization': 'Bearer ' + prepared.token}) as client:
+    with pg_client_for(prepared, headers={'Authorization': 'Bearer ' + prepared.token}) as client:
         response = client.get('/v1/diagnostics')
     assert response.status_code == 200
     result = response.json()

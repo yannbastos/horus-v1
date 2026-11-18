@@ -7,9 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from horus_backend import local_token
-from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.local_token import TokenState
+from support_e import pg_create_app, pg_transport  # noqa: F401
 
 OLD = secrets.token_urlsafe(32)
 NEW = secrets.token_urlsafe(32)
@@ -21,10 +21,10 @@ def auth(token):
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, pg_transport):
     settings = Settings(token=OLD, data_dir=tmp_path / 'dados', factory_root=None, hermes_executable=None, hermes_config=tmp_path / 'h.json')
     assert Path(settings.data_dir).is_relative_to(tmp_path)
-    with TestClient(create_app(settings), base_url='http://127.0.0.1') as client:
+    with TestClient(pg_create_app(settings), base_url='http://127.0.0.1') as client:
         yield client
 
 

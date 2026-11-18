@@ -10,11 +10,13 @@ import sys
 import time
 from pathlib import Path
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 from horus_backend.api import create_app
 from horus_backend.config import Settings
+from support_h1 import admin, wire_app_database
 
 CONTRACTS = Path(__file__).resolve().parents[2] / "contracts" / "hermes"
 sys.path.insert(0, str(CONTRACTS))
@@ -39,15 +41,16 @@ def hermes():
 
 
 @pytest.fixture
-def settings(tmp_path, hermes):
+def settings(tmp_path, hermes, pg_app_cluster, pg_app_database, monkeypatch):
     connection = tmp_path / "hermes.json"
     connection.write_text(json.dumps({"base_url": hermes.base_url, "token": hermes.token}), encoding="utf-8")
     from horus_backend.security import harden_profile
     profile = tmp_path / "profile"
     harden_profile(profile)
-    return Settings(hermes_profile=profile, max_tokens_per_run=100000, max_tokens_per_day=10000000, max_runs_per_day=100, token=TOKEN, data_dir=tmp_path / "data", factory_root=None, hermes_executable=None,
+    settings = Settings(hermes_profile=profile, max_tokens_per_run=100000, max_tokens_per_day=10000000, max_runs_per_day=100, token=TOKEN, data_dir=tmp_path / "data", factory_root=None, hermes_executable=None,
                     hermes_config=connection, workflow_executor="hermes", hermes_poll_seconds=.05, hermes_run_timeout=5,
                     price_input_usd_per_mtok=Decimal('1'), price_output_usd_per_mtok=Decimal('2'))
+    return wire_app_database(pg_app_cluster, pg_app_database, settings, monkeypatch)
 
 
 def client_for(settings):
@@ -286,7 +289,7 @@ def test_daily_budget_is_reserved_and_blocks_next_authorization(settings, hermes
 
 
 @pytest.mark.parametrize('failed', [False, True])
-def test_daily_real_run_limit_counts_zero_usage_and_failures(settings, hermes, failed):
+def test_daily_real_run_limit_counts_zero_usage_and_failures(settings, hermes, failed, pg_app_cluster, pg_app_database):
     from dataclasses import replace
     from horus_backend.security import daily_runs
     settings = replace(settings, max_runs_per_day=1)
@@ -304,12 +307,12 @@ def test_daily_real_run_limit_counts_zero_usage_and_failures(settings, hermes, f
             json={'expected_revision': second['revision'], 'job_id': second['pending_authorization']['job_id']})
         assert response.status_code == 409 and len(hermes.requests) == 1
         # A fonte oficial é cognitive_client: simulação não consome quota e dia anterior não conta.
-        with app.state.store.connect() as db:
-            db.execute("UPDATE workflows SET cognitive_client='simulated' WHERE id=?", (workflow['id'],))
+        with admin(pg_app_cluster, pg_app_database) as db:
+            db.execute("UPDATE horus.workflows SET cognitive_client='simulated' WHERE id=%s", (workflow['id'],))
         assert daily_runs(app.state.store) == 0
-        with app.state.store.connect() as db:
-            db.execute("UPDATE workflows SET cognitive_client='live' WHERE id=?", (workflow['id'],))
-            db.execute("UPDATE cognitive_runs SET created_at='2000-01-01T00:00:00Z'")
+        with admin(pg_app_cluster, pg_app_database) as db:
+            db.execute("UPDATE horus.workflows SET cognitive_client='live' WHERE id=%s", (workflow['id'],))
+            db.execute("UPDATE horus.cognitive_runs SET created_at='2000-01-01T00:00:00Z'")
         assert daily_runs(app.state.store) == 0
 
 
@@ -317,9 +320,9 @@ def test_daily_run_limit_rechecked_inside_reservation_transaction(settings, herm
     from dataclasses import replace
     import horus_backend.workflow_hermes as adapter
     settings = replace(settings, max_runs_per_day=1)
-    def exhausted_after_authorization(store, db, *, day=None):
+    def exhausted_after_authorization(store, db, *, day=None, clock=None):
         # Outra admissão pode consumir a última vaga após a autorização; rechecagem sob lock.
-        assert db.in_transaction
+        assert db.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
         return 1
     monkeypatch.setattr(adapter, 'daily_runs', exhausted_after_authorization)
     with client_for(settings) as client:

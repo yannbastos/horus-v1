@@ -9,10 +9,9 @@ from types import SimpleNamespace
 
 import keyring
 import pytest
-from fastapi.testclient import TestClient
-from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.narration.providers import ElevenLabs, NarrationError, WindowsSapi, Piper, voice
+from support_g import client_for, pg_store, pg_transport  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -34,9 +33,9 @@ def no_network(monkeypatch):
 
 
 @pytest.fixture
-def client(tmp_path):
-    app = create_app(Settings(token='test-token-for-narration-123456', data_dir=tmp_path, factory_root=None, hermes_executable=None))
-    with TestClient(app, base_url='http://127.0.0.1', headers={'Authorization': 'Bearer test-token-for-narration-123456'}) as client:
+def client(tmp_path, client_for):
+    settings = Settings(token='test-token-for-narration-123456', data_dir=tmp_path, factory_root=None, hermes_executable=None)
+    with client_for(settings) as client:
         yield client
 
 
@@ -90,15 +89,10 @@ def test_estimate(client):
     assert client.post('/v1/narration/estimate', json={'provider': 'piper', 'voice_id': 'x', 'script_id': 'a' * 32, 'script_version': 1}).status_code == 404
 
 
-def paid_checkpoints(tmp_path, text='hello'):
+def paid_checkpoints(store, text='hello'):
     """HOR-107: gasto por API paga exige checkpoint humano; concede um para o texto e devolve o serviço."""
-    from decimal import Decimal
     from horus_backend.human_checkpoints import CheckpointService
-    from horus_backend.migrations import migrate
-    from horus_backend.storage import Store
-    path = tmp_path / 'checkpoints.sqlite3'
-    migrate(path)
-    service = CheckpointService(Store(path))
+    service = CheckpointService(store)
     service.grant(action='paid_narration', subject=hashlib.sha256(text.encode()).hexdigest(), description='Narração paga de teste',
                   limit_amount='1', currency='USD')
     return service
@@ -108,13 +102,13 @@ PAID = dict(elevenlabs_price_per_1k_chars=__import__('decimal').Decimal('0.30'),
 
 
 @pytest.mark.parametrize('enabled,credential,authorized', list(itertools.product([False, True], repeat=3)))
-def test_paid_three_conditions(tmp_path, enabled, credential, authorized):
+def test_paid_three_conditions(tmp_path, pg_store, enabled, credential, authorized):
     class Transport:
         calls = 0
         def synthesize(self, **kwargs): self.calls += 1; return {'credits': 5}
     transport = Transport()
     provider = ElevenLabs(Settings(token='x', narration_paid_enabled=enabled, **PAID), SimpleNamespace(get=lambda: 'synthetic' if credential else None), transport,
-                          checkpoints=paid_checkpoints(tmp_path))
+                          checkpoints=paid_checkpoints(pg_store))
     authorization = {'text_sha256': hashlib.sha256(b'hello').hexdigest(), 'voice_id': 'mock',
                      'estimated_cost': provider.estimate('hello')['cost'], 'confirmed': True} if authorized else None
     if enabled and credential and authorized:
@@ -139,13 +133,13 @@ def test_paid_api_always_disabled(client, enabled, credential):
 
 
 @pytest.mark.parametrize('failure,code', [(401, 'provider_credential_rejected'), (429, 'provider_quota_exceeded'), ('timeout', 'provider_timeout')])
-def test_mock_errors_sanitized(tmp_path, failure, code):
+def test_mock_errors_sanitized(tmp_path, pg_store, failure, code):
     class Transport:
         def synthesize(self, **kwargs):
             if failure == 'timeout': raise TimeoutError('synthetic-secret')
             error = RuntimeError('synthetic-secret'); error.status_code = failure; raise error
     provider = ElevenLabs(Settings(token='x', narration_paid_enabled=True, **PAID), SimpleNamespace(get=lambda: 'synthetic-secret'), Transport(),
-                          checkpoints=paid_checkpoints(tmp_path))
+                          checkpoints=paid_checkpoints(pg_store))
     auth = {'text_sha256': hashlib.sha256(b'hello').hexdigest(), 'voice_id': 'mock', 'estimated_cost': provider.estimate('hello')['cost'], 'confirmed': True}
     with pytest.raises(NarrationError) as error: provider.synthesize('hello', 'mock', tmp_path / 'out.wav', auth)
     assert str(error.value) == code
@@ -193,7 +187,7 @@ def test_sapi_real_conditional(tmp_path):
     provider.preview('Esta é uma frase fictícia.', voices[0]['id'], output)
     with wave.open(str(output)) as file: assert file.getnframes() > 0
 
-def test_estimate_approved_script_and_integrity(client):
+def test_estimate_approved_script_and_integrity(client, pg_app_cluster, pg_app_database):
     from test_scripts import approved, generate, decide
     script = generate(client, approved(client)).json()
     body = {'provider': 'elevenlabs', 'voice_id': 'mock', 'script_id': script['id'], 'script_version': script['version']}
@@ -202,8 +196,8 @@ def test_estimate_approved_script_and_integrity(client):
     result = client.post('/v1/narration/estimate', json=body)
     assert result.status_code == 200, result.text
     assert result.json()['characters'] == len('\n'.join(s['narration'] for s in script['document']['sections']))
-    with client.app.state.store.connect() as db:
-        db.execute("UPDATE scripts SET document='{}' WHERE id=?", (script['id'],))
+    with pg_app_cluster.connect(pg_app_database, autocommit=True) as admin:
+        admin.execute("UPDATE horus.scripts SET document='{}'::jsonb, document_canonical=convert_to('{}', 'UTF8') WHERE id=%s", (script['id'],))
     assert client.post('/v1/narration/estimate', json=body).status_code == 409
 
 
@@ -231,7 +225,8 @@ def test_preference_survives_restart(client):
     service.providers['windows_sapi'] = Fake()
     assert client.put('/v1/narration/preference', json={'provider': 'windows_sapi', 'voice_id': 'v'}).status_code == 200
     restarted = NarrationService(service.settings, service.store)
-    assert restarted.preference.read_text() == service.preference.read_text()
+    restarted.providers['windows_sapi'] = Fake()
+    assert restarted.get_preference() == service.get_preference() == {'provider': 'windows_sapi', 'voice_id': 'v'}
 
 @pytest.mark.parametrize('enabled,configured,expected', [(False, False, 'disabled'), (False, True, 'disabled'), (True, False, 'not_configured'), (True, True, 'blocked')])
 def test_paid_status(enabled, configured, expected):

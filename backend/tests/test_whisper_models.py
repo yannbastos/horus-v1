@@ -3,11 +3,10 @@ import errno
 import json
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pytest
 
-from horus_backend.api import create_app
 from horus_backend.config import Settings
+from support_g import client_for, pg_transport  # noqa: F401
 from horus_backend.whisper_models import ImportModelRequest, MIN_WEIGHTS, ModelConflict, WhisperModels
 from horus_backend.speech_alignment import resolve_model_path
 
@@ -156,11 +155,10 @@ def test_source_symlink_is_not_copied_and_model_root_cannot_escape(tmp_path, sou
 
 
 @pytest.fixture
-def client(tmp_path):
-    app = create_app(Settings(token='whisper-model-test-token-0123456789', data_dir=tmp_path / 'data',
-        factory_root=None, hermes_executable=None, hermes_config=tmp_path / 'no-hermes.json'))
-    with TestClient(app, base_url='http://127.0.0.1',
-                    headers={'Authorization': 'Bearer whisper-model-test-token-0123456789'}) as value:
+def client(tmp_path, client_for):
+    settings = Settings(token='whisper-model-test-token-0123456789', data_dir=tmp_path / 'data',
+        factory_root=None, hermes_executable=None, hermes_config=tmp_path / 'no-hermes.json')
+    with client_for(settings) as value:
         yield value
 
 
