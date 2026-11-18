@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from conftest import PG_TEST_CONFIG, _patch_pg_transport
+from pg_app_support import PG_TEST_CONFIG, _patch_pg_transport
 from horus_backend.database.models import ConnectionRequest
 from horus_backend.database.vault import ConnectionVault
 from horus_backend.local_data_export import export_local_data, restore_local_data, verify_export

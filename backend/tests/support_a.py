@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import PG_TEST_CONFIG, _patch_pg_transport
+from pg_app_support import PG_TEST_CONFIG, _patch_pg_transport
 from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.database.models import ConnectionRequest

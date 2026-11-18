@@ -40,14 +40,7 @@ def no_disk_encryption_query(monkeypatch):
 
 # --- Novas fixtures de aplicação em PostgreSQL (HOR-164 I-final A) -------------------------------------------
 
-PG_TEST_TOKEN = "pg-app-tests-token-0123456789abcdef"
-PG_TEST_CONFIG = {
-    "host": "aws-0-sa-east-1.pooler.supabase.com",
-    "port": 5432,
-    "database": "postgres",
-    "user": "horus_app.abcdefghijklmnopqrst",
-    "password": "sintética:'\\@?#%$\"= 空白 !",
-}
+from pg_app_support import PG_TEST_CONFIG, PG_TEST_TOKEN, _patch_pg_transport  # noqa: E402,F401
 
 
 @pytest.fixture(scope="session")
@@ -97,30 +90,6 @@ def pg_app_settings(tmp_path):
         hermes_executable=None,
         hermes_config=tmp_path / "hermes.json",
     )
-
-
-def _patch_pg_transport(pg_app_cluster, pg_app_database, memory_keyring, monkeypatch):
-    import psycopg
-    from horus_backend.database.manager import DatabaseManager
-    from horus_backend.database.vault import ConnectionVault
-
-    monkeypatch.setattr(ConnectionVault, "backend", lambda self: memory_keyring)
-
-    def local_type(self, config):
-        class LocalConnection(psycopg.Connection):
-            @classmethod
-            def connect(cls, conninfo="", **kwargs):
-                return super().connect(
-                    pg_app_cluster.dsn(pg_app_database, "horus_app"),
-                    autocommit=True,
-                    password=config.password.get_secret_value(),
-                    prepare_threshold=None,
-                )
-
-        return LocalConnection
-
-    monkeypatch.setattr(DatabaseManager, "_make_connection_type", local_type)
-    monkeypatch.setattr("horus_backend.database.manager.resolve_public", lambda *_: "8.8.8.8")
 
 
 @pytest.fixture

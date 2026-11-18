@@ -381,7 +381,7 @@ def test_comparator_separates_breaking_from_additive_and_detects_optional_drift(
 
 def test_flow_is_deterministic(settings, pg_app_cluster, pg_app_database, tmp_path, monkeypatch):
     from dataclasses import replace
-    from conftest import _patch_pg_transport
+    from pg_app_support import _patch_pg_transport
     from keyring_support import MemoryKeyring
     from schema_support import schema_database
 

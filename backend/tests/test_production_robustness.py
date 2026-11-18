@@ -147,7 +147,7 @@ def test_worker_lock_is_released_after_crash_ttl_and_on_close(pg_app_cluster, pg
     from contextlib import contextmanager
     import time
     import psycopg
-    from conftest import PG_TEST_CONFIG
+    from pg_app_support import PG_TEST_CONFIG
     from horus_backend.storage import Store
 
     dsn = pg_app_cluster.dsn(pg_app_database, "horus_app")

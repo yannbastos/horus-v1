@@ -35,7 +35,7 @@ from migration_fixtures.synthetic_builder import (  # noqa: E402
     PRIVATE_MARKER_SCRIPT,
     build_synthetic_data_dir,
 )
-from horus_backend.migrations import MIGRATIONS  # noqa: E402
+from migrate_sqlite_pg.legacy_schema import MIGRATIONS  # noqa: E402
 
 
 def _assert_no_private_markers(obj: object) -> None:

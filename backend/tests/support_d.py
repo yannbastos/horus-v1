@@ -19,7 +19,7 @@ from horus_backend.database.manager import DatabaseManager
 from horus_backend.database.models import ConnectionRequest
 from horus_backend.database.vault import ConnectionVault
 from horus_backend.storage import Store, canonical_json_bytes
-from conftest import PG_TEST_CONFIG, PG_TEST_TOKEN
+from pg_app_support import PG_TEST_CONFIG, PG_TEST_TOKEN
 from keyring_support import MemoryKeyring
 
 PG_DIR = str(Path(__file__).resolve().parent / "pg")
