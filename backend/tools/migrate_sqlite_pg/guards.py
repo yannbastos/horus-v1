@@ -1,4 +1,4 @@
-"""Guardas de segurança: recusa origem operacional/quente, links, destino remoto/não vazio e segredos."""
+"""Guardas de segurança para caminhos, origem fria e destino PostgreSQL."""
 from __future__ import annotations
 
 import ctypes
@@ -9,6 +9,9 @@ import tempfile
 from urllib.parse import urlparse
 
 from psycopg.conninfo import conninfo_to_dict
+from pydantic import ValidationError
+
+from horus_backend.database.models import ConnectionRequest
 
 
 class MigrationGuardError(ValueError):
@@ -225,17 +228,49 @@ def validate_cold_sqlite(db_path: Path) -> None:
             )
 
 
-def validate_target_dsn(dsn: str) -> dict[str, str]:
-    """Allowlist estrita para destino PostgreSQL descartável em loopback, sem segredos em argv."""
+def _target_options(dsn: str) -> dict[str, str]:
     if not dsn or not isinstance(dsn, str):
         raise MigrationGuardError("DSN de destino obrigatório.")
     low = dsn.lower()
-    if "password=" in low or ("://" in low and "@" in urlparse(dsn).netloc):
-        raise MigrationGuardError("Segredos/credenciais em DSN/argv são proibidos.")
     try:
+        if "password=" in low or ("://" in low and "@" in urlparse(dsn).netloc):
+            raise MigrationGuardError("Segredos/credenciais em DSN/argv são proibidos.")
         opts = conninfo_to_dict(dsn)
-    except Exception as exc:
-        raise MigrationGuardError("DSN de destino inválido.") from exc
+    except MigrationGuardError:
+        raise
+    except Exception:
+        raise MigrationGuardError("DSN de destino inválido.") from None
+    if "password" in opts:
+        raise MigrationGuardError("Senha em DSN/argv é proibida.")
+    return opts
+
+
+def supabase_target(dsn: str, *, user_authorized: bool) -> ConnectionRequest:
+    if not user_authorized:
+        raise MigrationGuardError("Destino Supabase exige --i-have-user-authorization.")
+    opts = _target_options(dsn)
+    if opts.keys() - {"host", "port", "dbname", "user", "sslmode"}:
+        raise MigrationGuardError("Opções não permitidas no DSN Supabase (inclusive hostaddr).")
+    if opts.get("sslmode") != "verify-full" or opts.get("port") != "5432":
+        raise MigrationGuardError("Destino Supabase exige sslmode=verify-full e port=5432.")
+    try:
+        return ConnectionRequest(
+            host=opts.get("host", ""),
+            port=5432,
+            database=opts.get("dbname", ""),
+            user=opts.get("user", ""),
+            password=os.environ.get("HORUS_MIGRATION_SUPABASE_PASSWORD", ""),
+        )
+    except ValidationError:
+        raise MigrationGuardError(
+            "Destino Supabase inválido: confira host, dbname, usuário horus_app e "
+            "HORUS_MIGRATION_SUPABASE_PASSWORD."
+        ) from None
+
+
+def validate_target_dsn(dsn: str) -> dict[str, str]:
+    """Allowlist estrita para destino PostgreSQL descartável em loopback, sem segredos em argv."""
+    opts = _target_options(dsn)
 
     allowed_keys = {
         "host",
@@ -250,8 +285,6 @@ def validate_target_dsn(dsn: str) -> dict[str, str]:
     extra = set(opts) - allowed_keys
     if extra:
         raise MigrationGuardError("Opções não permitidas no DSN de destino.")
-    if "password" in opts:
-        raise MigrationGuardError("Senha em DSN/argv é proibida.")
     if opts.get("options", "") != "":
         raise MigrationGuardError("Parâmetro options no DSN é proibido.")
 
