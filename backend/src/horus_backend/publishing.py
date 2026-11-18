@@ -17,7 +17,8 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .local_pilot import registered_json
-from .media_contracts import UNSAFE_TEXT, ProvenanceAsset, apply_license_reviews, commercial_use_permitted, validate_asset_provenance
+from .license_reviews import LicenseReviewService
+from .media_contracts import PILOT_INPUT_PATH, UNSAFE_TEXT, ProvenanceAsset, apply_license_reviews, commercial_use_permitted, validate_asset_provenance
 from .processes import run_sync
 from .production import confined, inspect_artifact
 from .storage import DatabaseUnavailable, canonical_json_bytes, now
@@ -28,7 +29,7 @@ FAILED_MARKER = 'failed.json'
 LICENSES_PENDING = 'Licenças pendentes: confira os direitos de todos os assets antes de publicar.'
 LICENSES_REVIEWED = 'Licenças revisadas: a publicação manual continua sob responsabilidade humana.'
 DISCLOSURE_MARKER = chr(10) * 2 + 'Divulgações obrigatórias:' + chr(10)
-_INPUTS = re.compile(r'^inputs/[A-Za-z0-9_.-]+$')
+_INPUTS = PILOT_INPUT_PATH
 
 
 def _as_json(value):
@@ -157,17 +158,7 @@ class PublishingService:
         data = registered_json(root, artifacts, 'asset-provenance.json')
         verdict = validate_asset_provenance(data, artifacts=inputs)
         provenance = verdict['value'] if verdict['ok'] else None
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                'SELECT id, production_id, asset_id, asset_sha256, decision, license, evidence, reviewed_by, reviewed_at, supersedes '
-                'FROM horus.license_reviews WHERE production_id = %s ORDER BY seq ASC',
-                (production_id,),
-            )
-            history = []
-            for r in cur.fetchall():
-                item = dict(r)
-                item['reviewed_at'] = _iso(item['reviewed_at'])
-                history.append(item)
+        history = LicenseReviewService._history(conn, production_id)
         return provenance, history
 
     def _approved(self, conn, production_id, verify=True, *, for_update: bool = False):
@@ -251,6 +242,9 @@ class PublishingService:
             ident = hashlib.sha256(key.encode()).hexdigest()
             relative = f'publishing/thumbnails/{ident}'
             receipt_path = relative + '/receipt.json'
+            with self._uow(readonly=True) as conn:
+                _, approved_video = self._approved(conn, production_id, verify=False)
+            self._verify_video(production_id, approved_video)  # hash fora da transação, também no replay (paridade com o legado)
             with self._uow() as conn:
                 row, video = self._approved(conn, production_id, verify=False)
                 req_hash = hashlib.sha256(canonical_json_bytes({

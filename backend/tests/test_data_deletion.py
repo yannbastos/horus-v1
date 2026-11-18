@@ -267,10 +267,6 @@ def imported(tmp_path, pg_client, pg_app, pg_app_settings):
     return pg_client, imp.json()['id'], Path(pg_app_settings.data_dir), record
 
 
-@pytest.mark.xfail(
-    reason="Defeito de produto pós-corte PG: GET /v1/imports/{id} retorna 409 (import_missing_file) em vez de 404 quando excluído",
-    strict=True,
-)
 def test_imports_can_be_deleted_hidden_and_restored(imported):
     client, import_id, data, record = imported
     plan = preview(client, import_id, scope='import').json()
