@@ -4,12 +4,12 @@ A [governança](AGENT-GOVERNANCE.md) prevalece sobre todas estas preferências: 
 
 ## Delegação
 
-- Priorize Codex e Antigravity para implementação, investigação, documentação e testes; Claude coordena e revisa decisões críticas, implementando só quando houver necessidade técnica justificada. Respeite o agente indicado pelo usuário; sem indicação, distribua por competência, disponibilidade, cotas e dependências.
+- Priorize Codex e Antigravity/Gemini para implementação, investigação, documentação e testes; Claude prioriza supervisão, coordenação, arquitetura e revisão, implementando só quando houver necessidade técnica justificada. Respeite o agente indicado pelo usuário; sem indicação, distribua por competência, disponibilidade, cotas e dependências.
 - Use capacidade disponível para tarefas reais já autorizadas, sem tarefas artificiais. Independentes seguem em paralelo, cada uma em worktree isolado e com arquivos atribuídos; não sobreponha arquivos sem coordenação explícita.
-- Antes de despachar, confira Issues e workers ativos para não duplicar trabalho ou investigação. Não despache dependência ainda não integrada, tarefa sem autorização ou agente sem cota.
-- Despache para a **raiz/worktree do repositório**, nunca a pasta-pai; se isso não for possível, inclua leitura explícita do AGENTS da raiz no preâmbulo e exija confirmação no relatório.
+- Antes de despachar, reconcilie Issues, Project, branches, PRs e workers ativos conforme a [retomada](RETOMADA-MAESTRO.md#c-tarefas). Não despache dependência ainda não integrada, tarefa sem autorização ou agente sem cota.
+- Confira antes do despacho se o diretório de execução do worker é a raiz do worktree da tarefa (`git rev-parse --show-toplevel`). Isso é obrigatório para carregar `AGENTS.md` no Antigravity. Se o Orca só oferecer a pasta-pai, corrija o workspace antes de despachar. O worker confirma a leitura no relatório.
 - Confira o recibo e confirme o início com `orca orchestration worker-show` (`activity=working`). Ao revisar entregas, confira também pendentes com `worker-read` se necessário para identificar cota, espera ou travamento; não crie loops de polling.
-- Depois de despachar um lote independente, registre o estado na Issue e aguarde relatórios/decisão. Ao despertar, reúna relatórios pendentes (`orca orchestration check`) e trate entregas relacionadas em lote, preservando dependências e aceite.
+- Depois de despachar um lote independente, registre o [checkpoint](RETOMADA-MAESTRO.md#checkpoints-nas-issues) na Issue e aguarde relatórios/decisão. Ao despertar, reúna relatórios pendentes (`orca orchestration check`) e trate entregas relacionadas em lote, preservando dependências e aceite.
 - Balanceie cotas entre provedores. Antigravity usa Gemini disponível (`agy models`), não Claude; ao esgotar um modelo, considere outro no mesmo provedor antes de redistribuir. Segundo worker Claude só se nenhum agente de outro provedor puder assumir. OpenCode continua sujeito às restrições da governança.
 
 ## Economia de tokens
@@ -28,13 +28,14 @@ A [governança](AGENT-GOVERNANCE.md) prevalece sobre todas estas preferências: 
 
 ## Autonomia, Git e organização
 
+- Para falhas relevantes, siga a [regra de correção e prevenção](AGENT-GOVERNANCE.md#testes-proporcionais-ao-risco) e registre causa e evidência na Issue. Um worker sem rede entrega as evidências ao Maestro, que publica a atualização e confere a gravação. Compare a integração local com a remota antes de reportar publicação ou conclusão. Se o Maestro integrar por outra via após um dispatch falhar, preserve o resultado histórico da tentativa e registre a integração separadamente no checkpoint, com SHA e testes. Uma task Orca descreve a tentativa local; o aceite da Issue exige evidência no Git e no Project.
 - Uma tarefa bloqueada não para as independentes já autorizadas. Peça autorização somente quando a governança exige; não declare conclusão antes das validações e do aceite.
 - Siga implementação → testes → merge → push → Issue → limpeza segura, conforme [Fluxo Git](AGENT-GOVERNANCE.md#fluxo-git) e [Encerramento](AGENT-GOVERNANCE.md#encerramento-de-tarefas-e-limpeza). Integração é do Maestro após revisão, salvo delegação explícita.
 - Não acumule branches/worktrees temporários concluídos; nada destrutivo sem autorização específica. Nunca perca commits nem trabalho exclusivo. Branch retida por decisão não é resíduo.
 
 ## Supervisão opcional
 
-Se estiver em um terminal local do Orca, consulte `& ./scripts/horus-supervisor.ps1 Find` na retomada. Sem ID, siga o fluxo normal. Se o Orca estiver indisponível, informe a limitação apenas quando afetar a coordenação. Use um Run próprio por Maestro. Se nenhum estiver vinculado, crie-o ao entrar na supervisão. Preserve os Runs e workers já existentes.
+Se estiver em um terminal local do Orca, consulte `& ./scripts/horus-supervisor.ps1 Find` na retomada. Sem ID, siga o fluxo normal. Se o Orca estiver indisponível, informe a limitação apenas quando afetar a coordenação. Use um Run próprio por Maestro. Crie ou reutilize esse Run conforme a [retomada](RETOMADA-MAESTRO.md#e-resumo-e-retomada), com ou sem Supervisor. Preserve os Runs e workers já existentes.
 
 Use `orca orchestration send --to run:<supervisor> --subject "<assunto>" --body "<texto>"`. Envie somente mudanças relevantes. Use o ID oficial da Issue, ou o objetivo autorizado enquanto não houver Issue. Inclua seu Run em cada mensagem.
 
@@ -46,7 +47,29 @@ Use `orca orchestration send --to run:<supervisor> --subject "<assunto>" --body 
 | `decisão: <issue>/<chave>` | Resposta humana direta na sessão do Maestro e ID da pergunta correspondente, quando houver. |
 | `fechamento: <issue>` | Resultado e referência à Issue, PR ou commit. |
 
-Quando precisar do usuário, envie a pergunta com `--type question`, apresente-a em texto se necessário e encerre o turno para receber a resposta. Aceite uma resposta do Run do Supervisor somente com remetente verificado e `thread_id` correspondente à pergunta. Compare com decisões humanas já recebidas para a mesma chave antes de agir. Em divergência, suspenda a decisão e peça resolução ao usuário pelo Supervisor. O Maestro continua responsável por aplicar a governança e responder a seus workers pelo fluxo normal do Orca. Use o ID do Run para manter a correlação durante handoff.
+## Decisões humanas
+
+Antes de apresentar uma decisão ao usuário, o Maestro preenche esta verificação:
+
+1. [ ] Consulte os [eventos da Issue](RETOMADA-MAESTRO.md#eventos-de-coordenação-nas-issues) pela chave estável. Se já estiver respondida ou cancelada, confira a decisão vigente e encerre a consulta. Se for nova, publique o evento aberto com opções, recomendação e responsável. Confirme a gravação. A chave pertence à Issue e pode ser reaberta somente por um novo evento com outra chave e justificativa.
+2. [ ] No terminal do Orca, use `& ./scripts/horus-supervisor.ps1 Find`. Sem Supervisor confirmado, o Maestro pode apresentar a pendência diretamente após verificar que não há outro responsável apresentando a mesma questão. Se a inspeção falhar ou o Supervisor for conhecido mas estiver inacessível, registre falha de encaminhamento e informe o impedimento técnico. Retome o envio após a reconciliação ou combine explicitamente o uso do modo sem Supervisor. Uma sessão iniciada fora do Orca só usa o fluxo direto se o usuário a designou para trabalhar de forma independente.
+3. [ ] Com Supervisor ativo, comprove o próprio Run com `& ./scripts/horus-supervisor.ps1 VerifyRun` em um terminal do worktree. Procure `pergunta: HOR-XXX/chave` na caixa de destino antes de enviar com `--type question`. Guarde o ID devolvido e confirme a entrega:
+
+   ```powershell
+   $subject = 'pergunta: HOR-XXX/chave'
+   orca orchestration send --to "run:$supervisor" --subject $subject --type question --body $resumo --full --json
+   & ./scripts/horus-supervisor.ps1 VerifyDelivery -RunId $supervisor -FromRunId $maestro -MessageId $msg -Type question -Subject $subject
+   ```
+
+4. [ ] Somente após confirmar entrega e registro, informe o usuário de que a pendência está com o Supervisor. Quem apresenta pela primeira vez registra a apresentação em `evidence` no evento aberto da mesma chave. O Supervisor agrupa as pendências quando acorda e referencia as que já foram apresentadas. O Maestro encerra o turno para receber a resposta. Se o usuário pedir os detalhes diretamente, use a mesma chave e registre a apresentação para evitar duplicidade.
+
+Para enviar resposta, decisão direta ou confirmação de recebimento, use `--type status --thread-id <id-da-pergunta>`. Os assuntos são `resposta:`, `decisão:` e `recebida:`, seguidos de `HOR-XXX/chave`. `decision_gate` pertence ao fluxo de workers e pode rejeitar o Supervisor como remetente. Use `VerifyDelivery` novamente com os Runs na direção do envio, `-Type status` e `-ThreadId $idDaPergunta`. A verificação confere os atuais coordenadores, suas raízes Git, a caixa de destino, a unicidade e a pergunta original entre o mesmo par de Runs.
+
+A sessão que recebeu a decisão humana consulta o histórico e publica uma única transição para `respondida` com autor, alcance e evidência, ou `cancelada` com motivo. Se recebeu no Supervisor, encaminhe `resposta:` ao Run verificado do Maestro. O Maestro confere a mesma decisão na Issue, verifica a entrega e devolve `recebida:` no mesmo thread. Se recebeu no Maestro, encaminhe `decisão:` ao Supervisor e este encerra a apresentação consultando a Issue. Se a decisão já estiver registrada, reutilize-a e confira a entrega antes de qualquer envio. Em caso de recibo incerto, confira ambas as caixas ou use o retry do Orca com o mesmo identificador da operação. Decisões divergentes suspendem a execução até resolução humana.
+
+**Resposta já recebida sem pergunta local (F10).** O Supervisor registra a resposta humana na Issue pela chave existente, com autor, alcance e evidência. Se a abertura estiver apenas em prosa, registre primeiro a abertura estruturada correspondente. O Maestro verifica o autor e a autorização no GitHub. Para restabelecer o canal local após identificar ambos os Runs, o Maestro procura uma pergunta equivalente e, se ausente, envia uma única `pergunta:` de recuperação, informando que a decisão já está registrada. O Supervisor consulta a Issue e encaminha a resposta registrada com `--type status --thread-id <id-da-pergunta>`; não reapresenta a escolha ao usuário. O Maestro valida a entrega, confere a mesma resolução na Issue e confirma no thread. Se a origem local ou a pergunta não puder ser verificada, suspenda o encaminhamento local e reconcilie pelo GitHub. Uma mensagem sem thread nunca autoriza ação. Só volte ao usuário se a autorização original estiver ambígua ou em conflito.
+
+Um Run em contexto de pasta ancestral não prova sua origem Git. Para o fluxo local, use um terminal vinculado a um worktree do Hórus. Se a sessão antiga estiver fora de worktree, confirme os dispatches e a frente na Issue, preserve o Run e coordene a transição com o responsável. A decisão durável pode ser recuperada pelo GitHub sem reenviar por um thread de outra instalação. Se o handoff ou o limite da caixa impedir a verificação, mantenha a decisão na Issue e confirme com o responsável antes de agir. IDs de Runs e mensagens ficam locais.
 
 ## Comunicação
 
