@@ -9,6 +9,8 @@ from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend.transcriber import is_youtube_url
 from horus_backend.storage import Store
+from support_d import isolated_empty_pg_db, make_pg_manager
+from support_g import client_for, pg_store, pg_transport  # noqa: F401
 
 TOKEN = "test-only-connection-token-0123456789"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
@@ -16,7 +18,7 @@ VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, client_for):
     # Simula o subprocesso real: mesmo protocolo NDJSON, sem Whisper nem rede.
     worker = tmp_path / "fake_worker.py"
     worker.write_text('''
@@ -53,7 +55,7 @@ else:
 ''', encoding="utf-8")
     settings = Settings(token=TOKEN, data_dir=tmp_path / "data", factory_root=None, hermes_executable=None,
                         hermes_config=tmp_path / "hermes.json", worker_command=(sys.executable, str(worker)))
-    with TestClient(create_app(settings), base_url="http://127.0.0.1", headers=HEADERS) as client:
+    with client_for(settings) as client:
         yield client
 
 
@@ -224,8 +226,8 @@ def test_malformed_youtube_urls_are_rejected_before_scheduling(client, tmp_path,
     assert client.get('/v1/transcription/jobs').json() == []
 
 
-def test_partial_checkpoint_survives_log_retention_and_recovery(tmp_path):
-    store = Store(tmp_path / 'temporary.sqlite3')
+def test_partial_checkpoint_survives_log_retention_and_recovery(pg_store):
+    store = pg_store
     job, _ = store.create_job({'operation': 'transcription.run', 'path': 'local.wav'}, 'checkpoint')
     store.update(job['id'], 'running', new_attempt=True)
     # Mais segmentos do que a retenção de logs, incluindo uma linha maior que o log permitido.
@@ -236,7 +238,7 @@ def test_partial_checkpoint_survives_log_retention_and_recovery(tmp_path):
     assert checkpoint['text'] == ''.join(text + '\n' for text in texts)
     assert checkpoint['sequence'] > 2000
     store.recover()
-    reopened = Store(store.path).get_job(job['id'])
+    reopened = Store(store.db, data_dir=store.data_dir).get_job(job['id'])
     assert reopened['status'] == 'interrupted'
     assert reopened['attempt'] == 1
     assert reopened['result'] == checkpoint
@@ -284,21 +286,23 @@ def test_media_history_is_filtered_before_pagination_and_does_not_run_jobs(clien
     assert client.get('/v1/transcription/jobs', headers={'Authorization': 'wrong'}).status_code == 401
 
 
-def test_checkpoint_and_event_are_rolled_back_together(client, tmp_path):
+def test_checkpoint_and_event_are_rolled_back_together(client, pg_app_cluster, pg_app_database):
+    import psycopg
     store = client.app.state.store
     job, _ = store.create_job({'operation': 'transcription.run', 'path': 'test.wav'}, 'rollback')
-    with store.connect() as db:
-        db.execute("""CREATE TRIGGER reject_checkpoint BEFORE UPDATE OF result ON jobs
-                      BEGIN SELECT RAISE(ABORT, 'checkpoint failure'); END""")
-    import sqlite3
-    with pytest.raises(sqlite3.IntegrityError):
+    with pg_app_cluster.connect(pg_app_database, autocommit=True) as admin:
+        admin.execute("""CREATE FUNCTION horus.reject_checkpoint() RETURNS trigger LANGUAGE plpgsql AS
+                         $$ BEGIN RAISE EXCEPTION 'checkpoint failure'; END $$""")
+        admin.execute("""CREATE TRIGGER reject_checkpoint BEFORE UPDATE OF result ON horus.jobs
+                         FOR EACH ROW EXECUTE FUNCTION horus.reject_checkpoint()""")
+    with pytest.raises(psycopg.Error):
         store.event(job['id'], 'segment', 'not committed')
     assert store.events(job['id'], 0) == []
     assert store.get_job(job['id'])['result'] is None
 
 
-def test_new_attempt_checkpoint_skips_old_segment_events(tmp_path):
-    store = Store(tmp_path / 'attempts.sqlite3')
+def test_new_attempt_checkpoint_skips_old_segment_events(pg_store):
+    store = pg_store
     job, _ = store.create_job({'operation': 'transcription.run', 'path': 'local.wav'}, 'attempts')
     store.update(job['id'], 'running', new_attempt=True)
     store.event(job['id'], 'segment', 'old attempt')
@@ -365,9 +369,13 @@ def test_transcription_timeout_preserves_checkpoint(client, tmp_path, monkeypatc
     assert job['result']['partial'] is True
 
 
-def test_database_identity_is_stable_and_distinguishes_instances(tmp_path):
-    first = Store(tmp_path / 'first.sqlite3')
-    identity = first.database_id
-    first.create_job({'operation': 'transcription.run', 'path': 'a.wav'}, 'one')
-    assert Store(first.path).database_id == identity
-    assert Store(tmp_path / 'other.sqlite3').database_id != identity
+def test_database_identity_is_stable_and_distinguishes_instances(pg_app_cluster, pg_store, tmp_path, monkeypatch):
+    identity = pg_store.database_id
+    pg_store.create_job({'operation': 'transcription.run', 'path': 'a.wav'}, 'one')
+    assert Store(pg_store.db, data_dir=pg_store.data_dir).database_id == identity
+    with isolated_empty_pg_db(pg_app_cluster) as (_, other_db):
+        manager = make_pg_manager(pg_app_cluster, other_db, tmp_path / 'other-vault', monkeypatch)
+        try:
+            assert Store(manager, data_dir=tmp_path).database_id != identity
+        finally:
+            manager.close()

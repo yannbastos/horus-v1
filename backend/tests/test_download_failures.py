@@ -8,12 +8,11 @@ import sys
 import time
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 import pytest
 
-from horus_backend.api import create_app
 from horus_backend.config import Settings
 from horus_backend import jobs, transcriber
+from support_g import client_for, pg_transport  # noqa: F401
 
 URL = 'https://youtu.be/dQw4w9WgXcQ'
 TOKEN = 'download-fixture-token-0123456789'
@@ -21,15 +20,14 @@ SECRET = 'secret-marker'
 
 
 @contextmanager
-def fixture_client(tmp_path, script):
+def fixture_client(client_for, tmp_path, script):
     worker = tmp_path / 'worker.py'
     worker.write_text('import pathlib, sys, time\n'
         'root = pathlib.Path(sys.argv[sys.argv.index("--directory") + 1])\n' + script, encoding='utf-8')
     settings = Settings(token=TOKEN, data_dir=tmp_path / 'data', factory_root=None,
         hermes_executable=None, hermes_config=tmp_path / 'no-hermes.json',
         worker_command=(sys.executable, str(worker)))
-    with TestClient(create_app(settings), base_url='http://127.0.0.1',
-                    headers={'Authorization': f'Bearer {TOKEN}'}) as client:
+    with client_for(settings) as client:
         yield client
 
 
@@ -62,10 +60,10 @@ def wait(client, job_id, *, terminal=True):
     ('[WinError 5] Access is denied', 'Sem permissão'),
     ('unknown error', 'Não foi possível'),
 ])
-def test_failures_are_actionable_and_do_not_persist_raw_diagnostics(tmp_path, raw, expected):
+def test_failures_are_actionable_and_do_not_persist_raw_diagnostics(client_for, tmp_path, raw, expected):
     diagnostic = f'ERROR: {raw} https://user:{SECRET}@proxy.invalid C:\\private\\{SECRET} \x1b[31m'
     script = f'print({diagnostic!r}, file=sys.stderr, flush=True)\nsys.exit(1)\n'
-    with fixture_client(tmp_path, script) as client:
+    with fixture_client(client_for, tmp_path, script) as client:
         job_id = submit(client, tmp_path)
         job = wait(client, job_id)
         assert job['status'] == 'failed'
@@ -84,7 +82,7 @@ def test_native_filesystem_errors_are_sanitized_and_classification_is_idempotent
     assert transcriber.download_error(message) == message
 
 
-def test_partial_survives_failure_and_explicit_retry_resumes(tmp_path):
+def test_partial_survives_failure_and_explicit_retry_resumes(client_for, tmp_path):
     script = '''partial = root / 'safe.mp4.part'
 target = root / 'safe.mp4'
 if not partial.exists():
@@ -97,7 +95,7 @@ with partial.open('ab') as stream:
 partial.rename(target)
 print('HORUS_FILE:' + str(target), flush=True)
 '''
-    with fixture_client(tmp_path, script) as client:
+    with fixture_client(client_for, tmp_path, script) as client:
         job_id = submit(client, tmp_path)
         assert wait(client, job_id)['status'] == 'failed'
         assert (tmp_path / 'safe.mp4.part').read_bytes() == b'first-'
@@ -108,11 +106,11 @@ print('HORUS_FILE:' + str(target), flush=True)
 
 
 @pytest.mark.parametrize('mode', ['cancel', 'timeout'])
-def test_cancel_and_timeout_stop_worker_and_preserve_partial(tmp_path, monkeypatch, mode):
+def test_cancel_and_timeout_stop_worker_and_preserve_partial(client_for, tmp_path, monkeypatch, mode):
     if mode == 'timeout':
         monkeypatch.setitem(jobs.TIMEOUTS, 'youtube.download', .3)
     script = "(root / 'safe.mp4.part').write_bytes(b'partial')\nprint('[download] 12.0%', flush=True)\ntime.sleep(30)\n"
-    with fixture_client(tmp_path, script) as client:
+    with fixture_client(client_for, tmp_path, script) as client:
         job_id = submit(client, tmp_path)
         deadline = time.monotonic() + 5
         while not (tmp_path / 'safe.mp4.part').exists():
@@ -130,7 +128,7 @@ def test_cancel_and_timeout_stop_worker_and_preserve_partial(tmp_path, monkeypat
         assert job['result'] is None
 
 
-def test_timeout_also_bounds_pipe_draining_after_worker_exit(tmp_path, monkeypatch):
+def test_timeout_also_bounds_pipe_draining_after_worker_exit(client_for, tmp_path, monkeypatch):
     stopped = []
 
     async def start(*args, **kwargs):
@@ -150,13 +148,13 @@ def test_timeout_also_bounds_pipe_draining_after_worker_exit(tmp_path, monkeypat
 
     monkeypatch.setattr(jobs.OwnedProcess, 'start', start)
     monkeypatch.setitem(jobs.TIMEOUTS, 'youtube.download', .1)
-    with fixture_client(tmp_path, '') as client:
+    with fixture_client(client_for, tmp_path, '') as client:
         job = wait(client, submit(client, tmp_path))
         assert job['status'] == 'failed' and 'Tempo limite do download' in job['error']
         assert stopped
 
 
-def test_giant_output_is_drained_without_persisting_hostile_title_or_paths(tmp_path):
+def test_giant_output_is_drained_without_persisting_hostile_title_or_paths(client_for, tmp_path):
     script = f'''print({SECRET!r} * 250000, flush=True)
 print('[download] ' + '9' * 350 + '%', flush=True)
 for _ in range(3000):
@@ -166,7 +164,7 @@ target = root / 'safe [dQw4w9WgXcQ].mp4'
 target.write_bytes(b'video')
 print('HORUS_FILE:' + str(target), flush=True)
 '''
-    with fixture_client(tmp_path, script) as client:
+    with fixture_client(client_for, tmp_path, script) as client:
         job_id = submit(client, tmp_path)
         job = wait(client, job_id)
         assert job['status'] == 'succeeded', job
@@ -178,9 +176,9 @@ print('HORUS_FILE:' + str(target), flush=True)
 
 
 @pytest.mark.parametrize('target', ['../outside.mp4', 'unfinished.mp4.part'])
-def test_worker_cannot_claim_outside_or_unfinished_file(tmp_path, target):
+def test_worker_cannot_claim_outside_or_unfinished_file(client_for, tmp_path, target):
     script = f"target = root / {target!r}\ntarget.write_bytes(b'video')\nprint('HORUS_FILE:' + str(target), flush=True)\n"
-    with fixture_client(tmp_path, script) as client:
+    with fixture_client(client_for, tmp_path, script) as client:
         job = wait(client, submit(client, tmp_path))
         assert job['status'] == 'failed'
         assert job['result'] is None
