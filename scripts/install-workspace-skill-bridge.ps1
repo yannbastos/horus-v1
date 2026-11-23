@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Cria (ou atualiza) as pontes das skills horus-maestro e supervisar na pasta de trabalho que contém o repositório horus.
+  Cria (ou atualiza) as pontes da skill horus-maestro na pasta de trabalho que contém o repositório horus.
 
 .DESCRIPTION
   O Claude Code só descobre .claude/skills/ da pasta em que a sessão é aberta. Quando o Orca ou o Claude
@@ -54,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($repoRel)) {
   throw "Não foi possível calcular o caminho relativo entre o workspace ($workspace) e o repositório ($repo)."
 }
 
-$bridges = foreach ($skill in 'horus-maestro', 'supervisar') {
+$bridges = foreach ($skill in 'horus-maestro') {
   $skillPath = ".claude/skills/$skill/SKILL.md"
   if (-not (Test-Path -LiteralPath (Join-Path $repo $skillPath) -PathType Leaf)) {
     throw "Skill versionada não encontrada: $skillPath"
@@ -76,21 +76,6 @@ Gerada por $repoRel/scripts/install-workspace-skill-bridge.ps1. Não acrescenta 
 
 Nunca, sem autorização específica do usuário: inferência real do Hermes, APIs ou serviços pagos, credenciais, publicação, envio de dados privados, Git destrutivo.
 "@
-
-  if ($skill -eq 'supervisar') {
-    $content = @"
----
-name: supervisar
-description: Ativa ou retoma a supervisão opcional do Hórus no Orca.
-disable-model-invocation: true
----
-
-# Hórus — ponte para supervisão
-
-Gerada por $repoRel/scripts/install-workspace-skill-bridge.ps1.
-Leia e siga $repoRel/.claude/skills/supervisar/SKILL.md, usando $repoRel/ como raiz Git.
-"@
-  }
 
   foreach ($path in @((Join-Path $workspace '.claude'), (Join-Path $workspace '.claude/skills'), $targetDir, $target)) {
     $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue

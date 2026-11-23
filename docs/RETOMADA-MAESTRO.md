@@ -120,17 +120,13 @@ Depois disso, retome a coordenação conforme a governança:
 
 Continua exigindo autorização do usuário: inferência real, APIs pagas, credenciais, publicação, envio de dados privados e Git destrutivo.
 
-### Supervisor e handoff no Orca
+### Handoff de Maestro no Orca
 
-Abra um terminal Claude Code dedicado e invoque `/supervisar` quando quiser centralizar vários Maestros. A descoberta funciona na raiz do Git e nas pontes de workspace instaladas pelos mesmos comandos acima. Cada worktree precisa conter a versão com a skill. Maestros consultam o Supervisor na retomada conforme [Operações do Maestro](MAESTRO-OPERATIONS.md#supervisão-opcional).
-
-Para transferir um Maestro ou Supervisor ativo a outra sessão local, mantenha as duas abas abertas e use o mesmo worktree:
+Para transferir o Maestro ativo a outra sessão local, mantenha as duas abas abertas e use o mesmo worktree:
 
 1. Pause a coordenação na sessão antiga. Registre o ID do Run e o handle do terminal (`$env:ORCA_TERMINAL_HANDLE`), Issue, branch/HEAD, escopo, workers/dispatches ativos e perguntas pendentes. Entregue essas referências à sessão nova sem copiar transcrições ou segredos.
-2. Na sessão nova, confira a raiz Git e execute `& ./scripts/horus-supervisor.ps1 Handoff -PreviousTerminal <handle> -RunId <id>`. Esse comando transfere o vínculo Orca por `run-use` e confirma o novo proprietário. Preserve os dispatches existentes.
+2. Na sessão nova, confira a raiz Git e execute `& ./scripts/horus-handoff.ps1 -PreviousTerminal <handle> -RunId <id>`. Esse comando transfere o vínculo Orca por `run-use` e confirma o novo proprietário. Preserve os dispatches existentes.
 3. Na sessão nova, confirme `worker-list --run <id>` e leia a caixa `inbox --terminal run:<id> --full`. Confirme à sessão antiga o Run, os dispatches e a prontidão. Só então encerre a aba antiga, se desejado. Se uma verificação falhar, mantenha ambas abertas e confira `run-current` de cada lado antes de qualquer nova tentativa.
-
-O Supervisor usa a mesma caixa postal após o handoff. Se o Supervisor sair, os Maestros continuam seu fluxo normal. A nova ativação na mesma cópia local do Git recupera a caixa anterior quando o proprietário já não estiver conectado.
 
 ## F. Branches retidas (não estão no Project como código)
 
